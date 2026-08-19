@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ShippingMarkDetailMapper">
+
+    <sql id="columns">id, bill_no, purchase_order_no, sku_code, sku_name, sku_image, status, error_reason, label_file, created_by, creator, created_at, updated_by, updator, updated_at</sql>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO shipping_mark_detail
+            (bill_no, purchase_order_no, sku_code, sku_name, sku_image, status, error_reason, label_file,
+             created_by, creator, created_at, updated_by, updator, updated_at)
+        VALUES
+            (#{billNo}, #{purchaseOrderNo}, #{skuCode}, #{skuName}, #{skuImage}, #{status}, #{errorReason}, #{labelFile},
+             #{createdBy}, #{creator}, #{createdAt}, #{updatedBy}, #{updator}, #{updatedAt})
+    </insert>
+
+    <update id="update">
+        UPDATE shipping_mark_detail
+        SET status = #{status}, error_reason = #{errorReason}, label_file = #{labelFile},
+            updated_by = #{updatedBy}, updator = #{updator}, updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+
+    <select id="findById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ShippingMarkDetailPO">
+        SELECT <include refid="columns"/> FROM shipping_mark_detail WHERE id = #{id}
+    </select>
+
+    <select id="findByBillNo" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ShippingMarkDetailPO">
+        SELECT <include refid="columns"/> FROM shipping_mark_detail WHERE bill_no = #{billNo} ORDER BY id ASC
+    </select>
+</mapper>

@@ -1,0 +1,1361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>赛恩集成平台 · 供应链系统</title>
+<style>
+:root{
+  --blue:#0052d9; --blue-light:#f2f3ff; --blue-border:#b3c5f6;
+  --teal:#0052d9; --teal-light:#f2f3ff; --teal-border:#0052d9;
+  --text:rgba(0,0,0,.9); --text-2:rgba(0,0,0,.6); --text-3:rgba(0,0,0,.4);
+  --border:#dcdcdc; --bg:#f3f3f3; --card:#ffffff;
+}
+*{margin:0;padding:0;box-sizing:border-box;font-family:"PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;}
+body{background:var(--bg);color:var(--text);min-height:100vh;}
+.hidden{display:none !important;}
+button{cursor:pointer;border:none;background:none;font-size:inherit;font-family:inherit;}
+input,select{font-family:inherit;font-size:12px;color:var(--text);outline:none;}
+
+/* ============ 视图一：集成平台 ============ */
+.pf-header{height:64px;background:#fff;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:50;}
+.pf-logo{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:600;color:rgba(0,0,0,.9);}
+.pf-logo svg{width:24px;height:24px;color:rgba(0,0,0,.9);}
+.pf-user{display:flex;align-items:center;gap:10px;}
+.pf-avatar{width:38px;height:38px;border-radius:50%;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:600;}
+.pf-user-meta{line-height:1.3;}
+.pf-user-meta .u1{font-size:14px;color:rgba(0,0,0,.9);font-weight:500;}
+.pf-user-meta .u2{font-size:12px;color:var(--text-3);}
+.pf-body{display:flex;min-height:calc(100vh - 64px);}
+.pf-side{width:290px;padding:16px 14px;flex-shrink:0;}
+.sys-card{background:#fff;border:1px solid var(--border);border-radius:6px;padding:22px 18px;margin-bottom:14px;display:flex;align-items:center;gap:14px;cursor:pointer;transition:all .15s;position:relative;}
+.sys-card:hover{border-color:#b3c5f6;box-shadow:0 2px 8px rgba(0,82,217,.08);}
+.sys-card.active{background:var(--blue-light);border-color:var(--blue);}
+.sys-icon{width:44px;height:44px;border-radius:6px;background:#f3f3f3;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.sys-icon svg{width:22px;height:22px;color:#374151;}
+.sys-card.active .sys-icon{background:#e3ebff;}
+.sys-card.active .sys-icon svg{color:var(--blue);}
+.sys-name{flex:1;font-size:16px;color:rgba(0,0,0,.9);font-weight:500;}
+.sys-card.active .sys-name{color:var(--blue);font-weight:600;}
+.sys-card .chev{width:18px;height:18px;color:var(--text-3);}
+.sys-card.active .chev{color:var(--blue);}
+.new-badge{position:absolute;top:-7px;right:14px;background:#d54941;color:#fff;font-size:11px;padding:2px 8px;border-radius:8px;font-weight:600;letter-spacing:1px;box-shadow:0 2px 6px rgba(213,73,65,.35);}
+.pf-main{flex:1;padding:28px 36px;}
+.pf-title{font-size:24px;font-weight:600;color:rgba(0,0,0,.9);margin-bottom:24px;}
+.entry-card{background:#fff;border:1px solid var(--border);border-radius:6px;max-width:900px;margin:60px auto 0;padding:110px 40px;display:flex;flex-direction:column;align-items:center;box-shadow:0 1px 4px rgba(0,0,0,.04);}
+.entry-icon{width:60px;height:60px;margin-bottom:20px;color:rgba(0,0,0,.9);}
+.entry-icon svg{width:100%;height:100%;}
+.entry-name{font-size:20px;font-weight:600;margin-bottom:10px;}
+.entry-desc{font-size:14px;color:var(--text-2);margin-bottom:30px;}
+.btn-enter{background:var(--blue);color:#fff;font-size:14px;font-weight:500;padding:12px 30px;border-radius:3px;display:flex;align-items:center;gap:8px;transition:background .15s;}
+.btn-enter:hover{background:#366ef4;}
+.btn-enter svg{width:16px;height:16px;}
+
+/* ============ 视图二：供应链系统 ============ */
+.sc-topbar{height:60px;background:#fff;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:50;}
+.sc-topbar-left{display:flex;align-items:center;gap:16px;}
+.btn-back{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text);padding:6px 4px;}
+.btn-back:hover{color:var(--teal);}
+.btn-back svg{width:16px;height:16px;}
+.topbar-divider{width:1px;height:22px;background:var(--border);}
+.sc-sys-name{font-size:13px;font-weight:600;color:rgba(0,0,0,.9);}
+.sc-topbar-right{font-size:12px;color:var(--text-2);}
+.sc-body{display:flex;min-height:calc(100vh - 60px);}
+.sc-side{width:236px;background:#fff;border-right:1px solid var(--border);padding:14px 0;flex-shrink:0;}
+.sc-menu-item{display:flex;align-items:center;gap:10px;padding:13px 20px;font-size:12px;color:var(--text-2);cursor:pointer;border-right:3px solid transparent;transition:all .15s;}
+.sc-menu-item svg{width:18px;height:18px;}
+.sc-menu-item.active{background:var(--teal-light);color:var(--teal);font-weight:600;border-right-color:var(--teal);}
+.sc-main{flex:1;padding:12px;min-width:0;}
+.page-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:18px;}
+.page-title{font-size:20px;font-weight:600;color:rgba(0,0,0,.9);}
+.page-sub{font-size:13px;color:var(--text-3);margin-top:5px;}
+.panel{background:#fff;border:1px solid var(--border);border-radius:6px;overflow:hidden;}
+.status-tabs{display:flex;align-items:center;gap:6px;padding:6px 18px 0;border-bottom:1px solid var(--border);}
+.stab{position:relative;padding:12px 14px;font-size:12px;color:var(--text-2);cursor:pointer;border-radius:3px 3px 0 0;transition:color .15s;user-select:none;}
+.stab:hover{color:var(--teal);}
+.stab.active{color:var(--teal);font-weight:600;}
+.stab.active::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:3px;border-radius:2px;background:var(--teal);}
+.stab .cnt{color:var(--text-3);font-size:12px;margin-left:2px;}
+.stab.active .cnt{color:var(--teal);}
+.toolbar{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--border);flex-wrap:wrap;}
+.filter-bar{display:flex;align-items:center;gap:12px;padding:16px 18px 0;flex-wrap:wrap;}
+.action-bar{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--border);}
+.action-bar .btn-primary{margin-left:0;}
+.doc-link{color:var(--teal);cursor:pointer;font-weight:500;}
+.doc-link:hover{text-decoration:underline;}
+#detailMain{display:flex;flex-direction:column;min-height:calc(100vh - 60px);padding-bottom:0;}
+#detailMain .panel{flex:1;margin-bottom:12px;display:flex;flex-direction:column;}
+#detailMain .pager{margin-top:auto;}
+#listMain{display:flex;flex-direction:column;min-height:calc(100vh - 60px);}
+#listMain .panel{flex:1;display:flex;flex-direction:column;}
+#listMain .pager{margin-top:auto;}
+.bottom-bar{position:sticky;bottom:0;z-index:40;display:flex;justify-content:center;gap:12px;padding:14px 0;background:#fff;border:1px solid var(--border);border-radius:0;margin:auto -12px 0;}
+.step-bar{background:#fff;border:1px solid var(--border);border-radius:6px;padding:22px 24px;display:flex;align-items:flex-start;margin-bottom:12px;}
+.step{display:flex;align-items:center;gap:10px;flex-shrink:0;}
+.step-num{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;background:#e7e7e7;color:rgba(0,0,0,.4);flex-shrink:0;}
+.step.done .step-num{background:#2ba471;color:#fff;}
+.step.cur .step-num{background:var(--teal);color:#fff;}
+.step-txt{display:flex;flex-direction:column;gap:3px;}
+.step-t{font-size:12px;font-weight:500;color:rgba(0,0,0,.4);white-space:nowrap;}
+.step.done .step-t,.step.cur .step-t{color:rgba(0,0,0,.9);}
+.step.cur .step-t{font-weight:600;}
+.step-s{font-size:12px;color:var(--text-3);white-space:nowrap;}
+.step-arrow{flex:1;min-width:60px;height:1px;background:var(--border);margin:13px 18px 0;}
+.info-panel{background:#fff;border:1px solid var(--border);border-radius:6px;padding:20px 24px;display:grid;grid-template-columns:repeat(4,1fr);gap:4px 32px;margin-bottom:12px;}
+.info-item{display:flex;font-size:12px;line-height:20px;min-width:0;}
+.info-item .il{color:var(--text-3);flex-shrink:0;}
+.info-item .iv{color:rgba(0,0,0,.9);word-break:break-all;}
+.info-panel .tag{padding:1px 8px;}
+.sub-tabs{display:flex;align-items:center;padding:0 18px;border-bottom:1px solid var(--border);}
+.sub-tab{position:relative;padding:12px 14px;font-size:12px;color:var(--text-2);}
+.sub-tab.active{color:var(--teal);font-weight:600;}
+.sub-tab.active::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:3px;border-radius:2px;background:var(--teal);}
+
+.search-box{display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:3px;padding:0 12px;height:32px;width:320px;background:#fff;}
+.search-box svg{width:16px;height:16px;color:var(--text-3);flex-shrink:0;}
+.search-box input{border:none;flex:1;height:100%;}
+.search-box input::placeholder{color:var(--text-3);}
+.filter-select{height:32px;border:1px solid var(--border);border-radius:3px;padding:0 12px;background:#fff;cursor:pointer;color:var(--text);}
+/* 自定义下拉（参考 ERP 筛选交互：点击展开面板，选中项浅蓝高亮，选中后可一键清除） */
+.c-dropdown{position:relative;display:inline-block;}
+.c-dropdown-btn{display:flex;align-items:center;gap:6px;height:32px;border:1px solid var(--border);border-radius:3px;padding:0 10px 0 12px;background:#fff;cursor:pointer;font-size:12px;color:var(--text);user-select:none;min-width:112px;transition:border-color .15s;}
+.c-dropdown-btn:hover{border-color:var(--teal);}
+.c-dropdown.open .c-dropdown-btn{border-color:var(--teal);}
+.c-dropdown-btn .cd-label{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.c-dropdown-btn .cd-arrow{width:14px;height:14px;color:var(--text-3);flex-shrink:0;transition:transform .15s;}
+.c-dropdown.open .cd-arrow{transform:rotate(180deg);}
+.cd-clear{width:16px;height:16px;color:var(--text-3);border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.cd-clear:hover{color:var(--text-2);background:#f3f3f3;}
+.cd-clear svg{width:10px;height:10px;}
+.c-dropdown-panel{position:absolute;top:calc(100% + 4px);left:0;min-width:100%;background:#fff;border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.08);padding:4px;z-index:120;display:none;}
+.c-dropdown.open .c-dropdown-panel{display:block;}
+.c-dropdown-item{padding:8px 12px;font-size:12px;color:var(--text);border-radius:3px;cursor:pointer;white-space:nowrap;}
+.c-dropdown-item:hover{background:#f3f3f3;}
+.c-dropdown-item.sel{background:var(--teal-light);color:var(--teal);font-weight:500;}
+.btn-primary{background:var(--teal);color:#fff;height:32px;padding:0 20px;border-radius:3px;font-size:12px;font-weight:500;display:flex;align-items:center;gap:6px;margin-left:auto;transition:background .15s;}
+.btn-primary:hover{background:#366ef4;}
+.btn-primary:disabled{background:#e7e7e7;color:rgba(0,0,0,.26);cursor:not-allowed;}
+.btn-primary:disabled:hover{background:#e7e7e7;}
+.btn-primary svg{width:16px;height:16px;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+thead th{background:#f3f3f3;color:var(--text-2);font-weight:600;text-align:left;padding:9px 14px;border-bottom:1px solid var(--border);white-space:nowrap;}
+tbody td{padding:10px 14px;border-bottom:1px solid #e7e7e7;color:var(--text);vertical-align:middle;}
+tbody tr:hover{background:#f3f3f3;}
+.tag{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:3px 10px;border-radius:3px;font-weight:500;white-space:nowrap;}
+.tag::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;}
+.tag-pending{background:#fdf3e7;color:#e37318;}
+.tag-printed{background:#f2f3ff;color:#0052d9;}
+.tag-done{background:#e3f9e9;color:#2ba471;}
+.tag-draft{background:#f3f3f3;color:rgba(0,0,0,.4);}
+.tag-fail{background:#fdecea;color:#d54941;}
+.row-actions{display:flex;gap:6px;}
+.btn-link{color:var(--teal);font-size:12px;padding:4px 8px;border-radius:3px;font-weight:500;white-space:nowrap;}
+.btn-link:hover{background:var(--teal-light);}
+.btn-link.gray{color:var(--text-2);}
+.btn-link.gray:hover{background:#f3f3f3;}
+.btn-link.danger{color:#d54941;}
+.btn-link.danger:hover{background:#fdecea;}
+.btn-link:disabled{color:var(--text-3);cursor:not-allowed;}
+.btn-link:disabled:hover{background:none;}
+.fname-cell{display:flex;align-items:center;gap:10px;}
+.fname-cell svg{width:20px;height:20px;color:var(--teal);flex-shrink:0;}
+.fname-cell .fn{font-weight:500;color:rgba(0,0,0,.9);}
+.detail-meta{display:flex;align-items:center;gap:16px;font-size:12px;color:var(--text-3);margin-top:8px;flex-wrap:wrap;}
+.tb-check{width:16px;height:16px;accent-color:var(--teal);cursor:pointer;vertical-align:middle;}
+.tb-check:disabled{cursor:not-allowed;}
+.fail-reason{color:#d54941;font-size:12px;}
+.rs-ok{color:#2ba471;font-weight:600;}
+.rs-fail{color:#d54941;font-weight:600;}
+.rs-num{font-weight:600;color:rgba(0,0,0,.9);}
+/* 分页 */
+.pager{display:flex;align-items:center;gap:8px;justify-content:flex-end;padding:14px 18px;font-size:12px;color:var(--text-2);border-top:1px solid #e7e7e7;}
+.pg-total{margin-right:6px;}
+.pg-btn{min-width:30px;height:30px;border:1px solid var(--border);border-radius:3px;background:#fff;padding:0 8px;font-size:12px;color:var(--text-2);display:inline-flex;align-items:center;justify-content:center;transition:all .15s;}
+.pg-btn:hover:not(:disabled){border-color:var(--teal);color:var(--teal);}
+.pg-btn.cur{border-color:var(--teal);color:var(--teal);font-weight:600;}
+.pg-btn:disabled{opacity:.4;cursor:not-allowed;}
+.pg-ellipsis{padding:0 2px;color:var(--text-3);}
+.pg-size{height:30px;border:1px solid var(--border);border-radius:3px;padding:0 6px;background:#fff;cursor:pointer;font-size:12px;color:var(--text-2);}
+.empty-row td{text-align:center;padding:56px 0;color:var(--text-3);font-size:12px;}
+.mono{font-family:"SFMono-Regular",Consolas,monospace;font-size:12px;}
+
+/* 弹层 */
+.modal-mask{position:fixed;inset:0;background:rgba(17,24,39,.45);z-index:100;display:flex;align-items:center;justify-content:center;animation:fadeIn .15s;}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.modal{background:#fff;border-radius:6px;width:640px;max-width:94vw;max-height:90vh;overflow:auto;box-shadow:0 8px 24px rgba(0,0,0,.1);animation:slideUp .18s;}
+@keyframes slideUp{from{transform:translateY(16px);opacity:0}to{transform:none;opacity:1}}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:18px 24px;border-bottom:1px solid var(--border);position:sticky;top:0;background:#fff;z-index:2;}
+.modal-title{font-size:14px;font-weight:600;}
+.modal-close{width:30px;height:30px;border-radius:3px;display:flex;align-items:center;justify-content:center;color:var(--text-3);}
+.modal-close:hover{background:#f3f3f3;color:var(--text);}
+.modal-body{padding:22px 24px;}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px 18px;}
+.form-item{display:flex;flex-direction:column;gap:7px;}
+.form-item.full{grid-column:1 / -1;}
+.form-label{font-size:12px;color:var(--text-2);font-weight:500;}
+.form-label .req{color:#d54941;margin-left:3px;}
+.form-input,.form-select{height:40px;border:1px solid var(--border);border-radius:3px;padding:0 12px;background:#fff;transition:border .15s;}
+.form-input:focus,.form-select:focus{border-color:var(--teal);box-shadow:0 0 0 3px rgba(0,82,217,.1);}
+.form-input.err,.form-select.err{border-color:#d54941;}
+.form-input.err:focus,.form-select.err:focus{box-shadow:0 0 0 3px rgba(213,73,65,.1);}
+.err-msg{font-size:12px;color:#d54941;min-height:16px;}
+.modal-foot{display:flex;justify-content:flex-end;gap:12px;padding:16px 24px;border-top:1px solid var(--border);}
+.btn-ghost{height:32px;padding:0 18px;border:1px solid var(--border);border-radius:3px;font-size:12px;color:var(--text-2);}
+.btn-ghost:hover{background:#f3f3f3;}
+.btn-solid{background:var(--teal);color:#fff;height:32px;padding:0 22px;border-radius:3px;font-size:12px;font-weight:500;}
+.btn-solid:hover{background:#366ef4;}
+
+/* 箱唛标签（按模板：箱唛:/采购单号/箱号/SKU/装箱数量/箱规/毛重/条形码 + 图片） */
+.preview-wrap{display:flex;flex-direction:column;align-items:center;gap:18px;}
+.mark-label{display:flex;width:640px;background:#fff;border:1.5px solid #111;font-family:Arial,"Microsoft YaHei",sans-serif;}
+.ml-main{flex:1;display:flex;flex-direction:column;}
+.ml-row{display:flex;border-bottom:1.5px solid #111;min-height:44px;}
+.ml-row:last-child{border-bottom:none;}
+.ml-c1{width:78px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-right:1.5px solid #111;font-size:14px;color:#111;padding:6px 4px;text-align:center;}
+.ml-c2{width:110px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-right:1.5px solid #111;font-size:14px;color:#111;padding:6px 4px;}
+.ml-c3{flex:1;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#111;padding:6px 8px;font-family:Consolas,"Microsoft YaHei",monospace;}
+.ml-barcode-row{min-height:150px;}
+.ml-c23{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px;gap:6px;}
+.barcode{display:flex;align-items:stretch;justify-content:center;height:72px;}
+.barcode i{display:block;background:#111;height:100%;}
+.barcode s{display:block;height:100%;text-decoration:none;}
+.mark-code{font-family:Consolas,monospace;font-size:14px;letter-spacing:2px;color:#111;}
+.ml-img{width:220px;flex-shrink:0;border-left:1.5px solid #111;display:flex;flex-direction:column;}
+.ml-img-head{border-bottom:1.5px solid #111;text-align:center;font-size:14px;color:#111;min-height:44px;display:flex;align-items:center;justify-content:center;}
+.ml-img-body{flex:1;display:flex;align-items:center;justify-content:center;padding:10px;min-height:280px;}
+.ml-img-body img{max-width:100%;max-height:280px;object-fit:contain;}
+.ml-img-empty{color:#9ca3af;font-size:13px;}
+
+/* 上传 Excel */
+.upload-zone{border:2px dashed var(--border);border-radius:6px;padding:36px 20px;text-align:center;cursor:pointer;transition:all .15s;background:#f3f3f3;}
+.upload-zone:hover,.upload-zone.drag{border-color:var(--teal);background:var(--teal-light);}
+.upload-zone svg{width:40px;height:40px;color:var(--teal);margin-bottom:10px;}
+.upload-title{font-size:12px;font-weight:600;margin-bottom:6px;}
+.upload-desc{font-size:12px;color:var(--text-3);line-height:1.7;}
+.upload-file{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:3px;padding:10px 14px;margin-top:14px;background:#fff;}
+.upload-file svg{width:20px;height:20px;color:var(--teal);flex-shrink:0;}
+.upload-file .fname{flex:1;font-size:12px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.upload-file .rm{color:var(--text-3);cursor:pointer;padding:2px 6px;border-radius:3px;}
+.upload-file .rm:hover{color:#d54941;background:#fdecea;}
+.parsed-head{display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px;font-size:12px;color:var(--text-2);}
+.parsed-head b{color:var(--teal);}
+.parsed-list{max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:3px;}
+.parsed-list table{font-size:12px;}
+.parsed-list thead th{padding:9px 12px;}
+.parsed-list tbody td{padding:8px 12px;}
+.p-thumb{width:28px;height:28px;object-fit:contain;border:1px solid var(--border);border-radius:3px;background:#fafafa;}
+/* 图片悬浮大图预览 */
+.img-hover-preview{position:fixed;z-index:300;background:#fff;border:1px solid var(--border);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.12);padding:8px;pointer-events:none;}
+.img-hover-preview img{max-width:320px;max-height:320px;object-fit:contain;display:block;}
+.p-noimg{width:28px;height:28px;display:flex;align-items:center;justify-content:center;border:1px dashed var(--border);border-radius:3px;color:var(--text-3);font-size:10px;}
+
+/* Toast */
+.toast-box{position:fixed;top:76px;left:50%;transform:translateX(-50%);z-index:200;display:flex;flex-direction:column;gap:10px;align-items:center;}
+.toast{background:#fff;border:1px solid var(--border);border-left:4px solid var(--teal);border-radius:3px;padding:11px 20px;font-size:12px;color:var(--text);box-shadow:0 4px 16px rgba(0,0,0,.08);display:flex;align-items:center;gap:9px;animation:toastIn .2s;}
+.toast.error{border-left-color:#d54941;}
+@keyframes toastIn{from{transform:translateY(-8px);opacity:0}to{transform:none;opacity:1}}
+.toast svg{width:16px;height:16px;flex-shrink:0;}
+.toast .ok-ico{color:var(--teal);}
+.toast.error .err-ico{color:#d54941;}
+
+/* 打印：只保留箱唛标签；条形码等背景色需强制精确打印，否则浏览器默认丢弃背景导致条码缺失 */
+@media print{
+  body *{visibility:hidden;}
+  #printArea,#printArea *{visibility:visible;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  #printArea{position:fixed;inset:0;display:flex;align-items:flex-start;justify-content:center;padding:24px;background:#fff;}
+}
+.barcode i,.barcode s{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+</style>
+</head>
+<body>
+<div class="toast-box" id="toastBox"></div>
+<div id="printArea" class="hidden"></div>
+<div class="img-hover-preview hidden" id="imgHoverPreview"><img id="imgHoverImg" alt="大图预览"></div>
+
+<!-- ============ 视图一：赛恩集成平台 ============ -->
+<div id="viewPlatform">
+  <header class="pf-header">
+    <div class="pf-logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 3l9 6.5"/><path d="M5 9.8V21h14V9.8"/><path d="M9 21v-6h6v6"/></svg>
+      赛恩集成平台
+    </div>
+    <div class="pf-user">
+      <div class="pf-avatar">W</div>
+      <div class="pf-user-meta">
+        <div class="u1">wangxiaoying@saien.com</div>
+        <div class="u2">wangxiaoying@saien.com</div>
+      </div>
+    </div>
+  </header>
+  <div class="pf-body">
+    <aside class="pf-side" id="sysList"></aside>
+    <main class="pf-main">
+      <h1 class="pf-title" id="pfTitle">开发系统</h1>
+      <div class="entry-card">
+        <div class="entry-icon" id="entryIcon"></div>
+        <div class="entry-name" id="entryName">开发系统</div>
+        <div class="entry-desc" id="entryDesc">点击下方按钮进入开发系统</div>
+        <button class="btn-enter" id="btnEnter">立即进入
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- ============ 视图二：供应链系统 ============ -->
+<div id="viewSupply" class="hidden">
+  <header class="sc-topbar">
+    <div class="sc-topbar-left">
+      <button class="btn-back" id="btnBack">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+        返回集成系统
+      </button>
+      <div class="topbar-divider"></div>
+      <div class="sc-sys-name">供应链系统</div>
+    </div>
+    <div class="sc-topbar-right">采购与箱唛管理</div>
+  </header>
+  <div class="sc-body">
+    <aside class="sc-side">
+      <div class="sc-menu-item active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+        箱唛管理
+      </div>
+    </aside>
+    <main class="sc-main" id="listMain">
+      <div class="panel">
+        <div class="status-tabs" id="statusTabs"></div>
+        <div class="filter-bar">
+          <div class="search-box" style="width:220px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input id="searchDocNo" placeholder="搜索单据编号">
+          </div>
+          <div class="search-box" style="width:220px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input id="searchInput" placeholder="搜索单据名称">
+          </div>
+          <select class="filter-select" id="listStatusFilter">
+            <option value="全部">单据状态：全部</option>
+            <option value="处理中">处理中</option>
+            <option value="已处理">已处理</option>
+          </select>
+          <button class="btn-ghost" id="btnSearch">搜索</button>
+          <button class="btn-ghost" id="btnReset">重置</button>
+        </div>
+        <div class="action-bar">
+          <button class="btn-primary" id="btnNew">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg>
+            上传文件
+          </button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>单据编号</th><th>单据名称</th><th>单据状态</th><th>处理结果</th><th>创建人</th><th>创建时间</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="fileTbody"></tbody>
+        </table>
+        <div class="pager" id="listPager"></div>
+      </div>
+    </main>
+    <main class="sc-main hidden" id="detailMain">
+      <div class="step-bar" id="stepBar"></div>
+      <div class="info-panel" id="infoPanel"></div>
+      <div class="panel">
+        <div class="sub-tabs"><div class="sub-tab active">箱唛明细</div></div>
+        <div class="toolbar">
+          <div class="search-box" style="width:260px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input id="poFilter" placeholder="搜索 PO 单号">
+          </div>
+          <select class="filter-select" id="statusFilter">
+            <option value="全部">状态：全部</option>
+            <option value="已生成">已生成</option>
+            <option value="已失败">已失败</option>
+          </select>
+          <button class="btn-ghost" id="btnPoSearch">搜索</button>
+          <button class="btn-ghost" id="btnPoReset">重置</button>
+          <button class="btn-primary" id="btnBatchDlDetail">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+            批量下载
+          </button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width:42px;"><input type="checkbox" class="tb-check" id="checkAll"></th>
+              <th style="width:52px;">序号</th>
+              <th>采购单号</th><th>SKU</th><th>品名</th><th>图片</th><th>状态</th><th>失败原因</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="detailTbody"></tbody>
+        </table>
+        <div class="pager" id="detailPager"></div>
+      </div>
+      <div class="bottom-bar">
+        <button class="btn-ghost" id="btnBackList" style="padding:0 32px;">返回列表</button>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- 上传箱唛弹窗 -->
+<div class="modal-mask hidden" id="newModal">
+  <div class="modal" style="width:680px;">
+    <div class="modal-head">
+      <div class="modal-title">上传箱唛文件</div>
+      <button class="modal-close" data-close="newModal">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="upload-zone" id="uploadZone">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-7"/><path d="m8.5 13.5 3.5-3.5 3.5 3.5"/></svg>
+        <div class="upload-title">点击选择或拖拽 Excel 文件到此处</div>
+        <div class="upload-desc">支持 .xlsx / .xls 格式<br>表格需包含列：采购订单号、SKU、品名（非必填）、图片（图片可为嵌入图片）<br>同一「采购订单号 + SKU」仅生成一条箱唛数据</div>
+      </div>
+      <input type="file" id="fileInput" accept=".xlsx,.xls" class="hidden">
+      <div id="uploadResult"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="newModal">取消</button>
+      <button class="btn-solid" id="btnSave" disabled>提交</button>
+    </div>
+  </div>
+</div>
+
+<!-- 箱唛预览弹窗 -->
+<div class="modal-mask hidden" id="previewModal">
+  <div class="modal" style="width:720px;">
+    <div class="modal-head">
+      <div class="modal-title">箱唛预览</div>
+      <button class="modal-close" data-close="previewModal">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="preview-wrap">
+        <div id="markHolder"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" data-close="previewModal">关闭</button>
+      <button class="btn-solid" id="btnPrint">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;"><path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>打印箱唛
+      </button>
+    </div>
+  </div>
+</div>
+
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/exceljs.min.js"></script>
+<script>
+/* ==================== 工具 ==================== */
+function $(id){return document.getElementById(id);}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function toast(msg,type){
+  const box=$('toastBox');
+  const el=document.createElement('div');
+  el.className='toast'+(type==='error'?' error':'');
+  el.innerHTML=(type==='error'
+    ?'<svg class="err-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>'
+    :'<svg class="ok-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>')
+    +esc(msg);
+  box.appendChild(el);
+  setTimeout(()=>{el.style.transition='opacity .3s';el.style.opacity='0';setTimeout(()=>el.remove(),320);},2600);
+}
+
+/* ==================== 视图一：集成平台 ==================== */
+const ICONS={
+  db:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>',
+  chart:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 14v3M12 9v8M17 5v12"/></svg>',
+  mega:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-5v12L3 13v-2z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>',
+  truck:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 18H3c-.6 0-1-.4-1-1V7c0-.6.4-1 1-1h10c.6 0 1 .4 1 1v11"/><path d="M14 9h4l4 4v4c0 .6-.4 1-1 1h-2"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>',
+  palette:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.84-.44-1.13-.24-.29-.39-.68-.39-1.09A1.66 1.66 0 0 1 14.47 16.4h2.35A5.19 5.19 0 0 0 22 11.21C21.97 6.05 17.5 2 12 2z"/></svg>',
+  gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
+  users:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
+};
+const SYSTEMS=[
+  {id:'dev',    name:'开发系统',    icon:'db'},
+  {id:'ops',    name:'运营系统',    icon:'chart'},
+  {id:'ad',     name:'广告系统',    icon:'mega'},
+  {id:'design', name:'设计系统',    icon:'mega'},
+  {id:'supply', name:'供应链系统',  icon:'truck', isNew:true},
+  {id:'art',    name:'美工系统',    icon:'palette'},
+  {id:'ywtk',   name:'义乌TK系统',  icon:'gear'},
+  {id:'user',   name:'用户管理系统', icon:'users'}
+];
+let currentSys='dev';
+function renderSysList(){
+  $('sysList').innerHTML=SYSTEMS.map(s=>`
+    <div class="sys-card ${s.id===currentSys?'active':''}" data-id="${s.id}">
+      ${s.isNew?'<span class="new-badge">新增</span>':''}
+      <div class="sys-icon">${ICONS[s.icon]}</div>
+      <div class="sys-name">${s.name}</div>
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+    </div>`).join('');
+  document.querySelectorAll('.sys-card').forEach(c=>{
+    c.addEventListener('click',()=>{currentSys=c.dataset.id;renderSysList();renderEntry();});
+  });
+}
+function renderEntry(){
+  const s=SYSTEMS.find(x=>x.id===currentSys);
+  $('pfTitle').textContent=s.name;
+  $('entryName').textContent=s.name;
+  $('entryDesc').textContent='点击下方按钮进入'+s.name;
+  $('entryIcon').innerHTML=ICONS[s.icon];
+}
+$('btnEnter').addEventListener('click',()=>{
+  if(currentSys==='supply'){showSupply();}
+  else{toast('「'+SYSTEMS.find(x=>x.id===currentSys).name+'」不在本次演示范围内');}
+});
+function showSupply(){
+  $('viewPlatform').classList.add('hidden');
+  $('viewSupply').classList.remove('hidden');
+  window.scrollTo(0,0);
+}
+$('btnBack').addEventListener('click',()=>{
+  $('viewSupply').classList.add('hidden');
+  $('viewPlatform').classList.remove('hidden');
+});
+
+/* ==================== 箱唛管理：数据 ==================== */
+/* 一个上传的 Excel = 一条文件数据；文件内按「采购订单 + SKU」维度生成箱唛明细 */
+let files=[
+  {id:'XM202607214821',docNo:'XM202607214821',name:'0721采购订单.xlsx',creator:'王晓婷',createdAt:'2026-07-21 10:24',processedAt:'2026-07-21 10:28',status:'已处理',marks:[
+    {id:'SM-PO260721-03',po:'PO-20260721-003',sku:'SKU-1001',name:'独角兽生日纸盘 9寸 8pcs',image:null,status:'已生成'},
+    {id:'SM-PO260721-04',po:'PO-20260721-003',sku:'SKU-1018',name:'独角兽生日纸巾 33cm 16pcs',image:null,status:'已失败',failReason:'SKU条码未生成'},
+    {id:'SM-PO260721-05',po:'PO-20260721-004',sku:'SKU-1032',name:'Let it Snow 雪人主题横幅',image:null,status:'已生成'}
+  ]},
+  {id:'XM202607306655',docNo:'XM202607306655',name:'0730采购订单.xlsx',creator:'陈杰',createdAt:'2026-07-30 09:41',status:'处理中',marks:[
+    {id:'SM-PO260730-01',po:'PO-20260730-001',sku:'SKU-2077',name:'冬季仙境桌布 137×274cm',image:null,status:'生成中'},
+    {id:'SM-PO260730-02',po:'PO-20260730-001',sku:'SKU-2079',name:'雪花镂空挂饰 6pcs',image:null,status:'生成中'}
+  ]},
+  {id:'XM202608063347',docNo:'XM202608063347',name:'0806采购订单.xlsx',creator:'王晓婷',createdAt:'2026-08-06 11:03',processedAt:'2026-08-06 11:07',status:'已处理',marks:[
+    {id:'SM-PO260806-01',po:'PO-20260806-001',sku:'SKU-3320',name:'冰雪主题纸杯 9oz 8pcs',image:null,status:'已生成'},
+    {id:'SM-PO260806-02',po:'PO-20260806-002',sku:'SKU-3325',name:'冰晶蓝主题纸盘 7寸 8pcs',image:null,status:'已生成'}
+  ]}
+];
+let markSeq=10;
+let kwName='',kwDoc='',kwStatus='全部'; /* kwStatus：单据状态筛选，仅「全部」页签下生效 */
+const TABS=['全部','处理中','已处理'];
+let currentTab='全部';
+let currentFile=null;
+
+/* 状态页签（含单据数量，按文件统计） */
+function renderTabs(){
+  const counts={};
+  files.forEach(f=>{counts[f.status]=(counts[f.status]||0)+1;});
+  $('statusTabs').innerHTML=TABS.map(t=>{
+    const n=t==='全部'?files.length:(counts[t]||0);
+    return `<div class="stab ${t===currentTab?'active':''}" data-tab="${t}">${t}<span class="cnt">（${n}）</span></div>`;
+  }).join('');
+  document.querySelectorAll('.stab').forEach(el=>{
+    el.addEventListener('click',()=>{currentTab=el.dataset.tab;listPage=1;renderAll();});
+  });
+  /* 单据状态筛选仅「全部」页签下展示 */
+  const sf=$('listStatusFilter');
+  (sf._cdWrap||sf).style.display=currentTab==='全部'?'':'none';
+}
+
+/* 列表渲染（页签状态过滤 + 单据编号 / 文件名搜索） */
+function filteredFiles(){
+  const kd=kwDoc.trim().toLowerCase(),kn=kwName.trim().toLowerCase();
+  return files.filter(f=>{
+    if(currentTab!=='全部'&&f.status!==currentTab)return false;
+    if(currentTab==='全部'&&kwStatus!=='全部'&&f.status!==kwStatus)return false;
+    if(kd&&!f.docNo.toLowerCase().includes(kd))return false;
+    if(kn&&!f.name.toLowerCase().includes(kn))return false;
+    return true;
+  }).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)); /* 默认按创建时间倒序，最新在前 */
+}
+function tagClass(s){
+  return (s==='处理中'||s==='生成中')?'tag-printed':(s==='已失败'?'tag-fail':'tag-done');
+}
+const FILE_ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
+/* ==================== 分页组件 ==================== */
+let listPage=1,listSize=10;     /* 主列表分页 */
+let detailPage=1,detailSize=10; /* 详情列表分页 */
+function pageNums(tp,cur){
+  const pages=[];
+  if(tp<=7){for(let i=1;i<=tp;i++)pages.push(i);}
+  else{
+    pages.push(1);
+    if(cur>3)pages.push('…');
+    for(let i=Math.max(2,cur-1);i<=Math.min(tp-1,cur+1);i++)pages.push(i);
+    if(cur<tp-2)pages.push('…');
+    pages.push(tp);
+  }
+  return pages;
+}
+function renderPager(id,total,cur,size,cb){
+  const el=$(id);
+  const tp=Math.max(1,Math.ceil(total/size));
+  el.innerHTML=`<span class="pg-total">共 ${total} 条</span>
+    <button class="pg-btn" data-pg="prev" ${cur<=1?'disabled':''}>‹</button>
+    ${pageNums(tp,cur).map(p=>p==='…'?'<span class="pg-ellipsis">…</span>':`<button class="pg-btn ${p===cur?'cur':''}" data-pg="${p}">${p}</button>`).join('')}
+    <button class="pg-btn" data-pg="next" ${cur>=tp?'disabled':''}>›</button>
+    <select class="pg-size">${[10,20,50].map(s=>`<option value="${s}" ${s===size?'selected':''}>${s} 条/页</option>`).join('')}</select>`;
+  el.querySelectorAll('button[data-pg]').forEach(b=>b.addEventListener('click',()=>{
+    let p=cur;
+    if(b.dataset.pg==='prev')p=cur-1;
+    else if(b.dataset.pg==='next')p=cur+1;
+    else p=parseInt(b.dataset.pg,10);
+    cb(p,size);
+  }));
+  el.querySelector('.pg-size').addEventListener('change',e=>cb(1,parseInt(e.target.value,10)));
+}
+
+function renderTable(){
+  const rows=filteredFiles();
+  const tp=Math.max(1,Math.ceil(rows.length/listSize));
+  if(listPage>tp)listPage=tp;
+  const pageRows=rows.slice((listPage-1)*listSize,listPage*listSize);
+  renderPager('listPager',rows.length,listPage,listSize,(p,s)=>{listPage=p;listSize=s;renderTable();});
+  if(!pageRows.length){
+    $('fileTbody').innerHTML='<tr class="empty-row"><td colspan="7">当前页签下没有符合条件的文件</td></tr>';
+    return;
+  }
+  $('fileTbody').innerHTML=pageRows.map(f=>{
+    const ok=f.marks.filter(m=>m.status==='已生成').length;
+    const fail=f.marks.filter(m=>m.status==='已失败').length;
+    return `
+    <tr>
+      <td><span class="doc-link mono" data-act="view" data-id="${esc(f.id)}">${esc(f.docNo)}</span></td>
+      <td><div class="fname-cell"><span class="fn">${esc(f.name)}</span></div></td>
+      <td><span class="tag ${tagClass(f.status)}">${f.status}</span></td>
+      <td>已处理明细 <span class="rs-num">${ok+fail}</span> ｜ 成功 <span class="rs-ok">${ok}</span> ｜ 失败 <span class="rs-fail">${fail}</span></td>
+      <td>${esc(f.creator)}</td>
+      <td class="mono">${esc(f.createdAt)}</td>
+      <td><div class="row-actions"><button class="btn-link" data-act="view" data-id="${esc(f.id)}">查看</button></div></td>
+    </tr>`;
+  }).join('');
+}
+$('fileTbody').addEventListener('click',e=>{
+  const btn=e.target.closest('[data-act]');
+  if(!btn)return;
+  const f=files.find(x=>x.id===btn.dataset.id);
+  if(!f)return;
+  if(btn.dataset.act==='view')openDetail(f);
+});
+function renderAll(){
+  renderTabs();renderTable();
+}
+
+/* ==================== 详情页（该文件生成的箱唛列表） ==================== */
+let detailSel=new Set(); /* 已勾选的箱唛 id（仅「已生成」可勾选下载） */
+let poKw=''; /* PO 单号筛选关键字 */
+let statusKw='全部'; /* 状态筛选：全部 / 已生成 / 已失败 */
+function openDetail(f){
+  currentFile=f;
+  detailSel=new Set();
+  poKw='';$('poFilter').value='';
+  statusKw='全部';$('statusFilter').value='全部';
+  if($('statusFilter')._cdSync)$('statusFilter')._cdSync();
+  detailPage=1;
+  $('listMain').classList.add('hidden');
+  $('detailMain').classList.remove('hidden');
+  renderDetail();
+  window.scrollTo(0,0);
+}
+/* 按 PO 单号 + 状态筛选后的明细 */
+function detailFiltered(){
+  const f=currentFile;
+  if(!f)return [];
+  const kw=poKw.trim().toLowerCase();
+  return f.marks.filter(m=>{
+    if(statusKw!=='全部'&&m.status!==statusKw)return false;
+    if(kw&&!m.po.toLowerCase().includes(kw))return false;
+    return true;
+  });
+}
+/* 单据为「已处理」才开放下载功能；处理中单据内所有下载入口均不可用 */
+function canDownload(f){return !!f&&f.status==='已处理';}
+function syncCheckAll(){
+  const dl=canDownload(currentFile)?detailFiltered().filter(m=>m.status==='已生成'):[];
+  const ca=$('checkAll');
+  ca.disabled=!dl.length;
+  ca.checked=dl.length>0&&dl.every(m=>detailSel.has(m.id));
+  ca.indeterminate=!ca.checked&&dl.some(m=>detailSel.has(m.id));
+}
+/* 详情页头部步骤条：①创建 → ②处理 → ③完成 */
+function renderStepBar(f){
+  const done=f.status==='已处理';
+  const steps=[
+    /* 步骤条仅展示节点名称，不显示副标题 */
+    {t:'创建',st:'done'},
+    {t:'处理',st:done?'done':'cur'},
+    {t:'完成',st:done?'done':'pending'}
+  ];
+  $('stepBar').innerHTML=steps.map((s,i)=>`
+    ${i?'<div class="step-arrow"></div>':''}
+    <div class="step ${s.st}">
+      <div class="step-num">${s.st==='done'?'✓':i+1}</div>
+      <div class="step-txt"><div class="step-t">${s.t}</div></div>
+    </div>`).join('');
+}
+/* 详情页信息面板：单据基础信息与处理结果 */
+function renderInfoPanel(f){
+  const ok=f.marks.filter(m=>m.status==='已生成').length;
+  const fail=f.marks.filter(m=>m.status==='已失败').length;
+  const items=[
+    ['单据编号',esc(f.docNo)],['单据名称',esc(f.name)],
+    ['单据状态',`<span class="tag ${tagClass(f.status)}">${f.status}</span>`],['创建人',esc(f.creator)],
+    ['创建时间',esc(f.createdAt)],['处理完成时间',esc(f.processedAt||'—')],
+    ['箱唛总数',String(f.marks.length)],['生成结果',`<span class="rs-ok">已生成 ${ok}</span> / <span class="rs-fail">已失败 ${fail}</span>`]
+  ];
+  $('infoPanel').innerHTML=items.map(it=>`<div class="info-item"><span class="il">${it[0]}：</span><span class="iv">${it[1]}</span></div>`).join('');
+}
+function renderDetail(){
+  const f=currentFile;
+  if(!f)return;
+  const canDl=canDownload(f);
+  detailSel=new Set([...detailSel].filter(id=>canDl&&f.marks.some(m=>m.id===id&&m.status==='已生成')));
+  $('btnBatchDlDetail').disabled=!canDl;
+  $('btnBatchDlDetail').title=canDl?'':'单据处理中，待处理完成后才可下载箱唛';
+  renderStepBar(f);
+  renderInfoPanel(f);
+  const list=detailFiltered();
+  const tp=Math.max(1,Math.ceil(list.length/detailSize));
+  if(detailPage>tp)detailPage=tp;
+  const pageRows=list.slice((detailPage-1)*detailSize,detailPage*detailSize);
+  renderPager('detailPager',list.length,detailPage,detailSize,(p,s)=>{detailPage=p;detailSize=s;renderDetail();});
+  if(!pageRows.length){
+    $('detailTbody').innerHTML='<tr class="empty-row"><td colspan="9">'+(f.marks.length?'没有符合条件的箱唛':'该文件没有生成箱唛')+'</td></tr>';
+    syncCheckAll();
+    return;
+  }
+  $('detailTbody').innerHTML=pageRows.map((m,idx)=>{
+    const done=m.status==='已生成';
+    const dlOk=done&&canDl; /* 仅单据已处理且明细已生成才可勾选/下载 */
+    return `<tr>
+      <td><input type="checkbox" class="tb-check row-check" data-id="${esc(m.id)}" ${dlOk?'':'disabled'} ${detailSel.has(m.id)?'checked':''}></td>
+      <td class="mono">${(detailPage-1)*detailSize+idx+1}</td>
+      <td class="mono">${esc(m.po)}</td>
+      <td class="mono">${esc(m.sku)}</td>
+      <td>${esc(m.name)}</td>
+      <td>${m.image?`<img class="p-thumb" src="${m.image}">`:'<div class="p-noimg">无图</div>'}</td>
+      <td><span class="tag ${tagClass(m.status)}">${m.status}</span></td>
+      <td>${m.status==='已失败'?`<span class="fail-reason">${esc(m.failReason||'生成失败')}</span>`:'<span style="color:var(--text-3);">—</span>'}</td>
+      <td><div class="row-actions">
+        <button class="btn-link" data-act="preview" data-id="${esc(m.id)}" ${dlOk?'':'disabled'}>预览</button>
+        <button class="btn-link" data-act="download" data-id="${esc(m.id)}" ${dlOk?'':'disabled'}>下载</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+  syncCheckAll();
+}
+/* 行内多选 */
+$('detailTbody').addEventListener('change',e=>{
+  const cb=e.target.closest('.row-check');
+  if(!cb||cb.disabled)return;
+  if(cb.checked)detailSel.add(cb.dataset.id);else detailSel.delete(cb.dataset.id);
+  syncCheckAll();
+});
+/* 全选（作用于当前筛选结果，仅单据「已处理」时可选「已生成」数据） */
+$('checkAll').addEventListener('change',e=>{
+  if(!canDownload(currentFile)){e.target.checked=false;return;}
+  const dl=detailFiltered().filter(m=>m.status==='已生成');
+  if(e.target.checked)dl.forEach(m=>detailSel.add(m.id));
+  else dl.forEach(m=>detailSel.delete(m.id));
+  renderDetail();
+});
+/* PO 单号筛选：点击「搜索」或回车执行，「重置」清空并恢复全部 */
+function applyPoFilter(){
+  poKw=$('poFilter').value;
+  detailPage=1;
+  renderDetail();
+}
+$('btnPoSearch').addEventListener('click',applyPoFilter);
+$('poFilter').addEventListener('keydown',e=>{if(e.key==='Enter')applyPoFilter();});
+$('btnPoReset').addEventListener('click',()=>{
+  $('poFilter').value='';poKw='';
+  detailPage=1;
+  renderDetail();
+});
+/* ==================== 自定义下拉组件 ==================== */
+/* 把原生 select 增强为 ERP 风格下拉：默认显示标题；选中后显示值 + × 清除；面板内选中项浅蓝高亮 */
+function enhanceSelect(sel,label){
+  const def=sel.options[0].value;
+  const wrap=document.createElement('div');
+  wrap.className='c-dropdown';
+  wrap.innerHTML=
+    `<div class="c-dropdown-btn"><span class="cd-label"></span>`
+    +`<span class="cd-clear hidden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>`
+    +`<svg class="cd-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></div>`
+    +`<div class="c-dropdown-panel">${[...sel.options].map(o=>`<div class="c-dropdown-item" data-v="${esc(o.value)}">${esc(o.text.replace(/^[^：]*：/,''))}</div>`).join('')}</div>`;
+  sel.style.display='none';
+  sel.parentNode.insertBefore(wrap,sel.nextSibling);
+  const labEl=wrap.querySelector('.cd-label'),clearEl=wrap.querySelector('.cd-clear');
+  function sync(){
+    const v=sel.value;
+    if(v===def){labEl.textContent=label;labEl.style.color='var(--text-2)';}
+    else{labEl.textContent=sel.options[sel.selectedIndex].text.replace(/^[^：]*：/,'');labEl.style.color='var(--text)';}
+    clearEl.classList.toggle('hidden',v===def);
+    wrap.querySelectorAll('.c-dropdown-item').forEach(it=>it.classList.toggle('sel',it.dataset.v===v));
+  }
+  wrap.querySelector('.c-dropdown-btn').addEventListener('click',e=>{
+    if(e.target.closest('.cd-clear'))return;
+    e.stopPropagation();
+    document.querySelectorAll('.c-dropdown.open').forEach(d=>{if(d!==wrap)d.classList.remove('open');});
+    wrap.classList.toggle('open');
+  });
+  wrap.querySelectorAll('.c-dropdown-item').forEach(it=>{
+    it.addEventListener('click',()=>{
+      sel.value=it.dataset.v;
+      sel.dispatchEvent(new Event('change'));
+      sync();
+      wrap.classList.remove('open');
+    });
+  });
+  clearEl.addEventListener('click',e=>{
+    e.stopPropagation();
+    sel.value=def;
+    sel.dispatchEvent(new Event('change'));
+    sync();
+  });
+  document.addEventListener('click',()=>wrap.classList.remove('open'));
+  sel._cdSync=sync;
+  sel._cdWrap=wrap;
+  sync();
+}
+enhanceSelect($('listStatusFilter'),'单据状态');
+enhanceSelect($('statusFilter'),'状态');
+/* 状态筛选（全部 / 已生成 / 已失败，默认全部，切换即生效） */
+$('statusFilter').addEventListener('change',e=>{
+  statusKw=e.target.value;
+  detailPage=1;
+  renderDetail();
+});
+/* 详情页批量下载：单据「已处理」后才可下载勾选的箱唛；未勾选则提示 */
+$('btnBatchDlDetail').addEventListener('click',async()=>{
+  const f=currentFile;
+  if(!f)return;
+  if(!canDownload(f)){toast('单据处理中，待处理完成后才可下载箱唛','error');return;}
+  const list=f.marks.filter(m=>detailSel.has(m.id)&&m.status==='已生成');
+  if(!list.length){toast('请勾选需下载的数据','error');return;}
+  toast('正在打包 '+list.length+' 张箱唛…');
+  const zip=new JSZip();
+  for(const m of list){
+    zip.file(m.po+'_'+m.sku+'.xlsx',await labelToXlsxBlob(m)); /* 包内Excel：PO单号_SKU.xlsx（同PO多SKU避免重名覆盖） */
+  }
+  const blob=await zip.generateAsync({type:'blob'});
+  const d=new Date();
+  const ymd=d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');
+  downloadBlob(blob,'箱唛-'+ymd+'.zip'); /* 压缩包文件名：箱唛-年月日.zip */
+  toast('已下载 '+list.length+' 张箱唛（zip）');
+});
+$('detailTbody').addEventListener('click',e=>{
+  const btn=e.target.closest('button[data-act]');
+  if(!btn||btn.disabled||!currentFile)return;
+  const m=currentFile.marks.find(x=>x.id===btn.dataset.id);
+  if(!m)return;
+  if(btn.dataset.act==='preview')openPreview(m);
+  else if(btn.dataset.act==='download')downloadMark(m);
+});
+/* 图片悬浮大图：移入缩略图显示，移出隐藏；默认右侧展示，空间不足自动翻转到左侧 */
+const hoverPv=$('imgHoverPreview'),hoverImg=$('imgHoverImg');
+$('detailTbody').addEventListener('mouseover',e=>{
+  const t=e.target.closest('.p-thumb');
+  if(!t)return;
+  hoverImg.src=t.src;
+  hoverPv.classList.remove('hidden');
+  const r=t.getBoundingClientRect();
+  const pw=336,ph=336; /* 320 图 + 8 padding + 边框 */
+  let x=r.right+10,y=r.top+r.height/2-ph/2;
+  if(x+pw>window.innerWidth-8)x=r.left-pw-10;
+  if(y<8)y=8;
+  if(y+ph>window.innerHeight-8)y=window.innerHeight-8-ph;
+  hoverPv.style.left=x+'px';hoverPv.style.top=y+'px';
+});
+$('detailTbody').addEventListener('mouseout',e=>{
+  if(e.target.closest('.p-thumb'))hoverPv.classList.add('hidden');
+});
+$('btnBackList').addEventListener('click',()=>{
+  currentFile=null;
+  $('detailMain').classList.add('hidden');
+  $('listMain').classList.remove('hidden');
+  renderAll();
+});
+/* Code 128 可编码性校验：仅支持 ASCII 32~126，含中文等字符的 SKU 无法生成条码 */
+function barcodeEncodable(s){return !!s&&[...s].every(c=>{const cc=c.codePointAt(0);return cc>=32&&cc<=126;});}
+/* 提交生成：文件状态 处理中 → 全部明细处理完成后变已处理；失败原因全部来自表格实际数据与条码校验，不再随机 */
+function submitFile(f){
+  toast('「'+f.name+'」已提交，箱唛处理中');
+  setTimeout(()=>{
+    if(f.status!=='处理中')return;
+    f.marks.forEach(m=>{
+      if(m.status!=='生成中')return;
+      /* 仅采购订单号非空且 SKU 可编码为 Code 128 条形码时置「已生成」；多项同时异常时合并展示失败原因 */
+      const reasons=[];
+      if(!m.po||!m.po.trim())reasons.push('采购订单号为空');
+      if(!m.sku||!m.sku.trim())reasons.push('SKU为空');
+      else if(!barcodeEncodable(m.sku))reasons.push('SKU条码未生成');
+      if(reasons.length){m.status='已失败';m.failReason=reasons.join('；');}
+      else m.status='已生成';
+    });
+    /* 单据内所有数据都处理完成（已生成/已失败），单据状态才由处理中变更为已处理 */
+    f.status=f.marks.every(m=>m.status==='已生成'||m.status==='已失败')?'已处理':'处理中';
+    if(f.status==='已处理')f.processedAt=nowStr();
+    const ok=f.marks.filter(m=>m.status==='已生成').length;
+    const fail=f.marks.filter(m=>m.status==='已失败').length;
+    renderAll();
+    if(currentFile&&currentFile.id===f.id)renderDetail();
+    toast('处理完成');
+  },4000);
+}
+
+/* 搜索（单据编号 / 文件名）：点击「搜索」或回车执行，「重置」清空并恢复全部 */
+function applySearch(){
+  kwDoc=$('searchDocNo').value;
+  kwName=$('searchInput').value;
+  kwStatus=$('listStatusFilter').value;
+  listPage=1;
+  renderTable();
+}
+$('btnSearch').addEventListener('click',applySearch);
+['searchDocNo','searchInput'].forEach(id=>{
+  $(id).addEventListener('keydown',e=>{if(e.key==='Enter')applySearch();});
+});
+$('btnReset').addEventListener('click',()=>{
+  $('searchDocNo').value='';$('searchInput').value='';$('listStatusFilter').value='全部';
+  if($('listStatusFilter')._cdSync)$('listStatusFilter')._cdSync();
+  kwDoc='';kwName='';kwStatus='全部';
+  listPage=1;
+  renderTable();
+});
+
+/* ==================== 新建箱唛 ==================== */
+function openModal(id){$(id).classList.remove('hidden');}
+function closeModal(id){$(id).classList.add('hidden');}
+document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>closeModal(b.dataset.close)));
+document.querySelectorAll('.modal-mask').forEach(mask=>{
+  mask.addEventListener('click',e=>{if(e.target===mask)mask.classList.add('hidden');});
+});
+/* ==================== 上传 Excel 新建箱唛 ==================== */
+let parsedMarks=[];
+let parsedFileName='';
+$('btnNew').addEventListener('click',()=>{
+  parsedMarks=[];
+  parsedFileName='';
+  $('uploadResult').innerHTML='';
+  $('fileInput').value='';
+  $('btnSave').disabled=true;
+  openModal('newModal');
+});
+$('uploadZone').addEventListener('click',()=>$('fileInput').click());
+$('uploadZone').addEventListener('dragover',e=>{e.preventDefault();$('uploadZone').classList.add('drag');});
+$('uploadZone').addEventListener('dragleave',()=>$('uploadZone').classList.remove('drag'));
+$('uploadZone').addEventListener('drop',e=>{
+  e.preventDefault();$('uploadZone').classList.remove('drag');
+  if(e.dataTransfer.files.length)handleFile(e.dataTransfer.files[0]);
+});
+$('fileInput').addEventListener('change',e=>{if(e.target.files.length)handleFile(e.target.files[0]);});
+
+async function handleFile(file){
+  if(!/\.(xlsx|xls)$/i.test(file.name)){toast('仅支持 .xlsx / .xls 格式的 Excel 文件','error');return;}
+  parsedFileName=file.name;
+  try{
+    const buf=await file.arrayBuffer();
+    const wb=XLSX.read(buf,{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+    if(!rows.length){toast('Excel 内容为空','error');return;}
+    /* 定位表头 */
+    const headIdx=rows.findIndex(r=>r.some(c=>String(c).replace(/\s/g,'')==='采购订单号'||String(c).replace(/\s/g,'')==='采购单号'));
+    if(headIdx<0){toast('解析失败，请检查模板','error');return;}
+    const head=rows[headIdx].map(c=>String(c).replace(/\s/g,''));
+    const ciPo=head.findIndex(c=>c==='采购订单号'||c==='采购单号');
+    const ciSku=head.findIndex(c=>c.toUpperCase()==='SKU');
+    const ciName=head.findIndex(c=>c==='品名');
+    const ciImg=head.findIndex(c=>c==='图片');
+    if(ciSku<0){toast('解析失败，请检查模板','error');return;} /* 品名非必填，缺列/缺值均不判失败 */
+    /* 提取图片（WPS 单元格图片 DISPIMG + 标准 Excel 浮动图片锚点） */
+    let imgMap={byRow:{},byId:{}};
+    try{imgMap=await extractImages(buf);}catch(_){}
+    /* 按 采购订单号+SKU 维度拆分；仅校验文件格式与字段列，不校验数据行内容是否缺失 */
+    const seen=new Map();
+    for(let i=headIdx+1;i<rows.length;i++){
+      const po=String(rows[i][ciPo]).trim(),sku=String(rows[i][ciSku]).trim(),name=ciName>=0?String(rows[i][ciName]).trim():'';
+      if(!po&&!sku&&!name)continue;
+      const key=po+'|'+sku; /* 按 PO+SKU 去重 */
+      if(seen.has(key))continue;
+      const imgCell=ciImg>=0?String(rows[i][ciImg]||''):'';
+      const dm=imgCell.match(/DISPIMG\("([^"]+)"/i);
+      const image=(dm&&imgMap.byId[dm[1]])||imgMap.byRow[i]||null;
+      seen.set(key,{po,sku,name,image});
+    }
+    parsedMarks=[...seen.values()];
+    if(!parsedMarks.length){toast('未解析到有效数据，请检查表格内容','error');return;}
+    $('uploadResult').innerHTML=
+      `<div class="upload-file">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+         <span class="fname">${esc(file.name)}</span>
+         <span class="rm" id="rmFile">移除</span>
+       </div>
+       <div class="parsed-head"><span>已按「采购订单号 + SKU」解析出 <b>${parsedMarks.length}</b> 条箱唛数据</span></div>
+       <div class="parsed-list"><table>
+         <thead><tr><th>图片</th><th>采购订单号</th><th>SKU</th><th>品名</th></tr></thead>
+         <tbody>${parsedMarks.map(m=>`<tr>
+           <td>${m.image?`<img class="p-thumb" src="${m.image}">`:'<div class="p-noimg">无图</div>'}</td>
+           <td class="mono">${esc(m.po)||'—'}</td><td class="mono">${esc(m.sku)||'—'}</td><td>${esc(m.name)||'—'}</td>
+         </tr>`).join('')}</tbody>
+       </table></div>`;
+    $('rmFile').addEventListener('click',()=>{
+      parsedMarks=[];parsedFileName='';$('uploadResult').innerHTML='';$('fileInput').value='';
+      $('btnSave').disabled=true;
+    });
+    $('btnSave').disabled=false;
+  }catch(err){
+    toast('Excel 解析失败：'+err.message,'error');
+  }
+}
+/* 从 xlsx(zip) 中提取图片，返回 {byRow:{行号:dataURL}, byId:{DISPIMG_ID:dataURL}} */
+async function extractImages(buf){
+  const zip=await JSZip.loadAsync(buf);
+  const result={byRow:{},byId:{}};
+  const toDataURL=async(f,mediaPath)=>{
+    const ext=mediaPath.split('.').pop().toLowerCase();
+    const mime=(ext==='jpg'||ext==='jpeg')?'image/jpeg':('image/'+ext);
+    return 'data:'+mime+';base64,'+await f.async('base64');
+  };
+  const resolvePath=t=>t.startsWith('/')?t.slice(1):('xl/'+t.replace(/^\.\.\//,''));
+  /* 方式一：WPS 嵌入单元格图片（cellimages.xml + DISPIMG 公式） */
+  const ciFile=zip.file('xl/cellimages.xml');
+  const ciRels=zip.file('xl/_rels/cellimages.xml.rels');
+  if(ciFile&&ciRels){
+    const relDoc=new DOMParser().parseFromString(await ciRels.async('text'),'application/xml');
+    const relMap={};
+    relDoc.querySelectorAll('Relationship').forEach(r=>{relMap[r.getAttribute('Id')]=r.getAttribute('Target');});
+    const ciDoc=new DOMParser().parseFromString(await ciFile.async('text'),'application/xml');
+    const pics=ciDoc.getElementsByTagNameNS('*','pic');
+    for(const p of pics){
+      const cNvPr=p.getElementsByTagNameNS('*','cNvPr')[0];
+      const blip=p.getElementsByTagNameNS('*','blip')[0];
+      if(!cNvPr||!blip)continue;
+      const id=cNvPr.getAttribute('name');
+      const target=relMap[blip.getAttribute('r:embed')||blip.getAttribute('embed')];
+      if(!id||!target)continue;
+      const f=zip.file(resolvePath(target));
+      if(f)result.byId[id]=await toDataURL(f,resolvePath(target));
+    }
+  }
+  /* 方式二：标准 Excel 浮动图片（drawing 锚点按行映射） */
+  const drawingPath=Object.keys(zip.files).find(p=>/^xl\/drawings\/drawing\d+\.xml$/.test(p));
+  if(drawingPath){
+    const relsFile=zip.file(drawingPath.replace('drawings/','drawings/_rels/')+'.rels');
+    if(relsFile){
+      const relDoc=new DOMParser().parseFromString(await relsFile.async('text'),'application/xml');
+      const relMap={};
+      relDoc.querySelectorAll('Relationship').forEach(r=>{relMap[r.getAttribute('Id')]=r.getAttribute('Target');});
+      const drawDoc=new DOMParser().parseFromString(await zip.file(drawingPath).async('text'),'application/xml');
+      const anchors=[...drawDoc.getElementsByTagNameNS('*','twoCellAnchor'),...drawDoc.getElementsByTagNameNS('*','oneCellAnchor')];
+      for(const a of anchors){
+        const from=a.getElementsByTagNameNS('*','from')[0];
+        const blip=a.getElementsByTagNameNS('*','blip')[0];
+        if(!from||!blip)continue;
+        const rowEl=from.getElementsByTagNameNS('*','row')[0];
+        if(!rowEl)continue;
+        const row=parseInt(rowEl.textContent,10);
+        const target=relMap[blip.getAttribute('r:embed')||blip.getAttribute('embed')];
+        if(!target)continue;
+        const mp=resolvePath(target);
+        const f=zip.file(mp);
+        if(f)result.byRow[row]=await toDataURL(f,mp);
+      }
+    }
+  }
+  return result;
+}
+/* 提交：一个上传文件生成一条文件数据，状态为「处理中」 */
+function nowStr(){
+  const d=new Date(),p=n=>String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+/* 单据编号：XM + 年月日 + 随机4位数；全局唯一（生成时查重），文件名允许重复 */
+function genDocNo(){
+  const d=new Date(),p=n=>String(n).padStart(2,'0');
+  const ymd=''+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate());
+  let no;
+  do{no='XM'+ymd+Math.floor(1000+Math.random()*9000);}
+  while(files.some(f=>f.docNo===no));
+  return no;
+}
+function saveParsed(){
+  if(!parsedMarks.length)return;
+  const no=genDocNo();
+  const f={
+    id:no, /* 单据编号即唯一标识 */
+    docNo:no,
+    name:parsedFileName,
+    creator:'王晓婷',
+    createdAt:nowStr(),
+    status:'处理中',
+    marks:parsedMarks.map(m=>({
+      id:'SM-'+m.po.replace(/-/g,'')+'-'+m.sku.replace(/[^A-Za-z0-9]/g,'')+'-'+String(markSeq++),
+      po:m.po,sku:m.sku,name:m.name,image:m.image,
+      status:'生成中', /* 明细初始状态统一为生成中，SKU 无法编码（含为空）时在处理环节置为已失败 */
+      failReason:''
+    }))
+  };
+  files=[f,...files];
+  closeModal('newModal');
+  renderAll();
+  submitFile(f);
+}
+$('btnSave').addEventListener('click',()=>saveParsed());
+
+
+/* ==================== 箱唛标签（模板渲染） ==================== */
+let previewMark=null;
+/* Code 128 模块宽度表（索引 0-105 为符号，106 为终止符） */
+const C128_PATTERNS=[
+'212222','222122','222221','121223','121322','131222','122213','122312','132212','221213',
+'221312','231212','112232','122132','122231','113222','123122','123221','223211','221132',
+'221231','213212','223112','312131','311222','321122','321221','312212','322112','322211',
+'212123','212321','232121','111323','131123','131321','112313','132113','132311','211313',
+'231113','231311','112133','112331','132131','113123','113321','133121','313121','211331',
+'231131','213113','213311','213131','311123','311321','331121','312113','312311','332111',
+'314111','221411','431111','111224','111422','121124','121421','141122','141221','112214',
+'112412','122114','122411','142112','142211','241211','221114','413111','241112','134111',
+'111242','121142','121241','114212','124112','124211','411212','421112','421211','212141',
+'214121','412121','111143','111341','131141','114113','114311','411113','411311','113141',
+'114131','311141','411131','211412','211214','211232','2331112'];
+/* Code 128 (Auto)：B/C 子集自动切换，返回符号序列（含起始码、校验位、终止码） */
+function code128Encode(str){
+  const isD=c=>c>='0'&&c<='9';
+  const run=p=>{let n=0;while(p+n<str.length&&isD(str[p+n]))n++;return n;};
+  const codes=[];
+  let i=0,cur;
+  const allDigitsEven=str.length>=2&&[...str].every(isD)&&str.length%2===0;
+  if(allDigitsEven||run(0)>=4){codes.push(105);cur='C';}
+  else{codes.push(104);cur='B';}
+  while(i<str.length){
+    if(cur==='C'){
+      if(run(i)>=2){codes.push(parseInt(str.substr(i,2),10));i+=2;}
+      else{codes.push(100);cur='B';}
+    }else{
+      const r=run(i);
+      if(r>=4){
+        if(r%2===1){codes.push(str.charCodeAt(i)-32);i++;}
+        codes.push(99);cur='C';
+      }else{
+        let cc=str.charCodeAt(i);
+        if(cc<32||cc>126)cc=32;
+        codes.push(cc-32);i++;
+      }
+    }
+  }
+  let sum=codes[0];
+  for(let k=1;k<codes.length;k++)sum+=codes[k]*k;
+  codes.push(sum%103);
+  codes.push(106);
+  return codes;
+}
+/* 符号序列 → 条/空模块宽度序列（黑条开头，条空交替） */
+function code128Widths(str){
+  const widths=[];
+  for(const c of code128Encode(str))for(const d of C128_PATTERNS[c])widths.push(+d);
+  return widths;
+}
+function barcodeHTML(code){
+  const ws=code128Widths(code);
+  return '<div class="barcode">'+ws.map((w,idx)=>
+    idx%2===0?`<i style="width:${w*1.6}px;"></i>`:`<s style="width:${w*1.6}px;"></s>`
+  ).join('')+'</div>';
+}
+function markLabelHTML(m){
+  const row=(c1,c2,c3)=>`<div class="ml-row"><div class="ml-c1">${c1}</div><div class="ml-c2">${c2}</div><div class="ml-c3">${c3||''}</div></div>`;
+  return `<div class="mark-label">
+    <div class="ml-main">
+      ${row('箱唛：','采购单号',esc(m.po))}
+      ${row('','箱号：','')}
+      ${row('','SKU：',esc(m.sku))}
+      ${row('','装箱数量：','')}
+      ${row('','箱规：','')}
+      ${row('','毛重：','')}
+      <div class="ml-row ml-barcode-row">
+        <div class="ml-c1"></div>
+        <div class="ml-c2">条形码</div>
+        <div class="ml-c23">${barcodeHTML(m.sku)}<div class="mark-code">${esc(m.sku)}</div></div>
+      </div>
+    </div>
+    <div class="ml-img">
+      <div class="ml-img-head">图片</div>
+      <div class="ml-img-body">${m.image?`<img src="${m.image}">`:'<span class="ml-img-empty">暂无图片</span>'}</div>
+    </div>
+  </div>`;
+}
+function openPreview(m){
+  previewMark=m;
+  $('markHolder').innerHTML=markLabelHTML(m);
+  openModal('previewModal');
+}
+$('btnPrint').addEventListener('click',()=>{
+  if(!previewMark)return;
+  $('printArea').innerHTML=markLabelHTML(previewMark);
+  $('printArea').classList.remove('hidden');
+  const po=previewMark.po;
+  setTimeout(()=>{
+    window.print();
+    $('printArea').classList.add('hidden');
+    toast('箱唛 '+po+' 已发送至打印机');
+  },50);
+});
+
+/* ==================== 箱唛下载（Canvas 渲染 PNG） ==================== */
+function loadImage(src){
+  return new Promise(res=>{
+    if(!src){res(null);return;}
+    const img=new Image();
+    img.onload=()=>res(img);
+    img.onerror=()=>res(null);
+    img.src=src;
+  });
+}
+async function renderLabelCanvas(m){
+  const W=1280,H=820,IMGW=440;
+  const cv=document.createElement('canvas');cv.width=W;cv.height=H;
+  const ctx=cv.getContext('2d');
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='#111';ctx.lineWidth=3;ctx.strokeRect(2,2,W-4,H-4);
+  const mainW=W-IMGW;
+  const c1=150,c2=210; /* 列宽 */
+  const rowH=100,barcodeH=H-6*rowH; /* 前6行各100，条形码行剩余 */
+  const rows=[['箱唛：','采购单号',m.po],['','箱号：',''],['','SKU：',m.sku],['','装箱数量：',''],['','箱规：',''],['','毛重：','']];
+  ctx.lineWidth=2.5;
+  let y=2;
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  for(let i=0;i<6;i++){
+    const[a,b,c]=rows[i];
+    ctx.fillStyle='#111';
+    ctx.font='26px "Microsoft YaHei",sans-serif';
+    ctx.fillText(a,c1/2,y+rowH/2);
+    ctx.fillText(b,c1+c2/2,y+rowH/2);
+    ctx.font='bold 30px Consolas,"Microsoft YaHei",monospace';
+    ctx.fillText(c,c1+c2+(mainW-c1-c2)/2,y+rowH/2);
+    y+=rowH;
+    ctx.beginPath();ctx.moveTo(2,y);ctx.lineTo(mainW,y);ctx.stroke();
+  }
+  /* 条形码行：「条形码」与采购单号/箱号/SKU 等其他字段同在第 2 列，条形码图形在第 3 列与上方取值对齐 */
+  const by=y,bh=H-y;
+  ctx.font='26px "Microsoft YaHei",sans-serif';ctx.fillStyle='#111';
+  ctx.fillText('条形码',c1+c2/2,by+bh/2);
+  const ws=code128Widths(m.sku);
+  const colX=c1+c2,colW=mainW-c1-c2;
+  const totalUnits=ws.reduce((s,w)=>s+w,0);
+  const unit=colW*0.88/totalUnits;
+  let bx=colX+colW*0.06;
+  const barTop=by+26,barMaxH=bh-90;
+  ws.forEach((w,idx)=>{
+    const ww=w*unit;
+    if(idx%2===0)ctx.fillRect(bx,barTop,ww,barMaxH);
+    bx+=ww;
+  });
+  ctx.font='26px Consolas,monospace';
+  ctx.textAlign='center';
+  /* SKU 编号与条形码图形同以第 3 列中心对齐 */
+  ctx.fillText(m.sku,colX+colW/2,by+bh-28);
+  /* 竖线 */
+  ctx.beginPath();ctx.moveTo(c1,2);ctx.lineTo(c1,H-2);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(c1+c2,2);ctx.lineTo(c1+c2,H-barcodeH-2<0?H-2:6*rowH+2);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(c1+c2,6*rowH+2);ctx.lineTo(c1+c2,H-2);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(mainW,2);ctx.lineTo(mainW,H-2);ctx.stroke();
+  /* 图片区：表头高度与左侧首行一致（rowH），横线与采购单号行底线对齐 */
+  const imgHeadY=2+rowH;
+  ctx.beginPath();ctx.moveTo(mainW,imgHeadY);ctx.lineTo(W-2,imgHeadY);ctx.stroke();
+  ctx.font='26px "Microsoft YaHei",sans-serif';
+  ctx.fillText('图片',mainW+IMGW/2,2+rowH/2);
+  const img=await loadImage(m.image);
+  if(img){
+    const aw=IMGW-40,ah=H-2-imgHeadY-40;
+    const scale=Math.min(aw/img.width,ah/img.height);
+    const dw=img.width*scale,dh=img.height*scale;
+    ctx.drawImage(img,mainW+(IMGW-dw)/2,imgHeadY+(H-2-imgHeadY-dh)/2,dw,dh);
+  }else{
+    ctx.fillStyle='#9ca3af';ctx.font='24px "Microsoft YaHei",sans-serif';
+    ctx.fillText('暂无图片',mainW+IMGW/2,imgHeadY+(H-2-imgHeadY)/2);
+  }
+  return cv;
+}
+function downloadBlob(blob,filename){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=filename;
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+}
+/* 条形码画布：Code 128 条码图形 + 下方 SKU 文本（画布内居中），导出 PNG dataURL 供嵌入 Excel */
+function barcodeDataURL(sku){
+  const cv=document.createElement('canvas');cv.width=560;cv.height=170;
+  const ctx=cv.getContext('2d');
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,560,170);
+  const seq=code128Widths(sku);
+  const unit=500/seq.reduce((s,w)=>s+w,0);
+  let x=30;ctx.fillStyle='#000';
+  seq.forEach((w,i)=>{const ww=w*unit;if(i%2===0)ctx.fillRect(x,10,ww,120);x+=ww;});
+  ctx.font='22px Consolas,monospace';ctx.textAlign='center';
+  ctx.fillText(sku,280,162);
+  return cv.toDataURL('image/png');
+}
+/* 按固定箱唛标签模板导出 Excel（.xlsx）：边框表格 + Code 128 条形码图片 + 产品图片嵌入 */
+async function labelToXlsxBlob(m){
+  const wb=new ExcelJS.Workbook();
+  const ws=wb.addWorksheet('箱唛');
+  ws.columns=[{width:9},{width:12},{width:45},{width:44}]; /* A列加宽，箱唛：两侧留空隙 */
+  for(let r=1;r<=6;r++)ws.getRow(r).height=24;
+  ws.getRow(7).height=110;
+  ws.getCell('A1').value='箱唛：'; /* 箱唛：横向排版，与「采购单号」同排展示 */
+  ws.getCell('A1').alignment={vertical:'middle',horizontal:'center'};
+  ws.getCell('A1').font={bold:true,size:12};
+  const rows=[['采购单号',m.po],['箱号：',''],['SKU：',m.sku],['装箱数量：',''],['箱规：',''],['毛重：',''],['条形码','']];
+  rows.forEach(([label,val],i)=>{
+    ws.getCell('B'+(i+1)).value=label;
+    ws.getCell('B'+(i+1)).alignment={vertical:'middle',horizontal:'center'};
+    ws.getCell('C'+(i+1)).value=val;
+    ws.getCell('C'+(i+1)).alignment={vertical:'middle',horizontal:'center'};
+    ws.getCell('C'+(i+1)).font={bold:true,size:12};
+  });
+  ws.mergeCells('D1:D7');
+  ws.getCell('D1').value='图片';
+  ws.getCell('D1').alignment={vertical:'top',horizontal:'center'};
+  /* 打印设置：横版单页自适应，保证箱唛标签一页打印 */
+  ws.pageSetup.orientation='landscape';
+  ws.pageSetup.fitToPage=true;
+  ws.pageSetup.fitToWidth=1;
+  ws.pageSetup.fitToHeight=1;
+  for(let r=1;r<=7;r++)for(let c=1;c<=4;c++){
+    ws.getCell(r,c).border={top:{style:'thin'},left:{style:'thin'},bottom:{style:'thin'},right:{style:'thin'}};
+  }
+  /* 条形码图片嵌入取值列：EMU 绝对偏移居中（列宽 45 字符，按 320~365px 中间值 342px 折算偏移，兼顾各表格软件），图片小于单元格不遮边框 */
+  const bId=wb.addImage({base64:barcodeDataURL(m.sku).split(',')[1],extension:'png'});
+  ws.addImage(bId,{tl:{nativeCol:2,nativeColOff:Math.round(31*9525),nativeRow:6,nativeRowOff:Math.round(30*9525)},ext:{width:280,height:85}});
+  /* 产品图片嵌入图片区（等比缩放、EMU 偏移居中），「图片」标题始终显示 */
+  if(m.image){
+    const img=await new Promise(res=>{const im=new Image();im.onload=()=>res(im);im.onerror=()=>res(null);im.src=m.image;});
+    if(img){
+      const sc=Math.min(280/img.width,280/img.height,1);
+      const dw=img.width*sc,dh=img.height*sc;
+      const ext2=m.image.startsWith('data:image/jpeg')?'jpeg':'png';
+      const pId=wb.addImage({base64:m.image.split(',')[1],extension:ext2});
+      ws.addImage(pId,{tl:{nativeCol:3,nativeColOff:Math.round(Math.max(6,(342-dw)/2)*9525),nativeRow:0,nativeRowOff:Math.round(40*9525)},ext:{width:dw,height:dh}});
+    }
+  }
+  const buf=await wb.xlsx.writeBuffer();
+  return new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+}
+async function downloadMark(m){
+  downloadBlob(await labelToXlsxBlob(m),m.po+'_'+m.sku+'.xlsx'); /* 单个下载文件名：PO单号_SKU.xlsx */
+  toast('箱唛 '+m.po+' / '+m.sku+' 已下载（Excel）');
+}
+/* ==================== 初始化 ==================== */
+renderSysList();
+renderEntry();
+renderAll();
+</script>
+</body>
+</html>

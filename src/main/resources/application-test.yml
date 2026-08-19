@@ -1,0 +1,25 @@
+spring:
+  config:
+    import:
+      - optional:nacos:${spring.application.name}.yaml?refreshEnabled=true
+      - optional:nacos:${spring.application.name}-database.yaml?refreshEnabled=true
+
+  cloud:
+    nacos:
+      server-addr: 52.91.65.203:8848
+      username: dev
+      password: NpCK0qVDMem1
+      discovery:
+        namespace: test
+        group: DEFAULT_GROUP
+      config:
+        namespace: test
+        group: DEFAULT_GROUP
+        file-extension: yaml
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+  packages-to-scan: com.scione.scm.bill.interfaces

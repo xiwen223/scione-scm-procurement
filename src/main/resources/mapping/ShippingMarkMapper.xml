@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ShippingMarkMapper">
+
+    <sql id="columns">id, bill_no, bill_name, status, created_by, creator, created_at, updated_by, updator, updated_at, processed_at</sql>
+
+    <sql id="filters">
+        <if test="billNo != null and billNo != ''">
+            AND bill_no = #{billNo}
+        </if>
+        <if test="billName != null and billName != ''">
+            AND bill_name LIKE CONCAT('%', #{billName}, '%')
+        </if>
+        <if test="statuses != null and !statuses.isEmpty()">
+            AND status IN
+            <foreach collection="statuses" item="status" open="(" separator="," close=")">#{status}</foreach>
+        </if>
+    </sql>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO shipping_mark_import
+            (bill_no, bill_name, status, created_by, creator, created_at, updated_by, updator, updated_at, processed_at)
+        VALUES
+            (#{billNo}, #{billName}, #{status}, #{createdBy}, #{creator}, #{createdAt},
+             #{updatedBy}, #{updator}, #{updatedAt}, #{processedAt})
+    </insert>
+
+    <update id="update">
+        UPDATE shipping_mark_import
+        SET status = #{status}, updated_by = #{updatedBy}, updator = #{updator},
+            updated_at = #{updatedAt}, processed_at = #{processedAt}
+        WHERE id = #{id}
+    </update>
+
+    <select id="findById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ShippingMarkPO">
+        SELECT <include refid="columns"/> FROM shipping_mark_import WHERE id = #{id}
+    </select>
+
+    <select id="findByBillNo" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ShippingMarkPO">
+        SELECT <include refid="columns"/> FROM shipping_mark_import WHERE bill_no = #{billNo}
+    </select>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(1) FROM shipping_mark_import WHERE 1 = 1 <include refid="filters"/>
+    </select>
+
+    <select id="findPage" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ShippingMarkPO">
+        SELECT <include refid="columns"/> FROM shipping_mark_import WHERE 1 = 1 <include refid="filters"/>
+        ORDER BY created_at DESC, id DESC
+        LIMIT #{pageSize} OFFSET #{offset}
+    </select>
+
+    <select id="findAll" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ShippingMarkPO">
+        SELECT <include refid="columns"/> FROM shipping_mark_import ORDER BY created_at DESC, id DESC
+    </select>
+</mapper>

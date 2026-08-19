@@ -1,0 +1,8 @@
+spring:
+  application:
+    name: scione-scm-procurement
+  main:
+    banner-mode: off
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+

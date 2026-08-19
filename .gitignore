@@ -22,3 +22,34 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# Maven build output and temporary files
+target/
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+
+# IDE and editor metadata
+.idea/
+*.iml
+.vscode/
+.kiro/
+
+# Runtime output
+logs/
+
+# Local configuration and secrets
+application-local.yml
+application-*.local.yml
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
