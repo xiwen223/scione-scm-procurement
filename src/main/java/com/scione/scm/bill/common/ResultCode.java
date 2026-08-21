@@ -22,7 +22,7 @@ public enum ResultCode {
     SHIPPING_MARK_NOT_FOUND(1010002, "单据不存在"),
     IMPORT_FILE_UNSUPPORTED(1010003, "仅支持 .xlsx / .xls 格式的 Excel 文件"),
     IMPORT_FILE_INVALID(1010004, "Excel 模板不正确或未包含有效数据"),
-    IMPORT_FILE_TOO_MANY_ROWS(1010005, "Excel 数据行不能超过 50 条"),
+    IMPORT_FILE_TOO_MANY_ROWS(1010005, "Excel 数据行超过允许数量"),
     IMPORT_FILE_TOO_LARGE(1010009, "上传文件不能超过允许大小"),
     SHIPPING_MARK_DETAIL_NOT_FOUND(1010006, "箱唛明细不存在"),
     SHIPPING_MARK_NOT_READY(1010007, "箱唛尚未生成完成，暂不可操作"),

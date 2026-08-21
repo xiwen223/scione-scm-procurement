@@ -6,3 +6,9 @@ spring:
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
 
+shipping-mark:
+  max-data-rows: 50
+  max-wps-zip-entries: 200
+  max-wps-zip-entry-bytes: 5MB
+  max-wps-zip-total-bytes: 30MB
+

@@ -9,7 +9,9 @@ import org.apache.poi.hssf.usermodel.HSSFShape;
 import org.apache.poi.hssf.usermodel.HSSFSheet;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.util.unit.DataSize;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -35,12 +37,20 @@ public class ShippingMarkExcelParser implements ShippingMarkImportParser {
 
     private static final String PRODUCT_INFO_SHEET = "产品信息";
     private static final List<String> REQUIRED_HEADERS = List.of("采购单号", "SKU", "品名", "图片");
-    private static final int MAX_DATA_ROWS = 50;
-    private static final int MAX_WPS_ZIP_ENTRIES = 200;
-    private static final long MAX_WPS_ZIP_ENTRY_BYTES = 5L * 1024 * 1024;
-    private static final long MAX_WPS_ZIP_TOTAL_BYTES = 30L * 1024 * 1024;
     private static final Pattern DISP_IMG_PATTERN = Pattern.compile("DISPIMG\\(\\\"([^\\\"]+)\\\"", Pattern.CASE_INSENSITIVE);
     private final DataFormatter dataFormatter = new DataFormatter();
+
+    @Value("${shipping-mark.max-data-rows:50}")
+    private int maxDataRows = 50;
+
+    @Value("${shipping-mark.max-wps-zip-entries:200}")
+    private int maxWpsZipEntries = 200;
+
+    @Value("${shipping-mark.max-wps-zip-entry-bytes:5MB}")
+    private DataSize maxWpsZipEntryBytes = DataSize.ofMegabytes(5);
+
+    @Value("${shipping-mark.max-wps-zip-total-bytes:30MB}")
+    private DataSize maxWpsZipTotalBytes = DataSize.ofMegabytes(30);
 
     @Override
     public ParsedImport parse(ImportDocument source) {
@@ -78,7 +88,7 @@ public class ShippingMarkExcelParser implements ShippingMarkImportParser {
                 if (isEmptyProductRow(purchaseOrderNo, skuCode, skuName)) {
                     continue;
                 }
-                if (++dataRowCount > MAX_DATA_ROWS) {
+                if (++dataRowCount > maxDataRows) {
                     throw new BusinessException(ResultCode.IMPORT_FILE_TOO_MANY_ROWS);
                 }
                 String deduplicationKey = rowKey(purchaseOrderNo, skuCode);
@@ -283,7 +293,7 @@ public class ShippingMarkExcelParser implements ShippingMarkImportParser {
         try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(content))) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
-                if (++entryCount > MAX_WPS_ZIP_ENTRIES) {
+                if (++entryCount > maxWpsZipEntries) {
                     throw new IOException("Too many XLSX zip entries");
                 }
                 try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
@@ -293,7 +303,7 @@ public class ShippingMarkExcelParser implements ShippingMarkImportParser {
                     while ((read = zip.read(buffer)) != -1) {
                         entryBytes += read;
                         totalBytes += read;
-                        if (entryBytes > MAX_WPS_ZIP_ENTRY_BYTES || totalBytes > MAX_WPS_ZIP_TOTAL_BYTES) {
+                        if (entryBytes > maxWpsZipEntryBytes.toBytes() || totalBytes > maxWpsZipTotalBytes.toBytes()) {
                             throw new IOException("XLSX uncompressed content is too large");
                         }
                         output.write(buffer, 0, read);
