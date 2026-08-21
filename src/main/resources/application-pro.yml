@@ -7,8 +7,8 @@ spring:
   cloud:
     nacos:
       server-addr: 35.153.102.164:8848
-      username: nacos
-      password: 7fu9FUTpX2Rk
+      username: nacos-prod
+      password: nD3ZNaWvJT08
       discovery:
         namespace: prod
         group: DEFAULT_GROUP
