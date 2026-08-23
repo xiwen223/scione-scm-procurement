@@ -9,19 +9,25 @@ import com.scione.scm.bill.domain.shippingmark.ShippingMarkDetail;
 import com.scione.scm.bill.domain.shippingmark.ShippingMarkRepository;
 import com.scione.scm.bill.domain.shippingmark.enums.DetailStatus;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 /**
  * 箱唛预览及单个、批量下载用例。
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ShippingMarkDownloadAppService {
@@ -58,26 +64,79 @@ public class ShippingMarkDownloadAppService {
     }
 
     public byte[] downloadBatch(List<Long> detailIds) {
-        try (ByteArrayOutputStream output = new ByteArrayOutputStream(); ZipOutputStream zip = new ZipOutputStream(output)) {
-            Set<String> names = new HashSet<>();
-            long totalBytes = 0;
-            for (Long detailId : detailIds.stream().distinct().toList()) {
-                ShippingMarkDetail detail = requireGeneratedDetail(detailId);
-                byte[] labelContent = fileStore.read(detail.getLabelFile());
-                totalBytes += labelContent.length;
-                if (totalBytes > MAX_BATCH_BYTES) {
-                    throw new BusinessException(ResultCode.SHIPPING_MARK_BATCH_TOO_LARGE);
-                }
-                String entryName = uniqueName(safeName(detail.getPurchaseOrderNo()) + "_" + safeName(detail.getSkuCode()) + ".xlsx", names);
-                zip.putNextEntry(new ZipEntry(entryName));
-                zip.write(labelContent);
-                zip.closeEntry();
+        long requestStartedAt = System.nanoTime();
+        int requestedCount = detailIds.size();
+        log.info("Shipping mark batch download started: requestedCount={}", requestedCount);
+        try {
+            long deduplicateStartedAt = System.nanoTime();
+            List<Long> uniqueDetailIds = detailIds.stream().distinct().toList();
+            log.info("Shipping mark batch download deduplicated: requestedCount={}, uniqueCount={}, elapsedMs={}",
+                    requestedCount, uniqueDetailIds.size(), elapsedMillis(deduplicateStartedAt));
+            if (uniqueDetailIds.isEmpty()) {
+                throw new BusinessException(ResultCode.SHIPPING_MARK_NOT_READY);
             }
-            zip.finish();
-            return output.toByteArray();
+
+            long queryStartedAt = System.nanoTime();
+            List<ShippingMarkDetail> queriedDetails = repository.findDetailsByIds(uniqueDetailIds);
+            log.info("Shipping mark batch download metadata queried: uniqueCount={}, queriedCount={}, elapsedMs={}",
+                    uniqueDetailIds.size(), queriedDetails.size(), elapsedMillis(queryStartedAt));
+
+            long filterStartedAt = System.nanoTime();
+            List<ShippingMarkDetail> details = selectGeneratedDetails(uniqueDetailIds, queriedDetails);
+            int skippedCount = uniqueDetailIds.size() - details.size();
+            log.info("Shipping mark batch download generated details selected: selectedCount={}, skippedCount={}, elapsedMs={}",
+                    details.size(), skippedCount, elapsedMillis(filterStartedAt));
+            if (details.isEmpty()) {
+                throw new BusinessException(ResultCode.SHIPPING_MARK_NOT_READY);
+            }
+
+            try (ByteArrayOutputStream output = new ByteArrayOutputStream(); ZipOutputStream zip = new ZipOutputStream(output)) {
+                log.info("Shipping mark batch download ZIP creation started: entryCount={}", details.size());
+                Set<String> names = new HashSet<>();
+                long totalBytes = 0;
+                int entryIndex = 0;
+                for (ShippingMarkDetail detail : details) {
+                    entryIndex++;
+                    long fileReadStartedAt = System.nanoTime();
+                    byte[] labelContent = fileStore.read(detail.getLabelFile());
+                    long fileReadElapsedMs = elapsedMillis(fileReadStartedAt);
+                    totalBytes += labelContent.length;
+                    log.info("Shipping mark batch download label read: entryIndex={}, entryCount={}, detailId={}, sourceBytes={}, cumulativeSourceBytes={}, elapsedMs={}",
+                            entryIndex, details.size(), detail.getId(), labelContent.length, totalBytes, fileReadElapsedMs);
+                    if (totalBytes > MAX_BATCH_BYTES) {
+                        log.warn("Shipping mark batch download source size limit exceeded: detailId={}, cumulativeSourceBytes={}, maxSourceBytes={}",
+                                detail.getId(), totalBytes, MAX_BATCH_BYTES);
+                        throw new BusinessException(ResultCode.SHIPPING_MARK_BATCH_TOO_LARGE);
+                    }
+
+                    String entryName = uniqueName(safeName(detail.getPurchaseOrderNo()) + "_" + safeName(detail.getSkuCode()) + ".xlsx", names);
+                    long zipWriteStartedAt = System.nanoTime();
+                    zip.putNextEntry(new ZipEntry(entryName));
+                    zip.write(labelContent);
+                    zip.closeEntry();
+                    log.info("Shipping mark batch download ZIP entry written: entryIndex={}, entryCount={}, detailId={}, entryName={}, sourceBytes={}, zipBytesSoFar={}, elapsedMs={}",
+                            entryIndex, details.size(), detail.getId(), entryName, labelContent.length, output.size(),
+                            elapsedMillis(zipWriteStartedAt));
+                }
+
+                long zipFinishStartedAt = System.nanoTime();
+                zip.finish();
+                long zipFinishElapsedMs = elapsedMillis(zipFinishStartedAt);
+                long responseBuildStartedAt = System.nanoTime();
+                byte[] content = output.toByteArray();
+                long responseBuildElapsedMs = elapsedMillis(responseBuildStartedAt);
+                log.info("Shipping mark batch download completed: requestedCount={}, selectedCount={}, sourceBytes={}, zipBytes={}, zipFinishElapsedMs={}, responseBuildElapsedMs={}, elapsedMs={}",
+                        requestedCount, details.size(), totalBytes, content.length, zipFinishElapsedMs, responseBuildElapsedMs,
+                        elapsedMillis(requestStartedAt));
+                return content;
+            }
         } catch (BusinessException exception) {
+            log.warn("Shipping mark batch download failed: requestedCount={}, elapsedMs={}, reason={}",
+                    requestedCount, elapsedMillis(requestStartedAt), exception.getMessage());
             throw exception;
         } catch (IOException exception) {
+            log.warn("Shipping mark batch download failed because a label file could not be read: requestedCount={}, elapsedMs={}",
+                    requestedCount, elapsedMillis(requestStartedAt), exception);
             throw new BusinessException(ResultCode.SHIPPING_MARK_FILE_NOT_FOUND);
         }
     }
@@ -89,6 +148,22 @@ public class ShippingMarkDownloadAppService {
             throw new BusinessException(ResultCode.SHIPPING_MARK_NOT_READY);
         }
         return detail;
+    }
+
+    private List<ShippingMarkDetail> selectGeneratedDetails(
+            List<Long> detailIds, List<ShippingMarkDetail> queriedDetails) {
+        Map<Long, ShippingMarkDetail> detailsById = queriedDetails.stream()
+                .collect(Collectors.toMap(ShippingMarkDetail::getId, Function.identity()));
+        return detailIds.stream()
+                .map(detailsById::get)
+                .filter(detail -> detail != null
+                        && detail.getStatus() == DetailStatus.SUCCESS
+                        && detail.getLabelFile() != null)
+                .toList();
+    }
+
+    private long elapsedMillis(long startedAt) {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
     }
 
     private String safeName(String value) {

@@ -69,6 +69,14 @@ public class MybatisShippingMarkRepository implements ShippingMarkRepository {
     }
 
     @Override
+    public List<ShippingMarkDetail> findDetailsByIds(List<Long> detailIds) {
+        if (detailIds.isEmpty()) {
+            return List.of();
+        }
+        return shippingMarkDetailMapper.findByIds(detailIds).stream().map(this::toDomain).toList();
+    }
+
+    @Override
     public ShippingMarkPage findPage(ShippingMarkQuery query) {
         List<Integer> statuses = query.statuses().stream().map(MarkStatus::getCode).toList();
         long total = shippingMarkMapper.count(query.billNo(), query.billName(), statuses);

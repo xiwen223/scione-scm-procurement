@@ -17,5 +17,7 @@ public interface ShippingMarkDetailMapper {
 
     Optional<ShippingMarkDetailPO> findById(@Param("id") Long id);
 
+    List<ShippingMarkDetailPO> findByIds(@Param("ids") List<Long> ids);
+
     List<ShippingMarkDetailPO> findByBillNo(@Param("billNo") String billNo);
 }

@@ -20,6 +20,8 @@ public interface ShippingMarkRepository {
 
     Optional<ShippingMarkDetail> findDetailById(Long detailId);
 
+    List<ShippingMarkDetail> findDetailsByIds(List<Long> detailIds);
+
     ShippingMarkPage findPage(ShippingMarkQuery query);
 
     List<ShippingMark> findAll();
