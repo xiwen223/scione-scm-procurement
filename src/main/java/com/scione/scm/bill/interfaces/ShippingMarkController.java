@@ -96,9 +96,26 @@ public class ShippingMarkController {
                 MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
     }
 
-    @PostMapping("/download")
-    public ResponseEntity<byte[]> downloadBatch(@Valid @org.springframework.web.bind.annotation.RequestBody BatchDownloadCmd command) {
-        return attachment(downloadAppService.downloadBatch(command.markIds()), "shipping-marks.zip", MediaType.APPLICATION_OCTET_STREAM);
+    @PostMapping(value = "/download", produces = "application/zip")
+    public void downloadBatch(
+            @Valid @org.springframework.web.bind.annotation.RequestBody BatchDownloadCmd command,
+            jakarta.servlet.http.HttpServletResponse response) throws IOException {
+        response.setContentType("application/zip");
+        response.setHeader(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                .filename("shipping-marks.zip", StandardCharsets.UTF_8).build().toString());
+        try {
+            downloadAppService.writeBatch(command.markIds(), response.getOutputStream());
+        } catch (BusinessException exception) {
+            if (abortStreamingFailure(response)) {
+                return;
+            }
+            throw exception;
+        } catch (IOException exception) {
+            if (abortStreamingFailure(response)) {
+                return;
+            }
+            throw exception;
+        }
     }
 
     @GetMapping("/files/{billNo}/{category}/{fileName}")
@@ -107,6 +124,14 @@ public class ShippingMarkController {
         byte[] content = fileAppService.load(billNo, category, fileName);
         MediaType contentType = MediaTypeFactory.getMediaType(fileName).orElse(MediaType.APPLICATION_OCTET_STREAM);
         return ResponseEntity.ok().contentType(contentType).body(content);
+    }
+
+    private boolean abortStreamingFailure(jakarta.servlet.http.HttpServletResponse response) {
+        if (response.isCommitted()) {
+            return true;
+        }
+        response.reset();
+        return false;
     }
 
     private ImportDocument importDocument(MultipartFile file) {

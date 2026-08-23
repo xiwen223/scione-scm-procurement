@@ -13,6 +13,7 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
@@ -77,6 +78,12 @@ class ShippingMarkLabelServiceTest {
                     throw new IOException("missing");
                 }
                 return image;
+            }
+            @Override public InputStream open(String storedFileReference) throws IOException {
+                return new ByteArrayInputStream(read(storedFileReference));
+            }
+            @Override public long size(String storedFileReference) throws IOException {
+                return read(storedFileReference).length;
             }
             @Override public byte[] load(String billNo, String category, String fileName) { return null; }
         };
