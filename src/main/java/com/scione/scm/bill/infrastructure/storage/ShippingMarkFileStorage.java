@@ -5,7 +5,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -53,16 +52,6 @@ public class ShippingMarkFileStorage implements ShippingMarkFileStore {
     public byte[] read(String publicUrl) throws IOException {
         Path path = resolvePublicUrl(publicUrl);
         return Files.readAllBytes(path);
-    }
-
-    @Override
-    public InputStream open(String publicUrl) throws IOException {
-        return Files.newInputStream(resolvePublicUrl(publicUrl));
-    }
-
-    @Override
-    public long size(String publicUrl) throws IOException {
-        return Files.size(resolvePublicUrl(publicUrl));
     }
 
     private String store(String billNo, String category, byte[] content, String extension) throws IOException {
