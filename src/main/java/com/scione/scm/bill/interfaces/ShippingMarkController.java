@@ -69,16 +69,22 @@ public class ShippingMarkController {
     public ApiResponse<PageResult<ShippingMarkListItemDTO>> list(
             @RequestParam(value = "bill_no", required = false) String billNo,
             @RequestParam(value = "bill_name", required = false) String billName,
+            @RequestParam(value = "creator", required = false) String creator,
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于 0") int pageNum,
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页条数必须大于 0")
             @Max(value = 100, message = "每页条数不能超过 100") int pageSize) {
-        return ApiResponse.success(shippingMarkAppService.findPage(billNo, billName, status, pageNum, pageSize));
+        return ApiResponse.success(shippingMarkAppService.findPage(billNo, billName, creator, status, pageNum, pageSize));
     }
 
     @GetMapping("/{markId}")
     public ApiResponse<ShippingMarkDTO> detail(@PathVariable Long markId) {
         return ApiResponse.success(shippingMarkAppService.getById(markId));
+    }
+
+    @GetMapping("/creators")
+    public ApiResponse<java.util.List<String>> creators() {
+        return ApiResponse.success(shippingMarkAppService.listCreators());
     }
 
     /**

@@ -49,9 +49,9 @@ public class ShippingMarkAppService {
     }
 
     public PageResult<ShippingMarkListItemDTO> findPage(
-            String billNo, String billName, String status, int pageNum, int pageSize) {
+            String billNo, String billName, String creator, String status, int pageNum, int pageSize) {
         ShippingMarkQuery query = new ShippingMarkQuery(
-                billNo, billName, parseStatuses(status), pageNum, pageSize);
+                billNo, billName, creator, parseStatuses(status), pageNum, pageSize);
         ShippingMarkPage page = repository.findPage(query);
         return PageResult.of(pageNum, pageSize, page.total(),
                 page.records().stream().map(ShippingMarkListItemDTO::from).toList());
@@ -59,6 +59,10 @@ public class ShippingMarkAppService {
 
     public List<ShippingMarkDTO> list() {
         return repository.findAll().stream().map(ShippingMarkDTO::from).toList();
+    }
+
+    public List<String> listCreators() {
+        return repository.findDistinctCreators();
     }
 
     private List<MarkStatus> parseStatuses(String status) {

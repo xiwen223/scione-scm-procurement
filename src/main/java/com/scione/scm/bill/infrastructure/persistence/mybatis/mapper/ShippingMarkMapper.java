@@ -20,11 +20,13 @@ public interface ShippingMarkMapper {
     Optional<ShippingMarkPO> findByBillNo(@Param("billNo") String billNo);
 
     long count(@Param("billNo") String billNo, @Param("billName") String billName,
-               @Param("statuses") List<Integer> statuses);
+               @Param("creator") String creator, @Param("statuses") List<Integer> statuses);
 
     List<ShippingMarkPO> findPage(@Param("billNo") String billNo, @Param("billName") String billName,
-                                  @Param("statuses") List<Integer> statuses,
+                                  @Param("creator") String creator, @Param("statuses") List<Integer> statuses,
                                   @Param("offset") int offset, @Param("pageSize") int pageSize);
 
     List<ShippingMarkPO> findAll();
+
+    List<String> findDistinctCreators();
 }

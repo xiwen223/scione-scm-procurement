@@ -11,6 +11,9 @@
         <if test="billName != null and billName != ''">
             AND bill_name LIKE CONCAT('%', #{billName}, '%')
         </if>
+        <if test="creator != null and creator != ''">
+            AND creator LIKE CONCAT('%', #{creator}, '%')
+        </if>
         <if test="statuses != null and !statuses.isEmpty()">
             AND status IN
             <foreach collection="statuses" item="status" open="(" separator="," close=")">#{status}</foreach>
@@ -52,5 +55,11 @@
 
     <select id="findAll" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ShippingMarkPO">
         SELECT <include refid="columns"/> FROM shipping_mark_import ORDER BY created_at DESC, id DESC
+    </select>
+
+    <select id="findDistinctCreators" resultType="string">
+        SELECT DISTINCT creator FROM shipping_mark_import
+        WHERE creator IS NOT NULL AND creator != ''
+        ORDER BY creator
     </select>
 </mapper>

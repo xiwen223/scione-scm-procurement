@@ -10,6 +10,7 @@ import java.util.List;
 public record ShippingMarkQuery(
         String billNo,
         String billName,
+        String creator,
         List<MarkStatus> statuses,
         int pageNum,
         int pageSize) {

@@ -25,4 +25,6 @@ public interface ShippingMarkRepository {
     ShippingMarkPage findPage(ShippingMarkQuery query);
 
     List<ShippingMark> findAll();
+
+    List<String> findDistinctCreators();
 }

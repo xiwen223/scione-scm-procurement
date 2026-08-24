@@ -79,9 +79,9 @@ public class MybatisShippingMarkRepository implements ShippingMarkRepository {
     @Override
     public ShippingMarkPage findPage(ShippingMarkQuery query) {
         List<Integer> statuses = query.statuses().stream().map(MarkStatus::getCode).toList();
-        long total = shippingMarkMapper.count(query.billNo(), query.billName(), statuses);
+        long total = shippingMarkMapper.count(query.billNo(), query.billName(), query.creator(), statuses);
         List<ShippingMark> records = shippingMarkMapper.findPage(
-                        query.billNo(), query.billName(), statuses, query.offset(), query.pageSize())
+                        query.billNo(), query.billName(), query.creator(), statuses, query.offset(), query.pageSize())
                 .stream()
                 .map(mark -> toDomain(mark, shippingMarkDetailMapper.findByBillNo(mark.getBillNo())))
                 .toList();
@@ -93,6 +93,11 @@ public class MybatisShippingMarkRepository implements ShippingMarkRepository {
         return shippingMarkMapper.findAll().stream()
                 .map(mark -> toDomain(mark, shippingMarkDetailMapper.findByBillNo(mark.getBillNo())))
                 .toList();
+    }
+
+    @Override
+    public List<String> findDistinctCreators() {
+        return shippingMarkMapper.findDistinctCreators();
     }
 
     private ShippingMarkPO toPO(ShippingMark mark) {
