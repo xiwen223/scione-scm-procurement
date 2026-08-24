@@ -82,7 +82,8 @@ public class ShippingMarkExcelParser implements ShippingMarkImportParser {
                 if (row == null) {
                     continue;
                 }
-                String purchaseOrderNo = cellText(row, header.purchaseOrderColumn());
+                String purchaseOrderNo = purchaseOrderNoText(
+                        sheet, row, rowIndex, header.purchaseOrderColumn());
                 String skuCode = cellText(row, header.skuColumn());
                 String skuName = cellText(row, header.skuNameColumn());
                 if (isEmptyProductRow(purchaseOrderNo, skuCode, skuName)) {
@@ -344,7 +345,27 @@ public class ShippingMarkExcelParser implements ShippingMarkImportParser {
         return Path.of(base).resolve(target).normalize().toString().replace('\\', '/');
     }
 
+    private String purchaseOrderNoText(Sheet sheet, Row row, int rowIndex, int column) {
+        String value = cellText(row, column);
+        if (!value.isBlank()) {
+            return value;
+        }
+        for (int regionIndex = 0; regionIndex < sheet.getNumMergedRegions(); regionIndex++) {
+            org.apache.poi.ss.util.CellRangeAddress mergedRegion = sheet.getMergedRegion(regionIndex);
+            if (mergedRegion.isInRange(rowIndex, column)) {
+                if (mergedRegion.getFirstColumn() != column || mergedRegion.getLastColumn() != column) {
+                    throw excelValidationException("第" + (rowIndex + 1) + "行采购单号不支持跨列合并");
+                }
+                return cellText(sheet.getRow(mergedRegion.getFirstRow()), column);
+            }
+        }
+        return value;
+    }
+
     private String cellText(Row row, int column) {
+        if (row == null) {
+            return "";
+        }
         Cell cell = row.getCell(column);
         return cell == null ? "" : dataFormatter.formatCellValue(cell).trim();
     }
