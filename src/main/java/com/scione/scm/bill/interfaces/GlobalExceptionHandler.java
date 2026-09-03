@@ -27,7 +27,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiResponse<Void>> business(BusinessException exception) {
-        return response(exception.getResultCode());
+        return response(exception.getResultCode(), exception.getMessage());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -84,8 +84,7 @@ public class GlobalExceptionHandler {
         String message = detail == null || detail.isBlank()
                 ? ResultCode.PARAM_ERROR.getMessage()
                 : ResultCode.PARAM_ERROR.getMessage() + "：" + detail;
-        return ResponseEntity.status(ResultCodeHttpStatusMapper.statusOf(ResultCode.PARAM_ERROR))
-                .body(ApiResponse.fail(ResultCode.PARAM_ERROR.getCode(), message));
+        return response(ResultCode.PARAM_ERROR, message);
     }
 
     private String bindingErrors(BindingResult bindingResult) {
@@ -98,7 +97,11 @@ public class GlobalExceptionHandler {
     }
 
     private ResponseEntity<ApiResponse<Void>> response(ResultCode resultCode) {
+        return response(resultCode, resultCode.getMessage());
+    }
+
+    private ResponseEntity<ApiResponse<Void>> response(ResultCode resultCode, String message) {
         return ResponseEntity.status(ResultCodeHttpStatusMapper.statusOf(resultCode))
-                .body(ApiResponse.fail(resultCode.getCode(), resultCode.getMessage()));
+                .body(ApiResponse.fail(resultCode.getCode(), message));
     }
 }

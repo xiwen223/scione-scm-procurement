@@ -18,6 +18,8 @@ public enum ResultCode {
     RESOURCE_NOT_FOUND(1099005, "资源不存在"),
     DATABASE_DUPLICATE_KEY(1099101, "数据已存在"),
     DATABASE_ERROR(1099102, "数据库异常"),
+    PRODUCT_NOT_FOUND(1011001, "商品不存在"),
+    LINGXING_API_ERROR(1011002, "领星商品服务调用失败"),
     SHIPPING_MARK_ALREADY_EXISTS(1010001, "单据编号已存在"),
     SHIPPING_MARK_NOT_FOUND(1010002, "单据不存在"),
     IMPORT_FILE_UNSUPPORTED(1010003, "仅支持 .xlsx / .xls 格式的 Excel 文件"),

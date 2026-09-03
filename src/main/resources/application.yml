@@ -12,3 +12,14 @@ shipping-mark:
   max-wps-zip-entry-bytes: 5MB
   max-wps-zip-total-bytes: 30MB
 
+delivery-alert:
+  start-date: ${DELIVERY_ALERT_START_DATE:2026-08-01}
+
+lingxing:
+  open-api:
+    endpoint: ${LINGXING_OPEN_API_ENDPOINT:https://openapi.lingxing.com}
+    app-id: ${LINGXING_APP_ID:}
+    app-secret: ${LINGXING_APP_SECRET:}
+    connect-timeout: ${LINGXING_CONNECT_TIMEOUT:10s}
+    read-timeout: ${LINGXING_READ_TIMEOUT:30s}
+    token-ttl: ${LINGXING_TOKEN_TTL:90m}
