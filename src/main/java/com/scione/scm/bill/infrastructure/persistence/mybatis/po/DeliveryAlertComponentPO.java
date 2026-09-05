@@ -14,6 +14,7 @@ public class DeliveryAlertComponentPO {
     private String productName;
     private String orderSn;
     private String planSn;
+    private String purchaseMode;
     private String supplierName;
     private String warehouseName;
     private String optRealname;

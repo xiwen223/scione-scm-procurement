@@ -14,6 +14,7 @@ public class DeliveryAlertComponentDTO {
     private String productName;
     private String orderSn;
     private String planSn;
+    private String purchaseMode;
     private String supplier;
     private String warehouse;
     private String optName;
@@ -33,6 +34,7 @@ public class DeliveryAlertComponentDTO {
         dto.setProductName(c.productName());
         dto.setOrderSn(c.orderSn());
         dto.setPlanSn(c.planSn());
+        dto.setPurchaseMode(c.purchaseMode());
         dto.setSupplier(c.supplier());
         dto.setWarehouse(c.warehouse());
         dto.setOptName(c.optName());

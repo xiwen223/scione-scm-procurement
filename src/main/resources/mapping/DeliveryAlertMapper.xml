@@ -2,8 +2,16 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.DeliveryAlertMapper">
 
-    <!-- 内层：按采购单明细展开，派生分组键 ptype/group_key 与风险天数 risk -->
-    <sql id="innerSelect">
+    <!-- 仅套装单品采按采购计划号分组，其他采购明细按采购单号分组。 -->
+    <sql id="groupKeyExpression">
+        CASE
+            WHEN j.plan_sn IS NOT NULL AND pp.is_combo = 1 AND pp.sku &lt;&gt; poi.sku THEN j.plan_sn
+            ELSE poi.order_sn
+        END
+    </sql>
+
+    <!-- 完整有效行：用于主事项命中后恢复整个分组的采购单、数量、供应商和风险上下文。 -->
+    <sql id="baseRowsSelect">
         SELECT
             poi.order_sn,
             CASE
@@ -29,24 +37,34 @@
                 ELSE NULL
             END AS purchase_mode,
             CASE
-                WHEN j.plan_sn IS NOT NULL AND pp.is_combo = 0 THEN '单品'
-                WHEN j.plan_sn IS NOT NULL AND pp.is_combo = 1 THEN '套装'
+                WHEN j.plan_sn IS NOT NULL
+                  AND pp.is_combo = 1
+                  AND pp.sku &lt;&gt; poi.sku
+                THEN '套装'
+                WHEN j.plan_sn IS NOT NULL AND pp.is_combo IN (0, 1) THEN '单品'
                 ELSE '合并下单'
             END AS ptype,
+            <include refid="groupKeyExpression"/> AS group_key,
             CASE
-                WHEN j.plan_sn IS NOT NULL AND pp.is_combo = 0 THEN poi.order_sn
-                WHEN j.plan_sn IS NOT NULL AND pp.is_combo = 1 THEN j.plan_sn
-                ELSE poi.order_sn
-            END AS group_key,
-            IF(po.status_text = '已完成', -1, TIMESTAMPDIFF(DAY, po.create_time, NOW())) AS risk
+                WHEN poi.quantity_real IS NOT NULL
+                  AND poi.quantity_entry IS NOT NULL
+                  AND poi.quantity_entry &gt;= poi.quantity_real
+                THEN -1
+                ELSE TIMESTAMPDIFF(DAY, po.create_time, NOW())
+            END AS risk
         FROM lx_purchase_order_item poi
         INNER JOIN lx_purchase_order po ON po.order_sn = poi.order_sn
         LEFT JOIN JSON_TABLE(poi.relation_purchase_plan, '$[*]' COLUMNS (plan_sn VARCHAR(100) PATH '$')) AS j
                    ON j.plan_sn IS NOT NULL AND j.plan_sn &lt;&gt; ''
         LEFT JOIN lx_purchase_plan pp ON pp.plan_sn = j.plan_sn
         WHERE poi.is_delete = 0
-          AND po.create_time &gt;= #{startDate}
           AND po.status NOT IN (-1, 124)
+    </sql>
+
+    <!-- 命中行：起始日期和页面行级筛选只决定哪些 groupKey 进入结果。 -->
+    <sql id="innerSelect">
+        <include refid="baseRowsSelect"/>
+          AND po.create_time &gt;= #{startDate}
         <include refid="innerFilters"/>
     </sql>
 
@@ -75,11 +93,29 @@
         </if>
     </sql>
 
+    <!-- 聚合后无采购计划的采购单分组。 -->
+    <sql id="noPlanOrderCondition">
+        GROUP_CONCAT(DISTINCT ptype) = '合并下单'
+        AND COALESCE(GROUP_CONCAT(DISTINCT plan_sn), '') = ''
+    </sql>
+
+    <!-- 无采购计划且仅一个有效 SKU 的采购单，最终按单品展示。 -->
+    <sql id="noPlanSingleSkuCondition">
+        (<include refid="noPlanOrderCondition"/>)
+        AND COUNT(DISTINCT NULLIF(TRIM(sku), '')) = 1
+    </sql>
+
+    <!-- 直接汇总采购明细数量：除套装单品采外的所有主事项。 -->
+    <sql id="directItemQuantityCondition">
+        GROUP_CONCAT(DISTINCT ptype) &lt;&gt; '套装'
+    </sql>
+
     <!-- 外层：按分组键聚合主记录 -->
     <sql id="groupedSelect">
         SELECT
             group_key,
             CASE
+                WHEN (<include refid="noPlanSingleSkuCondition"/>) THEN '单品'
                 WHEN GROUP_CONCAT(DISTINCT ptype) = '单品'
                   AND (
                       COUNT(DISTINCT NULLIF(TRIM(sku), '')) &gt; 1
@@ -102,13 +138,19 @@
             GROUP_CONCAT(DISTINCT supplier_name) AS suppliers,
             GROUP_CONCAT(DISTINCT ware_house_name) AS warehouses,
             GROUP_CONCAT(DISTINCT status_text) AS status_text,
-            IF(GROUP_CONCAT(DISTINCT ptype) = '单品', SUM(quantity_real), MAX(quantity_plan)) AS qty_plan,
-            IF(GROUP_CONCAT(DISTINCT ptype) = '单品', SUM(quantity_entry),
+            IF((<include refid="directItemQuantityCondition"/>),
+               SUM(quantity_real), MAX(quantity_plan)) AS qty_plan,
+            IF((<include refid="directItemQuantityCondition"/>),
+               SUM(quantity_entry),
                IF(SUM(quantity_real) = SUM(quantity_entry), MAX(quantity_plan), 0)) AS qty_ready,
             MAX(risk) AS risk,
             MIN(create_time) AS created_time
-        FROM ( <include refid="innerSelect"/> ) t
-        GROUP BY group_key
+        FROM ( <include refid="baseRowsSelect"/> ) t
+        INNER JOIN (
+            SELECT DISTINCT group_key AS matched_group_key
+            FROM ( <include refid="innerSelect"/> ) matched_rows
+        ) matched_groups ON matched_groups.matched_group_key = t.group_key
+        GROUP BY t.group_key
     </sql>
 
     <!-- 外层过滤：作用于聚合后的主记录 -->
@@ -211,40 +253,18 @@
         ORDER BY ware_house_name
     </select>
 
-    <!-- 商品明细：PO 分组返回采购单商品；套装分组按采购模式返回父商品或组件。 -->
+    <!-- 商品明细严格按统一分组键归属，避免采购单号与计划号分组重复收录。 -->
     <sql id="componentScope">
-        AND (
-            poi.order_sn = #{groupKey}
-            OR (
-                pp.is_combo = 1
-                AND j.plan_sn = #{groupKey}
-                AND (
-                    poi.sku &lt;&gt; pp.sku
-                    OR (
-                        poi.sku = pp.sku
-                        AND NOT EXISTS (
-                            SELECT 1
-                            FROM lx_purchase_order_item mode_poi
-                            INNER JOIN lx_purchase_order mode_po
-                              ON mode_po.order_sn = mode_poi.order_sn
-                            INNER JOIN JSON_TABLE(
-                                mode_poi.relation_purchase_plan,
-                                '$[*]' COLUMNS (plan_sn VARCHAR(100) PATH '$')
-                            ) AS mode_j
-                              ON mode_j.plan_sn IS NOT NULL
-                             AND mode_j.plan_sn &lt;&gt; ''
-                            INNER JOIN lx_purchase_plan mode_pp
-                              ON mode_pp.plan_sn = mode_j.plan_sn
-                            WHERE mode_poi.is_delete = 0
-                              AND mode_po.status NOT IN (-1, 124)
-                              AND mode_j.plan_sn = #{groupKey}
-                              AND mode_pp.is_combo = 1
-                              AND mode_poi.sku &lt;&gt; mode_pp.sku
-                        )
-                    )
-                )
-            )
-        )
+        AND (<include refid="groupKeyExpression"/>) = #{groupKey}
+    </sql>
+
+    <!-- 明细采购模式按采购明细与其关联计划判定；多关系时组合采优先。 -->
+    <sql id="componentPurchaseModeExpression">
+        CASE
+            WHEN MAX(CASE WHEN pp.is_combo = 1 AND pp.sku = poi.sku THEN 1 ELSE 0 END) = 1 THEN '组合采'
+            WHEN MAX(CASE WHEN pp.is_combo = 1 AND pp.sku &lt;&gt; poi.sku THEN 1 ELSE 0 END) = 1 THEN '单品采'
+            ELSE NULL
+        END
     </sql>
 
     <select id="findComponents" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertComponentPO">
@@ -254,6 +274,7 @@
             MAX(poi.product_name) AS product_name,
             MAX(poi.order_sn) AS order_sn,
             MAX(j.plan_sn) AS plan_sn,
+            <include refid="componentPurchaseModeExpression"/> AS purchase_mode,
             MAX(po.supplier_name) AS supplier_name,
             MAX(po.ware_house_name) AS ware_house_name,
             MAX(po.opt_realname) AS opt_realname,
@@ -265,13 +286,9 @@
             MAX(po.status_text) AS status_text,
             MAX(
                 CASE
-                    WHEN po.status_text = '已完成'
-                      OR (
-                          poi.quantity_real IS NOT NULL
-                          AND poi.quantity_real &gt; 0
-                          AND poi.quantity_entry IS NOT NULL
-                          AND poi.quantity_entry &gt;= poi.quantity_real
-                      )
+                    WHEN poi.quantity_real IS NOT NULL
+                      AND poi.quantity_entry IS NOT NULL
+                      AND poi.quantity_entry &gt;= poi.quantity_real
                     THEN -1
                     ELSE TIMESTAMPDIFF(DAY, po.create_time, NOW())
                 END
@@ -288,16 +305,27 @@
         ORDER BY risk DESC, MIN(po.create_time) ASC, MAX(poi.sku) ASC
     </select>
 
-    <!-- 详情标题：套装取组合计划品名，单品取采购明细品名。 -->
+    <!-- 详情标题与列表商品投影一致，并严格按统一分组键聚合。 -->
     <select id="findDetailMeta" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertDetailPO">
         SELECT
-            CASE
-                WHEN j.plan_sn IS NOT NULL AND pp.is_combo = 1 THEN j.plan_sn
-                ELSE poi.order_sn
-            END AS group_key,
+            <include refid="groupKeyExpression"/> AS group_key,
             COALESCE(
-                MAX(CASE WHEN pp.is_combo = 1 THEN pp.product_name END),
-                GROUP_CONCAT(DISTINCT poi.product_name ORDER BY poi.product_name SEPARATOR '、'),
+                NULLIF(
+                    GROUP_CONCAT(
+                        DISTINCT CASE
+                            WHEN j.plan_sn IS NOT NULL AND pp.is_combo = 1
+                                THEN COALESCE(pp.product_name, poi.product_name)
+                            ELSE poi.product_name
+                        END
+                        ORDER BY CASE
+                            WHEN j.plan_sn IS NOT NULL AND pp.is_combo = 1
+                                THEN COALESCE(pp.product_name, poi.product_name)
+                            ELSE poi.product_name
+                        END
+                        SEPARATOR '、'
+                    ),
+                    ''
+                ),
                 #{groupKey}
             ) AS product_name
         FROM lx_purchase_order_item poi
@@ -307,14 +335,8 @@
         LEFT JOIN lx_purchase_plan pp ON pp.plan_sn = j.plan_sn
         WHERE poi.is_delete = 0
           AND po.status NOT IN (-1, 124)
-          AND (
-              (poi.order_sn = #{groupKey} AND (pp.is_combo IS NULL OR pp.is_combo &lt;&gt; 1))
-              OR (j.plan_sn = #{groupKey} AND pp.is_combo = 1)
-          )
-        GROUP BY CASE
-            WHEN j.plan_sn IS NOT NULL AND pp.is_combo = 1 THEN j.plan_sn
-            ELSE poi.order_sn
-        END
+          AND (<include refid="groupKeyExpression"/>) = #{groupKey}
+        GROUP BY <include refid="groupKeyExpression"/>
     </select>
 
     <!-- 明细必须同时匹配分组键和采购明细 ID，防止跨事项读取。 -->
@@ -325,6 +347,7 @@
             MAX(poi.product_name) AS product_name,
             MAX(poi.order_sn) AS order_sn,
             MAX(j.plan_sn) AS plan_sn,
+            <include refid="componentPurchaseModeExpression"/> AS purchase_mode,
             MAX(po.supplier_name) AS supplier_name,
             MAX(po.ware_house_name) AS ware_house_name,
             MAX(po.opt_realname) AS opt_realname,
@@ -336,13 +359,9 @@
             MAX(po.status_text) AS status_text,
             MAX(
                 CASE
-                    WHEN po.status_text = '已完成'
-                      OR (
-                          poi.quantity_real IS NOT NULL
-                          AND poi.quantity_real &gt; 0
-                          AND poi.quantity_entry IS NOT NULL
-                          AND poi.quantity_entry &gt;= poi.quantity_real
-                      )
+                    WHEN poi.quantity_real IS NOT NULL
+                      AND poi.quantity_entry IS NOT NULL
+                      AND poi.quantity_entry &gt;= poi.quantity_real
                     THEN -1
                     ELSE TIMESTAMPDIFF(DAY, po.create_time, NOW())
                 END
@@ -378,10 +397,7 @@
             LEFT JOIN lx_purchase_plan pp ON pp.plan_sn = j.plan_sn
             WHERE poi.is_delete = 0
               AND po.status NOT IN (-1, 124)
-              AND (
-                  (poi.order_sn = #{groupKey} AND (pp.is_combo IS NULL OR pp.is_combo &lt;&gt; 1))
-                  OR (j.plan_sn = #{groupKey} AND pp.is_combo = 1)
-              )
+              AND (<include refid="groupKeyExpression"/>) = #{groupKey}
         ) grouped_order
           ON bl.business_id = CONCAT('1_', grouped_order.order_sn)
         ORDER BY bl.ol_time ASC, bl.id ASC

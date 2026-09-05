@@ -129,6 +129,7 @@ public class MybatisDeliveryAlertRepository implements DeliveryAlertRepository {
                 po.getProductName(),
                 po.getOrderSn(),
                 po.getPlanSn(),
+                po.getPurchaseMode(),
                 po.getSupplierName(),
                 po.getWarehouseName(),
                 po.getOptRealname(),

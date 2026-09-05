@@ -9,6 +9,7 @@ public record DeliveryAlertComponent(
         String productName,
         String orderSn,
         String planSn,
+        String purchaseMode,
         String supplier,
         String warehouse,
         String optName,
