@@ -711,3 +711,16 @@ CREATE TABLE IF NOT EXISTS `lx_product_combo_relation`
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4 COMMENT ='商品组合关系';
 
+
+CREATE TABLE IF NOT EXISTS `lx_pp_po_sku_ass`
+(
+    `id`          bigint      NOT NULL COMMENT '主键',
+    `plan_sn`     varchar(32) NOT NULL COMMENT '采购计划编号',
+    `order_sn`    varchar(32) NOT NULL COMMENT '采购单号',
+    `sku`         varchar(64) NOT NULL COMMENT '商品编码',
+    `create_time` datetime    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    PRIMARY KEY (`id`),
+    KEY `idx_pp_po_sku` (`plan_sn`,`order_sn`,`sku`) USING BTREE,
+    KEY `uk_order_sn` (`order_sn`) USING BTREE
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4 COMMENT ='采购计划-采购单关系';

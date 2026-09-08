@@ -56,7 +56,7 @@ doc/
 
 1. JDK、Maven 版本需与企业父工程保持兼容。
 2. 能访问或已安装 `scione-parent`、`scione-common` 和 `scione-api` 等企业依赖。
-3. 准备 MySQL 数据库，并执行 [`doc/数据库设计.sql`](doc/数据库设计.sql)。
+3. 准备 MySQL 数据库，并执行 [`docs`](docs/数据库设计.sql)。
 4. 在 Nacos 的目标命名空间中准备数据源等外部配置。仓库内没有本地 datasource 配置；`application-dev.yml`、`application-test.yml` 会导入：
    - `${spring.application.name}.yaml`
    - `${spring.application.name}-database.yaml`
@@ -269,4 +269,4 @@ curl -X POST 'http://localhost:<port>/api/v1/shipping-marks/download' \
 - 当前本地存储实现不提供跨节点共享、对象存储、定时重试或分布式任务锁。多实例部署时应评估共享存储、重复投递和故障恢复策略。
 - 应用启动时仅恢复状态为“处理中”的历史主单；异常退出后的任务恢复依赖该机制。
 - Controller 中未见鉴权注解。接口是否受到保护取决于网关或全局安全配置；生产环境应明确认证、授权和文件访问策略。
-- `doc/箱唛技术方案.md` 中的早期接口描述与实际 Controller 存在演进差异（例如实际存在 `/parse`，而标签预览/下载使用明细 ID）。接入方应以本文和 `ShippingMarkController` 为准。
+- `docs` 中的早期接口描述与实际 Controller 存在演进差异（例如实际存在 `/parse`，而标签预览/下载使用明细 ID）。接入方应以本文和 `ShippingMarkController` 为准。

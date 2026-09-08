@@ -15,6 +15,9 @@ shipping-mark:
 delivery-alert:
   start-date: ${DELIVERY_ALERT_START_DATE:2026-08-01}
 
+purchase-delivery-analysis:
+  start-date: ${PURCHASE_DELIVERY_ANALYSIS_START_DATE:2026-01-01}
+
 lingxing:
   open-api:
     endpoint: ${LINGXING_OPEN_API_ENDPOINT:https://openapi.lingxing.com}
