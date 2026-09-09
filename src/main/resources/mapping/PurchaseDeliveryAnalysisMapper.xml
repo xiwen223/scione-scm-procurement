@@ -170,13 +170,37 @@
               AND po.create_time IS NOT NULL
               AND po.create_time &lt;= #{query.asOf}
         ),
+        po_sent_log_ranked AS (
+            SELECT
+                po.order_sn,
+                bl.id AS sent_log_id,
+                bl.ol_time AS sent_at,
+                bl.realname AS sent_operator,
+                ROW_NUMBER() OVER (
+                    PARTITION BY po.order_sn
+                    ORDER BY bl.ol_time ASC, bl.id ASC
+                ) AS rn
+            FROM valid_po po
+            INNER JOIN lx_business_log bl
+                    ON bl.business_id = CONCAT('1_', po.order_sn)
+            WHERE bl.ol_type_text = '下单'
+              AND bl.ol_time IS NOT NULL
+              AND bl.ol_time &lt;= #{query.asOf}
+        ),
+        po_sent_log AS (
+            SELECT order_sn, sent_log_id, sent_at, sent_operator
+            FROM po_sent_log_ranked
+            WHERE rn = 1
+        ),
         po_item_facts AS (
             SELECT
                 poi.id AS item_id,
                 poi.order_sn,
                 NULLIF(TRIM(poi.sku), '') AS sku,
                 poi.product_name,
-                poi.quantity_real
+                poi.quantity_real,
+                poi.quantity_entry,
+                poi.relation_purchase_plan
             FROM lx_purchase_order_item poi
             INNER JOIN valid_po po ON po.order_sn = poi.order_sn
             WHERE poi.is_delete = 0
@@ -210,18 +234,19 @@
             FROM relation_skus rs
         ),
         receipt_facts AS (
-            SELECT DISTINCT
+            SELECT
                 ro.id AS receipt_id,
                 ro.order_sn AS receipt_sn,
-                poi.order_sn,
+                pif.order_sn,
                 ro.create_time AS created_at,
-                ro.create_realname AS operator_name
+                ro.create_realname AS operator_name,
+                SUM(GREATEST(COALESCE(roi.product_receive_num, 0), 0)) AS receipt_qty
             FROM lx_receipt_order ro
             INNER JOIN lx_receipt_order_item roi ON roi.order_sn = ro.order_sn
-            INNER JOIN lx_purchase_order_item poi ON poi.id = roi.order_item_id AND poi.is_delete = 0
-            INNER JOIN valid_po po ON po.order_sn = poi.order_sn
+            INNER JOIN po_item_facts pif ON pif.item_id = roi.order_item_id
             WHERE ro.create_time IS NOT NULL
               AND ro.create_time &lt;= #{query.asOf}
+            GROUP BY ro.id, ro.order_sn, pif.order_sn, ro.create_time, ro.create_realname
         ),
         receipt_summary AS (
             SELECT
@@ -316,7 +341,9 @@
                 CASE WHEN NULLIF(TRIM(po.alibaba_order_sn), '') IS NOT NULL THEN '1688' ELSE 'NORMAL' END AS source_type,
                 po.create_time AS created_at,
                 po.auditor_time AS approval_at,
-                po.order_time AS sent_at,
+                psl.sent_log_id,
+                psl.sent_at,
+                psl.sent_operator,
                 pi.purchase_qty,
                 COALESCE(rs.receipt_sns, '') AS receipt_sns,
                 COALESCE(rs.receipt_count, 0) AS receipt_count,
@@ -327,10 +354,11 @@
                 pis.completion_inbound_sn,
                 pis.completion_at,
                 CASE
-                    WHEN po.order_time IS NULL THEN NULL
-                    ELSE TIMESTAMPDIFF(HOUR, po.order_time, COALESCE(pis.completion_at, #{query.asOf}))
+                    WHEN psl.sent_at IS NULL THEN NULL
+                    ELSE TIMESTAMPDIFF(HOUR, psl.sent_at, COALESCE(pis.completion_at, #{query.asOf}))
                 END AS delivery_hours
             FROM valid_po po
+            LEFT JOIN po_sent_log psl ON psl.order_sn = po.order_sn
             LEFT JOIN po_items pi ON pi.order_sn = po.order_sn
             LEFT JOIN receipt_summary rs ON rs.order_sn = po.order_sn
             LEFT JOIN po_ib_summary pis ON pis.order_sn = po.order_sn
@@ -349,23 +377,23 @@
                 END AS delivery_status,
                 CASE
                     WHEN pofr.completion_at IS NOT NULL THEN 'COMPLETED'
+                    WHEN pofr.inbound_count &gt; 0 AND pofr.completion_at IS NULL THEN 'IB_CREATE'
+                    WHEN pofr.receipt_count &gt; 0 AND pofr.inbound_count = 0 THEN 'CR_RECEIPT'
                     WHEN pofr.status = 3 THEN 'PO_CREATE'
                     WHEN pofr.status = 121 THEN 'PO_APPROVAL'
-                    WHEN pofr.status = 1 OR pofr.sent_at IS NULL THEN 'SUPPLIER_SENT'
-                    WHEN pofr.settlement_method = 7 AND pofr.receipt_count = 0 THEN 'FINANCE_PAYMENT'
-                    WHEN pofr.receipt_count &gt; 0 AND pofr.inbound_count = 0 THEN 'CR_RECEIPT'
-                    WHEN pofr.inbound_count &gt; 0 THEN 'IB_CREATE'
-                    ELSE 'SUPPLIER_SENT'
+                    WHEN pofr.status = 1 THEN 'SUPPLIER_SENT'
+                    WHEN pofr.settlement_method = 7 THEN 'FINANCE_PAYMENT'
+                    ELSE CAST(NULL AS CHAR)
                 END AS current_node,
                 CASE
                     WHEN pofr.completion_at IS NOT NULL THEN 9
+                    WHEN pofr.inbound_count &gt; 0 AND pofr.completion_at IS NULL THEN 8
+                    WHEN pofr.receipt_count &gt; 0 AND pofr.inbound_count = 0 THEN 7
                     WHEN pofr.status = 3 THEN 3
                     WHEN pofr.status = 121 THEN 4
-                    WHEN pofr.status = 1 OR pofr.sent_at IS NULL THEN 5
-                    WHEN pofr.settlement_method = 7 AND pofr.receipt_count = 0 THEN 6
-                    WHEN pofr.receipt_count &gt; 0 AND pofr.inbound_count = 0 THEN 7
-                    WHEN pofr.inbound_count &gt; 0 THEN 8
-                    ELSE 5
+                    WHEN pofr.status = 1 THEN 5
+                    WHEN pofr.settlement_method = 7 THEN 6
+                    ELSE CAST(NULL AS SIGNED)
                 END AS node_rank
             FROM po_facts_raw pofr
         ),
@@ -397,14 +425,21 @@
             FROM relation_orders rel
             GROUP BY rel.order_sn
         ),
-        plan_po_totals AS (
+        plan_item_totals AS (
             SELECT
-                rel.plan_sn,
-                SUM(COALESCE(pof.purchase_qty, 0)) AS purchase_qty,
-                SUM(COALESCE(pof.valid_inbound_qty, 0)) AS inbound_qty
-            FROM relation_orders rel
-            INNER JOIN po_facts pof ON pof.order_sn = rel.order_sn
-            GROUP BY rel.plan_sn
+                rs.plan_sn,
+                SUM(pif.quantity_real) AS purchase_qty,
+                SUM(pif.quantity_entry) AS inbound_qty
+            FROM relation_skus rs
+            INNER JOIN po_item_facts pif
+                    ON pif.order_sn = rs.order_sn
+                   AND pif.sku &lt;=&gt; rs.sku
+                   AND JSON_CONTAINS(
+                        pif.relation_purchase_plan,
+                        JSON_QUOTE(rs.plan_sn),
+                        '$'
+                   ) = 1
+            GROUP BY rs.plan_sn
         ),
         plan_rollup AS (
             SELECT
@@ -432,6 +467,13 @@
                 TIMESTAMPDIFF(HOUR, pp.create_time, COALESCE(MAX(pof.created_at), #{query.asOf})) AS order_lead_hours,
                 MIN(pof.node_rank) AS earliest_po_node_rank,
                 MAX(pof.delivery_hours) AS max_delivery_hours,
+                MIN(pof.completion_at) AS first_completion_at,
+                SUBSTRING_INDEX(
+                    GROUP_CONCAT(
+                        CASE WHEN pof.completion_at IS NOT NULL THEN pof.delivery_status END
+                        ORDER BY pof.completion_at, pof.order_id SEPARATOR '||'
+                    ), '||', 1
+                ) AS first_completion_delivery_status,
                 SUM(CASE WHEN pof.completion_at IS NOT NULL THEN 1 ELSE 0 END) AS completed_order_count,
                 SUM(CASE WHEN pof.delivery_status = 'PENDING' THEN 1 ELSE 0 END) AS pending_order_count,
                 SUM(CASE WHEN pof.delivery_status = 'IN_TRANSIT_OVERDUE' THEN 1 ELSE 0 END) AS transit_overdue_count,
@@ -442,7 +484,7 @@
             FROM valid_pp pp
             LEFT JOIN relation_orders rel ON rel.plan_sn = pp.plan_sn
             LEFT JOIN po_facts pof ON pof.order_sn = rel.order_sn
-            LEFT JOIN plan_po_totals ppt ON ppt.plan_sn = pp.plan_sn
+            LEFT JOIN plan_item_totals ppt ON ppt.plan_sn = pp.plan_sn
             LEFT JOIN plan_allocation pa ON pa.plan_sn = pp.plan_sn
             GROUP BY pp.plan_sn, pp.product_name, pp.sku, pp.status_text, pp.approval_status,
                      pp.supplier_name, pp.create_time, pp.approval_time, pp.quantity_plan
@@ -464,22 +506,24 @@
                     ELSE 0
                 END AS order_coverage_confirmed,
                 CASE
-                    WHEN pr.related_order_count &gt; 0 AND pr.completed_order_count = pr.related_order_count THEN 'COMPLETED'
+                    WHEN pr.purchase_qty &gt; 0 AND pr.po_inbound_qty &gt;= pr.purchase_qty THEN 'COMPLETED'
                     WHEN pr.status_text = '待审批' THEN 'PP_CREATE'
                     WHEN pr.status_text = '待采购' THEN 'PP_APPROVAL'
+                    WHEN pr.related_order_count = 0 THEN 'PP_APPROVAL'
                     WHEN pr.earliest_po_node_rank = 3 THEN 'PO_CREATE'
                     WHEN pr.earliest_po_node_rank = 4 THEN 'PO_APPROVAL'
                     WHEN pr.earliest_po_node_rank = 5 THEN 'SUPPLIER_SENT'
                     WHEN pr.earliest_po_node_rank = 6 THEN 'FINANCE_PAYMENT'
                     WHEN pr.earliest_po_node_rank = 7 THEN 'CR_RECEIPT'
                     WHEN pr.earliest_po_node_rank = 8 THEN 'IB_CREATE'
-                    ELSE 'SUPPLIER_SENT'
+                    ELSE CAST(NULL AS CHAR)
                 END AS current_node,
                 CASE
                     WHEN pr.related_order_count = 0 THEN 'PENDING'
-                    WHEN pr.completed_order_count = pr.related_order_count AND pr.completed_over_sla_count &gt; 0
+                    WHEN pr.completed_order_count &gt; 0
+                         AND pr.first_completion_delivery_status = 'COMPLETED_OVER_SLA'
                         THEN 'COMPLETED_OVER_SLA'
-                    WHEN pr.completed_order_count = pr.related_order_count THEN 'COMPLETED_WITHIN_SLA'
+                    WHEN pr.completed_order_count &gt; 0 THEN 'COMPLETED_WITHIN_SLA'
                     WHEN pr.completed_over_sla_count &gt; 0 OR pr.transit_overdue_count &gt; 0
                         THEN 'IN_TRANSIT_OVERDUE'
                     WHEN pr.pending_order_count &gt; 0 THEN 'PENDING'
@@ -1054,43 +1098,52 @@
     </select>
 
     <sql id="orderTimelineUnion">
-        SELECT CONCAT('PO_CREATE_', po.id) AS event_id, 'PO' AS source_type, po.order_sn AS source_sn,
-               po.create_time AS event_time, 'PO创建' AS title,
-               COALESCE(po.status_text, '') AS description, po.opt_realname AS operator_name,
+        SELECT CONCAT('PP_APPROVAL_', pp.id) AS event_id, 'PP' AS source_type, pp.plan_sn AS source_sn,
+               pp.approval_time AS event_time, 'PP 最终审批' AS title,
+               CONCAT('PP ', pp.plan_sn, ' 审批通过') AS description, pp.approver AS operator_name,
                CAST(NULL AS SIGNED) AS quantity, CAST(NULL AS SIGNED) AS cumulative_quantity
+        FROM relation_orders rel
+        INNER JOIN valid_pp pp ON pp.plan_sn = rel.plan_sn
+        WHERE rel.order_sn = #{orderSn}
+          AND pp.approval_time IS NOT NULL
+          AND pp.approval_time &lt;= #{query.asOf}
+        UNION ALL
+        SELECT CONCAT('PO_CREATE_', po.id), 'PO', po.order_sn,
+               po.create_time, 'PO 创建', '', po.opt_realname, NULL, NULL
         FROM valid_po po
         WHERE po.order_sn = #{orderSn}
         UNION ALL
-        SELECT CONCAT('PO_APPROVAL_', po.id), 'PO', po.order_sn, po.auditor_time, 'PO审批',
-               COALESCE(po.status_text, ''), po.auditor_realname, NULL, NULL
+        SELECT CONCAT('PO_APPROVAL_', po.id), 'PO', po.order_sn, po.auditor_time, 'PO 审批',
+               'PO 审批通过', po.auditor_realname, NULL, NULL
         FROM valid_po po
         WHERE po.order_sn = #{orderSn} AND po.auditor_time IS NOT NULL
         UNION ALL
-        SELECT CONCAT('PO_SENT_', po.id), 'PO', po.order_sn, po.order_time, '下发供应商',
-               COALESCE(po.supplier_name, ''), po.opt_realname, NULL, NULL
-        FROM valid_po po
-        WHERE po.order_sn = #{orderSn} AND po.order_time IS NOT NULL
+        SELECT CONCAT('PO_SENT_', pof.sent_log_id), 'PO', pof.order_sn, pof.sent_at, '下发供应商',
+               CASE WHEN NULLIF(TRIM(pof.supplier), '') IS NULL
+                    THEN '' ELSE CONCAT('供应商：', pof.supplier) END,
+               COALESCE(pof.sent_operator, pof.buyer), NULL, NULL
+        FROM po_facts pof
+        WHERE pof.order_sn = #{orderSn} AND pof.sent_at IS NOT NULL
         UNION ALL
         SELECT CONCAT('PAY_', rfo.id), 'PAYMENT', rfo.order_sn,
                COALESCE(CAST(rfo.real_pay_time AS DATETIME), rfo.apply_time),
-               CASE WHEN rfo.real_pay_time IS NOT NULL THEN '付款完成' ELSE '请款' END,
-               CONCAT('关联PO: ', rfoi.business_sn), COALESCE(rfo.pay_user, rfo.apply_user), NULL, NULL
+               CASE WHEN rfo.real_pay_time IS NOT NULL THEN '付款' ELSE '请款' END,
+               CASE WHEN rfo.real_pay_time IS NOT NULL THEN '付款完成' ELSE '请款已提交' END,
+               COALESCE(rfo.pay_user, rfo.apply_user), NULL, NULL
         FROM lx_request_funds_order_item rfoi
         INNER JOIN lx_request_funds_order rfo ON rfo.order_sn = rfoi.order_sn
         WHERE rfoi.business_sn = #{orderSn}
           AND rfo.status NOT IN (3, 122, 124)
           AND COALESCE(CAST(rfo.real_pay_time AS DATETIME), rfo.apply_time) &lt;= #{query.asOf}
         UNION ALL
-        SELECT CONCAT('CR_', rf.receipt_id), 'CR', rf.receipt_sn, rf.created_at, 'CR收货',
-               CONCAT('来源PO: ', rf.order_sn), rf.operator_name, NULL, NULL
+        SELECT CONCAT('CR_', rf.receipt_id), 'CR', rf.receipt_sn, rf.created_at, 'CR 收货',
+               '', rf.operator_name, rf.receipt_qty, NULL
         FROM receipt_facts rf
         WHERE rf.order_sn = #{orderSn}
         UNION ALL
-        SELECT CONCAT('IB_', ip.inbound_id), 'IB', ip.inbound_sn, ip.created_at,
+        SELECT CONCAT('IB_', ip.inbound_id), 'IB', ip.inbound_sn, ip.created_at, '有效 IB 创建',
                CASE WHEN pis.completion_inbound_sn = ip.inbound_sn AND pis.completion_at = ip.created_at
-                    THEN 'IB创建（累计达标）' ELSE 'IB创建' END,
-               CASE WHEN pis.completion_inbound_sn = ip.inbound_sn AND pis.completion_at = ip.created_at
-                    THEN '累计达到采购数量，采购流程完成' ELSE '有效入库累计未达标' END,
+                    THEN '累计达到采购数量，采购流程完成' ELSE '' END,
                ip.operator_name, ip.inbound_qty, ip.cumulative_qty
         FROM ib_progress ip
         LEFT JOIN po_ib_summary pis ON pis.order_sn = ip.order_sn
@@ -1129,10 +1182,10 @@
             FROM relation_orders rel INNER JOIN valid_po po ON po.order_sn = rel.order_sn
             WHERE rel.plan_sn = #{planSn} AND po.auditor_time IS NOT NULL
             UNION ALL
-            SELECT CONCAT('PO_SENT_', po.id), 'PO', po.order_sn, po.order_time, '下发供应商',
-                   COALESCE(po.supplier_name, ''), po.opt_realname, NULL, NULL
-            FROM relation_orders rel INNER JOIN valid_po po ON po.order_sn = rel.order_sn
-            WHERE rel.plan_sn = #{planSn} AND po.order_time IS NOT NULL
+            SELECT CONCAT('PO_SENT_', pof.sent_log_id), 'PO', pof.order_sn, pof.sent_at, '下发供应商',
+                   COALESCE(pof.supplier, ''), COALESCE(pof.sent_operator, pof.buyer), NULL, NULL
+            FROM relation_orders rel INNER JOIN po_facts pof ON pof.order_sn = rel.order_sn
+            WHERE rel.plan_sn = #{planSn} AND pof.sent_at IS NOT NULL
             UNION ALL
             SELECT CONCAT('PAY_', rfo.id), 'PAYMENT', rfo.order_sn,
                    COALESCE(CAST(rfo.real_pay_time AS DATETIME), rfo.apply_time),
