@@ -382,7 +382,10 @@
                     WHEN pofr.status = 3 THEN 'PO_CREATE'
                     WHEN pofr.status = 121 THEN 'PO_APPROVAL'
                     WHEN pofr.status = 1 THEN 'SUPPLIER_SENT'
-                    WHEN pofr.settlement_method = 7 THEN 'FINANCE_PAYMENT'
+                    WHEN pofr.sent_at IS NOT NULL
+                         AND pofr.settlement_method = 7
+                         AND pofr.receipt_count = 0
+                        THEN 'FINANCE_PAYMENT'
                     ELSE CAST(NULL AS CHAR)
                 END AS current_node,
                 CASE
@@ -392,7 +395,10 @@
                     WHEN pofr.status = 3 THEN 3
                     WHEN pofr.status = 121 THEN 4
                     WHEN pofr.status = 1 THEN 5
-                    WHEN pofr.settlement_method = 7 THEN 6
+                    WHEN pofr.sent_at IS NOT NULL
+                         AND pofr.settlement_method = 7
+                         AND pofr.receipt_count = 0
+                        THEN 6
                     ELSE CAST(NULL AS SIGNED)
                 END AS node_rank
             FROM po_facts_raw pofr
