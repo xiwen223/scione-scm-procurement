@@ -23,7 +23,7 @@ public class DeliveryAlertComponentDTO {
     private Integer arrived;
     private Integer qualified;
     private Integer returned;
-    private Integer riskDays;
+    private Integer riskHours;
     private String riskLevel;
     private String riskLevelDesc;
 
@@ -43,27 +43,27 @@ public class DeliveryAlertComponentDTO {
         dto.setArrived(c.arrived());
         dto.setQualified(c.qualified());
         dto.setReturned(c.returned());
-        dto.setRiskDays(c.riskDays());
-        dto.setRiskLevel(riskLevel(c.riskDays()));
-        dto.setRiskLevelDesc(riskLevelDesc(c.riskDays()));
+        dto.setRiskHours(c.riskHours());
+        dto.setRiskLevel(riskLevel(c.riskHours()));
+        dto.setRiskLevelDesc(riskLevelDesc(c.riskHours()));
         return dto;
     }
 
-    private static String riskLevel(Integer riskDays) {
-        if (riskDays == null || riskDays == -1) {
+    private static String riskLevel(Integer riskHours) {
+        if (riskHours == null || riskHours == -1) {
             return "done";
         }
-        if (riskDays <= 10) {
+        if (riskHours <= 240) {
             return "normal";
         }
-        if (riskDays <= 15) {
+        if (riskHours <= 360) {
             return "due-soon";
         }
         return "overdue";
     }
 
-    private static String riskLevelDesc(Integer riskDays) {
-        return switch (riskLevel(riskDays)) {
+    private static String riskLevelDesc(Integer riskHours) {
+        return switch (riskLevel(riskHours)) {
             case "done" -> "已完成";
             case "normal" -> "正常";
             case "due-soon" -> "即将超期";

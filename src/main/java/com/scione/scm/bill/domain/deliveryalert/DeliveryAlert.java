@@ -25,6 +25,6 @@ public record DeliveryAlert(
         List<String> statusTexts,
         Integer qtyPlan,
         Integer qtyReady,
-        Integer riskDays,
+        Integer riskHours,
         LocalDateTime createdTime) {
 }

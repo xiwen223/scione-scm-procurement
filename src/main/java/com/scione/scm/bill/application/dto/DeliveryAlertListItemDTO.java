@@ -28,7 +28,7 @@ public class DeliveryAlertListItemDTO {
     private List<String> statusTexts;
     private Integer qtyPlan;
     private Integer qtyReady;
-    private Integer riskDays;
+    private Integer riskHours;
     private String riskLevel;
     private String riskLevelDesc;
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
@@ -51,28 +51,28 @@ public class DeliveryAlertListItemDTO {
         dto.setStatusTexts(alert.statusTexts());
         dto.setQtyPlan(alert.qtyPlan());
         dto.setQtyReady(alert.qtyReady());
-        dto.setRiskDays(alert.riskDays());
-        dto.setRiskLevel(riskLevel(alert.riskDays()));
-        dto.setRiskLevelDesc(riskLevelDesc(alert.riskDays()));
+        dto.setRiskHours(alert.riskHours());
+        dto.setRiskLevel(riskLevel(alert.riskHours()));
+        dto.setRiskLevelDesc(riskLevelDesc(alert.riskHours()));
         dto.setCreatedTime(alert.createdTime());
         return dto;
     }
 
-    private static String riskLevel(Integer riskDays) {
-        if (riskDays == null || riskDays == -1) {
+    private static String riskLevel(Integer riskHours) {
+        if (riskHours == null || riskHours == -1) {
             return "done";
         }
-        if (riskDays <= 10) {
+        if (riskHours <= 240) {
             return "normal";
         }
-        if (riskDays <= 15) {
+        if (riskHours <= 360) {
             return "due-soon";
         }
         return "overdue";
     }
 
-    private static String riskLevelDesc(Integer riskDays) {
-        return switch (riskLevel(riskDays)) {
+    private static String riskLevelDesc(Integer riskHours) {
+        return switch (riskLevel(riskHours)) {
             case "done" -> "已完成";
             case "normal" -> "正常";
             case "due-soon" -> "即将超期";
