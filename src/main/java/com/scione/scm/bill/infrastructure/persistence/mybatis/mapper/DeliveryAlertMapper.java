@@ -8,6 +8,7 @@ import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryBusines
 import org.apache.ibatis.annotations.Param;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -40,6 +41,8 @@ public interface DeliveryAlertMapper {
                                    @Param("supplier") String supplier,
                                    @Param("buyer") String buyer,
                                    @Param("warehouse") String warehouse);
+
+    LocalDateTime findLastOrderSyncTime();
 
     List<String> findDistinctSuppliers(@Param("startDate") LocalDate startDate);
 

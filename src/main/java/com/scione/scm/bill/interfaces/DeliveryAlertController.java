@@ -7,6 +7,7 @@ import com.scione.scm.bill.application.dto.DeliveryAlertComponentDTO;
 import com.scione.scm.bill.application.dto.DeliveryAlertDetailDTO;
 import com.scione.scm.bill.application.dto.DeliveryAlertListItemDTO;
 import com.scione.scm.bill.application.dto.DeliveryAlertSummaryDTO;
+import com.scione.scm.bill.application.dto.DeliveryAlertSyncTimeDTO;
 import com.scione.scm.bill.application.dto.FilterOptionsDTO;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertQuery;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -69,6 +70,11 @@ public class DeliveryAlertController {
         DeliveryAlertQuery query = new DeliveryAlertQuery(
                 null, null, null, null, null, null, null, null, 1, 1);
         return ApiResponse.success(deliveryAlertAppService.filterOptions(query));
+    }
+
+    @GetMapping("/last-sync-time")
+    public ApiResponse<DeliveryAlertSyncTimeDTO> lastSyncTime() {
+        return ApiResponse.success(deliveryAlertAppService.lastSyncTime());
     }
 
     @GetMapping("/components")

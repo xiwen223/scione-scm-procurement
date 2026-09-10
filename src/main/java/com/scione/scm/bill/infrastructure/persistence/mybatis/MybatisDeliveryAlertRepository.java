@@ -19,6 +19,7 @@ import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryBusines
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 
@@ -49,6 +50,11 @@ public class MybatisDeliveryAlertRepository implements DeliveryAlertRepository {
                 query.supplier(), query.buyer(), query.warehouse());
         return new DeliveryAlertSummary(po.getTotalCount(), po.getDoneCount(), po.getNormalCount(),
                 po.getDueSoonCount(), po.getOverdueCount(), po.getManualCount(), po.getKitCount());
+    }
+
+    @Override
+    public LocalDateTime findLastOrderSyncTime() {
+        return deliveryAlertMapper.findLastOrderSyncTime();
     }
 
     @Override

@@ -227,6 +227,17 @@
         FROM ( <include refid="groupedSelect"/> ) g
     </select>
 
+    <!-- 采购单数据最近一次成功同步的结束时间，用于看板「最近更新时间」。 -->
+    <select id="findLastOrderSyncTime" resultType="java.time.LocalDateTime">
+        SELECT t.end_time
+        FROM lx_sync_task t
+        WHERE t.task_type = 'order'
+          AND t.status = 'success'
+          AND t.end_time IS NOT NULL
+        ORDER BY t.end_time DESC, t.id DESC
+        LIMIT 1
+    </select>
+
     <select id="findDistinctSuppliers" resultType="string">
         SELECT DISTINCT supplier_name
         FROM lx_purchase_order

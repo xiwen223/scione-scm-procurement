@@ -5,6 +5,7 @@ import com.scione.scm.bill.application.dto.DeliveryAlertComponentDTO;
 import com.scione.scm.bill.application.dto.DeliveryAlertDetailDTO;
 import com.scione.scm.bill.application.dto.DeliveryAlertListItemDTO;
 import com.scione.scm.bill.application.dto.DeliveryAlertSummaryDTO;
+import com.scione.scm.bill.application.dto.DeliveryAlertSyncTimeDTO;
 import com.scione.scm.bill.application.dto.FilterOptionsDTO;
 import com.scione.scm.bill.config.DeliveryAlertProperties;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertPage;
@@ -34,6 +35,10 @@ public class DeliveryAlertAppService {
 
     public DeliveryAlertSummaryDTO summary(DeliveryAlertQuery query) {
         return DeliveryAlertSummaryDTO.from(repository.summary(withConfiguredStartDate(query)));
+    }
+
+    public DeliveryAlertSyncTimeDTO lastSyncTime() {
+        return DeliveryAlertSyncTimeDTO.from(repository.findLastOrderSyncTime());
     }
 
     public FilterOptionsDTO filterOptions(DeliveryAlertQuery query) {

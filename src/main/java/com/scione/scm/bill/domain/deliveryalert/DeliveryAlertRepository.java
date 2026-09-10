@@ -1,5 +1,6 @@
 package com.scione.scm.bill.domain.deliveryalert;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -10,6 +11,8 @@ public interface DeliveryAlertRepository {
     DeliveryAlertPage findPage(DeliveryAlertQuery query);
 
     DeliveryAlertSummary summary(DeliveryAlertQuery query);
+
+    LocalDateTime findLastOrderSyncTime();
 
     List<String> findDistinctSuppliers(DeliveryAlertQuery query);
 
