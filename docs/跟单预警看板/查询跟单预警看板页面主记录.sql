@@ -36,6 +36,7 @@ WITH base_rows AS (
              AND poi.quantity_entry IS NOT NULL
              AND poi.quantity_entry >= poi.quantity_real
             THEN -1
+            WHEN po.status_text = '已完成' THEN -1
             ELSE TIMESTAMPDIFF(DAY, po.create_time, NOW())
         END AS risk
     FROM lx_purchase_order_item poi
