@@ -154,8 +154,8 @@
         GROUP BY t.group_key
     </sql>
 
-    <!-- 外层过滤：作用于聚合后的主记录 -->
-    <sql id="outerFilters">
+    <!-- 商品类型筛选：作用于聚合后的主记录 -->
+    <sql id="typeFilter">
         <if test="type != null and type != ''">
             <choose>
                 <when test="type == '合并下单'">
@@ -166,6 +166,10 @@
                 </otherwise>
             </choose>
         </if>
+    </sql>
+
+    <!-- 风险等级筛选：作用于聚合后的主记录 -->
+    <sql id="riskLevelFilter">
         <if test="riskLevel != null and riskLevel != ''">
             <choose>
                 <when test="riskLevel == 'done'">
@@ -182,6 +186,10 @@
                 </when>
             </choose>
         </if>
+    </sql>
+
+    <!-- 快捷视图筛选：作用于聚合后的主记录 -->
+    <sql id="viewFilter">
         <if test="view != null and view != ''">
             <choose>
                 <when test="view == 'dueSoon'">
@@ -198,6 +206,13 @@
                 </when>
             </choose>
         </if>
+    </sql>
+
+    <!-- 外层过滤：作用于聚合后的主记录 -->
+    <sql id="outerFilters">
+        <include refid="typeFilter"/>
+        <include refid="riskLevelFilter"/>
+        <include refid="viewFilter"/>
     </sql>
 
     <select id="count" resultType="long">
@@ -225,6 +240,9 @@
             COALESCE(SUM(CASE WHEN COALESCE(plans, '') = '' THEN 1 ELSE 0 END), 0) AS manual_count,
             COALESCE(SUM(CASE WHEN FIND_IN_SET('套装', type) &gt; 0 THEN 1 ELSE 0 END), 0) AS kit_count
         FROM ( <include refid="groupedSelect"/> ) g
+        WHERE 1 = 1
+        <include refid="typeFilter"/>
+        <include refid="riskLevelFilter"/>
     </select>
 
     <!-- 采购单数据最近一次成功同步的结束时间，用于看板「最近更新时间」。 -->

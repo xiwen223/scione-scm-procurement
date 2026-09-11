@@ -56,12 +56,14 @@ public class DeliveryAlertController {
     @GetMapping("/summary")
     public ApiResponse<DeliveryAlertSummaryDTO> summary(
             @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "type", required = false) String type,
             @RequestParam(value = "supplier", required = false) String supplier,
             @RequestParam(value = "buyer", required = false) String buyer,
-            @RequestParam(value = "warehouse", required = false) String warehouse) {
+            @RequestParam(value = "warehouse", required = false) String warehouse,
+            @RequestParam(value = "riskLevel", required = false) String riskLevel) {
         DeliveryAlertQuery query = new DeliveryAlertQuery(
-                null, blankToNull(keyword), null, blankToNull(supplier),
-                blankToNull(buyer), blankToNull(warehouse), null, null, 1, 1);
+                null, blankToNull(keyword), blankToNull(type), blankToNull(supplier),
+                blankToNull(buyer), blankToNull(warehouse), blankToNull(riskLevel), null, 1, 1);
         return ApiResponse.success(deliveryAlertAppService.summary(query));
     }
 

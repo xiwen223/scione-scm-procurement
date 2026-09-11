@@ -47,7 +47,7 @@ public class MybatisDeliveryAlertRepository implements DeliveryAlertRepository {
     @Override
     public DeliveryAlertSummary summary(DeliveryAlertQuery query) {
         DeliveryAlertSummaryPO po = deliveryAlertMapper.summary(query.startDate(), query.keyword(),
-                query.supplier(), query.buyer(), query.warehouse());
+                query.supplier(), query.buyer(), query.warehouse(), query.type(), query.riskLevel());
         return new DeliveryAlertSummary(po.getTotalCount(), po.getDoneCount(), po.getNormalCount(),
                 po.getDueSoonCount(), po.getOverdueCount(), po.getManualCount(), po.getKitCount());
     }

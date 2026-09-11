@@ -40,7 +40,9 @@ public interface DeliveryAlertMapper {
                                    @Param("keyword") String keyword,
                                    @Param("supplier") String supplier,
                                    @Param("buyer") String buyer,
-                                   @Param("warehouse") String warehouse);
+                                   @Param("warehouse") String warehouse,
+                                   @Param("type") String type,
+                                   @Param("riskLevel") String riskLevel);
 
     LocalDateTime findLastOrderSyncTime();
 
