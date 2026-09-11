@@ -62,10 +62,10 @@ public class DeliveryAlertListItemDTO {
         if (riskHours == null || riskHours == -1) {
             return "done";
         }
-        if (riskHours <= 240) {
+        if (riskHours < 240) {
             return "normal";
         }
-        if (riskHours <= 360) {
+        if (riskHours < 360) {
             return "due-soon";
         }
         return "overdue";

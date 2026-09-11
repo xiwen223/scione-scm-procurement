@@ -172,23 +172,23 @@
                     AND risk = -1
                 </when>
                 <when test="riskLevel == 'normal'">
-                    AND risk &gt;= 0 AND risk &lt;= 240
+                    AND risk &gt;= 0 AND risk &lt; 240
                 </when>
                 <when test="riskLevel == 'due-soon'">
-                    AND risk &gt; 240 AND risk &lt;= 360
+                    AND risk &gt;= 240 AND risk &lt; 360
                 </when>
                 <when test="riskLevel == 'overdue'">
-                    AND risk &gt; 360
+                    AND risk &gt;= 360
                 </when>
             </choose>
         </if>
         <if test="view != null and view != ''">
             <choose>
                 <when test="view == 'dueSoon'">
-                    AND risk &gt; 240 AND risk &lt;= 360
+                    AND risk &gt;= 240 AND risk &lt; 360
                 </when>
                 <when test="view == 'overdue'">
-                    AND risk &gt; 360
+                    AND risk &gt;= 360
                 </when>
                 <when test="view == 'manual'">
                     AND COALESCE(plans, '') = ''
@@ -219,9 +219,9 @@
         SELECT
             COUNT(1) AS total_count,
             COALESCE(SUM(CASE WHEN risk = -1 THEN 1 ELSE 0 END), 0) AS done_count,
-            COALESCE(SUM(CASE WHEN risk &gt;= 0 AND risk &lt;= 240 THEN 1 ELSE 0 END), 0) AS normal_count,
-            COALESCE(SUM(CASE WHEN risk &gt; 240 AND risk &lt;= 360 THEN 1 ELSE 0 END), 0) AS due_soon_count,
-            COALESCE(SUM(CASE WHEN risk &gt; 360 THEN 1 ELSE 0 END), 0) AS overdue_count,
+            COALESCE(SUM(CASE WHEN risk &gt;= 0 AND risk &lt; 240 THEN 1 ELSE 0 END), 0) AS normal_count,
+            COALESCE(SUM(CASE WHEN risk &gt;= 240 AND risk &lt; 360 THEN 1 ELSE 0 END), 0) AS due_soon_count,
+            COALESCE(SUM(CASE WHEN risk &gt;= 360 THEN 1 ELSE 0 END), 0) AS overdue_count,
             COALESCE(SUM(CASE WHEN COALESCE(plans, '') = '' THEN 1 ELSE 0 END), 0) AS manual_count,
             COALESCE(SUM(CASE WHEN FIND_IN_SET('套装', type) &gt; 0 THEN 1 ELSE 0 END), 0) AS kit_count
         FROM ( <include refid="groupedSelect"/> ) g
