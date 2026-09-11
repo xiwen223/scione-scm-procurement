@@ -14,12 +14,15 @@ public record DeliveryAlertQuery(
         String warehouse,
         String riskLevel,
         String view,
+        LocalDate createDateFrom,
+        LocalDate createDateTo,
         int pageNum,
         int pageSize) {
 
     public DeliveryAlertQuery withStartDate(LocalDate configuredStartDate) {
         return new DeliveryAlertQuery(
-                configuredStartDate, keyword, type, supplier, buyer, warehouse, riskLevel, view, pageNum, pageSize);
+                configuredStartDate, keyword, type, supplier, buyer, warehouse, riskLevel, view,
+                createDateFrom, createDateTo, pageNum, pageSize);
     }
 
     public int offset() {

@@ -23,7 +23,9 @@ public interface DeliveryAlertMapper {
                @Param("warehouse") String warehouse,
                @Param("type") String type,
                @Param("riskLevel") String riskLevel,
-               @Param("view") String view);
+               @Param("view") String view,
+               @Param("createDateFrom") LocalDate createDateFrom,
+               @Param("createDateTo") LocalDate createDateTo);
 
     List<DeliveryAlertPO> findPage(@Param("startDate") LocalDate startDate,
                                    @Param("keyword") String keyword,
@@ -33,6 +35,8 @@ public interface DeliveryAlertMapper {
                                    @Param("type") String type,
                                    @Param("riskLevel") String riskLevel,
                                    @Param("view") String view,
+                                   @Param("createDateFrom") LocalDate createDateFrom,
+                                   @Param("createDateTo") LocalDate createDateTo,
                                    @Param("offset") int offset,
                                    @Param("pageSize") int pageSize);
 
@@ -42,7 +46,9 @@ public interface DeliveryAlertMapper {
                                    @Param("buyer") String buyer,
                                    @Param("warehouse") String warehouse,
                                    @Param("type") String type,
-                                   @Param("riskLevel") String riskLevel);
+                                   @Param("riskLevel") String riskLevel,
+                                   @Param("createDateFrom") LocalDate createDateFrom,
+                                   @Param("createDateTo") LocalDate createDateTo);
 
     LocalDateTime findLastOrderSyncTime();
 

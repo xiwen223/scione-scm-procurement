@@ -208,11 +208,22 @@
         </if>
     </sql>
 
+    <!-- 主事项创建日期范围筛选：作用于聚合后的主记录，口径与列表展示的「采购单创建日」一致（组内最早创建时间）。 -->
+    <sql id="createDateFilter">
+        <if test="createDateFrom != null">
+            AND created_time &gt;= #{createDateFrom}
+        </if>
+        <if test="createDateTo != null">
+            AND created_time &lt; DATE_ADD(#{createDateTo}, INTERVAL 1 DAY)
+        </if>
+    </sql>
+
     <!-- 外层过滤：作用于聚合后的主记录 -->
     <sql id="outerFilters">
         <include refid="typeFilter"/>
         <include refid="riskLevelFilter"/>
         <include refid="viewFilter"/>
+        <include refid="createDateFilter"/>
     </sql>
 
     <select id="count" resultType="long">
@@ -243,6 +254,7 @@
         WHERE 1 = 1
         <include refid="typeFilter"/>
         <include refid="riskLevelFilter"/>
+        <include refid="createDateFilter"/>
     </select>
 
     <!-- 采购单数据最近一次成功同步的结束时间，用于看板「最近更新时间」。 -->

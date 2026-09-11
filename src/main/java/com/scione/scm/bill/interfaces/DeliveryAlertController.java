@@ -14,6 +14,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -44,12 +46,17 @@ public class DeliveryAlertController {
             @RequestParam(value = "warehouse", required = false) String warehouse,
             @RequestParam(value = "riskLevel", required = false) String riskLevel,
             @RequestParam(value = "view", required = false) String view,
+            @RequestParam(value = "createDateFrom", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createDateFrom,
+            @RequestParam(value = "createDateTo", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createDateTo,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于 0") int pageNum,
             @RequestParam(defaultValue = "6") @Min(value = 1, message = "每页条数必须大于 0")
             @Max(value = 100, message = "每页条数不能超过 100") int pageSize) {
         DeliveryAlertQuery query = new DeliveryAlertQuery(
                 null, blankToNull(keyword), blankToNull(type), blankToNull(supplier),
-                blankToNull(buyer), blankToNull(warehouse), blankToNull(riskLevel), blankToNull(view), pageNum, pageSize);
+                blankToNull(buyer), blankToNull(warehouse), blankToNull(riskLevel), blankToNull(view),
+                createDateFrom, createDateTo, pageNum, pageSize);
         return ApiResponse.success(deliveryAlertAppService.findPage(query));
     }
 
@@ -60,17 +67,22 @@ public class DeliveryAlertController {
             @RequestParam(value = "supplier", required = false) String supplier,
             @RequestParam(value = "buyer", required = false) String buyer,
             @RequestParam(value = "warehouse", required = false) String warehouse,
-            @RequestParam(value = "riskLevel", required = false) String riskLevel) {
+            @RequestParam(value = "riskLevel", required = false) String riskLevel,
+            @RequestParam(value = "createDateFrom", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createDateFrom,
+            @RequestParam(value = "createDateTo", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createDateTo) {
         DeliveryAlertQuery query = new DeliveryAlertQuery(
                 null, blankToNull(keyword), blankToNull(type), blankToNull(supplier),
-                blankToNull(buyer), blankToNull(warehouse), blankToNull(riskLevel), null, 1, 1);
+                blankToNull(buyer), blankToNull(warehouse), blankToNull(riskLevel), null,
+                createDateFrom, createDateTo, 1, 1);
         return ApiResponse.success(deliveryAlertAppService.summary(query));
     }
 
     @GetMapping("/filter-options")
     public ApiResponse<FilterOptionsDTO> filterOptions() {
         DeliveryAlertQuery query = new DeliveryAlertQuery(
-                null, null, null, null, null, null, null, null, 1, 1);
+                null, null, null, null, null, null, null, null, null, null, 1, 1);
         return ApiResponse.success(deliveryAlertAppService.filterOptions(query));
     }
 
