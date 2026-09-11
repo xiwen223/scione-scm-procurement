@@ -512,6 +512,7 @@
                     ELSE 0
                 END AS order_coverage_confirmed,
                 CASE
+                    WHEN pr.status_text = '已完成' THEN 'COMPLETED'
                     WHEN pr.purchase_qty &gt; 0 AND pr.po_inbound_qty &gt;= pr.purchase_qty THEN 'COMPLETED'
                     WHEN pr.status_text = '待审批' THEN 'PP_CREATE'
                     WHEN pr.status_text = '待采购' THEN 'PP_APPROVAL'
