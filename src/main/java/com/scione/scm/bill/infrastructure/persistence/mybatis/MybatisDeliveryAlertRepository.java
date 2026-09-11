@@ -144,6 +144,7 @@ public class MybatisDeliveryAlertRepository implements DeliveryAlertRepository {
                 po.getQuantityEntry(),
                 po.getQualifiedQty(),
                 po.getReturnedQty(),
+                po.getExchangeQty(),
                 po.getRisk());
     }
 

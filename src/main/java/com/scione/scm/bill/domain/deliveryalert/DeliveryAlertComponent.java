@@ -18,5 +18,6 @@ public record DeliveryAlertComponent(
         Integer arrived,
         Integer qualified,
         Integer returned,
+        Integer exchangeQty,
         Integer riskHours) {
 }

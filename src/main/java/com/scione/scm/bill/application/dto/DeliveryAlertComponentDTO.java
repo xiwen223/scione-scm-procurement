@@ -23,6 +23,7 @@ public class DeliveryAlertComponentDTO {
     private Integer arrived;
     private Integer qualified;
     private Integer returned;
+    private Integer exchangeQty;
     private Integer riskHours;
     private String riskLevel;
     private String riskLevelDesc;
@@ -43,6 +44,7 @@ public class DeliveryAlertComponentDTO {
         dto.setArrived(c.arrived());
         dto.setQualified(c.qualified());
         dto.setReturned(c.returned());
+        dto.setExchangeQty(c.exchangeQty());
         dto.setRiskHours(c.riskHours());
         dto.setRiskLevel(riskLevel(c.riskHours()));
         dto.setRiskLevelDesc(riskLevelDesc(c.riskHours()));

@@ -24,6 +24,7 @@ public class DeliveryAlertComponentPO {
     private Integer expectedQty;
     private Integer qualifiedQty;
     private Integer returnedQty;
+    private Integer exchangeQty;
     private String statusText;
     private Integer risk;
 }

@@ -295,6 +295,7 @@
             MAX(poi.quantity_real) AS expected_qty,
             MAX(poi.quantity_qc) AS qualified_qty,
             MAX(poi.quantity_return) AS returned_qty,
+            MAX(poi.quantity_exchange) AS exchange_qty,
             MAX(po.status_text) AS status_text,
             MAX(
                 CASE
@@ -369,6 +370,7 @@
             MAX(poi.quantity_real) AS expected_qty,
             MAX(poi.quantity_qc) AS qualified_qty,
             MAX(poi.quantity_return) AS returned_qty,
+            MAX(poi.quantity_exchange) AS exchange_qty,
             MAX(po.status_text) AS status_text,
             MAX(
                 CASE
