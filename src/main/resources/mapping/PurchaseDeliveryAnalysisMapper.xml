@@ -608,7 +608,7 @@
         )
     </sql>
 
-    <sql id="commonPlanFilters">
+    <sql id="planFiltersBase">
         <if test="query.keyword != null and query.keyword != ''">
             AND (
                 pf.plan_sn LIKE CONCAT('%', #{query.keyword}, '%')
@@ -621,9 +621,6 @@
                     WHERE f_rel.plan_sn = pf.plan_sn
                 )
             )
-        </if>
-        <if test="query.node != null and query.node != ''">
-            AND pf.current_node = #{query.node}
         </if>
         <if test="query.deliveryStatus != null and query.deliveryStatus != ''">
             AND EXISTS (
@@ -661,6 +658,13 @@
                 WHERE risk_rel.plan_sn = pf.plan_sn
                   AND risk_po.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')
             )
+        </if>
+    </sql>
+
+    <sql id="commonPlanFilters">
+        <include refid="planFiltersBase"/>
+        <if test="query.node != null and query.node != ''">
+            AND pf.current_node = #{query.node}
         </if>
     </sql>
 
@@ -794,6 +798,12 @@
             SELECT pf.*
             FROM plan_facts pf
             WHERE 1 = 1
+            <include refid="planFiltersBase"/>
+        ),
+        node_scoped_plans AS (
+            SELECT pf.*
+            FROM plan_facts pf
+            WHERE 1 = 1
             <include refid="commonPlanFilters"/>
         ),
         latest_sync AS (
@@ -819,25 +829,24 @@
         ),
         summary_counts AS (
             SELECT
-                COUNT(*) AS total,
-                COALESCE(SUM(pf.current_node = 'PP_CREATE'), 0) AS pp_create_count,
-                COALESCE(SUM(pf.current_node = 'PP_APPROVAL'), 0) AS pp_approval_count,
-                COALESCE(SUM(pf.current_node = 'PO_CREATE'), 0) AS po_create_count,
-                COALESCE(SUM(pf.current_node = 'PO_APPROVAL'), 0) AS po_approval_count,
-                COALESCE(SUM(pf.current_node = 'SUPPLIER_SENT'), 0) AS supplier_sent_count,
-                COALESCE(SUM(pf.current_node = 'FINANCE_PAYMENT'), 0) AS finance_payment_count,
-                COALESCE(SUM(pf.current_node = 'CR_RECEIPT'), 0) AS receipt_count,
-                COALESCE(SUM(pf.current_node = 'IB_CREATE'), 0) AS inbound_create_count,
-                COALESCE(SUM(pf.current_node = 'COMPLETED'), 0) AS completed_count,
-                COALESCE(SUM(pf.order_timeliness = 'OVERDUE'), 0) AS order_overdue_count,
+                (SELECT COUNT(*) FROM node_scoped_plans) AS total,
+                (SELECT COALESCE(SUM(current_node = 'PP_CREATE'), 0) FROM filtered_plans) AS pp_create_count,
+                (SELECT COALESCE(SUM(current_node = 'PP_APPROVAL'), 0) FROM filtered_plans) AS pp_approval_count,
+                (SELECT COALESCE(SUM(current_node = 'PO_CREATE'), 0) FROM filtered_plans) AS po_create_count,
+                (SELECT COALESCE(SUM(current_node = 'PO_APPROVAL'), 0) FROM filtered_plans) AS po_approval_count,
+                (SELECT COALESCE(SUM(current_node = 'SUPPLIER_SENT'), 0) FROM filtered_plans) AS supplier_sent_count,
+                (SELECT COALESCE(SUM(current_node = 'FINANCE_PAYMENT'), 0) FROM filtered_plans) AS finance_payment_count,
+                (SELECT COALESCE(SUM(current_node = 'CR_RECEIPT'), 0) FROM filtered_plans) AS receipt_count,
+                (SELECT COALESCE(SUM(current_node = 'IB_CREATE'), 0) FROM filtered_plans) AS inbound_create_count,
+                (SELECT COALESCE(SUM(current_node = 'COMPLETED'), 0) FROM filtered_plans) AS completed_count,
+                (SELECT COALESCE(SUM(order_timeliness = 'OVERDUE'), 0) FROM node_scoped_plans) AS order_overdue_count,
                 (
                     SELECT COUNT(DISTINCT selected_pf.plan_sn)
-                    FROM filtered_plans selected_pf
+                    FROM node_scoped_plans selected_pf
                     INNER JOIN filtered_relation_orders fro ON fro.plan_sn = selected_pf.plan_sn
                     INNER JOIN po_facts pof ON pof.order_sn = fro.order_sn
                     WHERE pof.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')
                 ) AS delivery_overdue_count
-            FROM filtered_plans pf
         )
         SELECT
             sc.*,

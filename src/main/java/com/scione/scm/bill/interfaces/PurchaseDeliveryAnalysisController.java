@@ -79,13 +79,14 @@ public class PurchaseDeliveryAnalysisController {
     @GetMapping("/summary")
     public ApiResponse<PurchaseDeliverySummaryDTO> summary(
             @RequestParam(required = false) @Size(max = 100) String keyword,
+            @RequestParam(required = false) @Size(max = 32) String node,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdStart,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdEnd,
             @RequestParam(required = false) @Size(max = 100) String buyer,
             @RequestParam(required = false) @Size(max = 100) String supplier,
             @RequestParam(required = false) @Size(max = 100) String warehouse,
             @RequestParam(required = false) @Size(max = 32) String deliveryStatus) {
-        PurchaseDeliveryAnalysisQuery query = query(createdStart, createdEnd, keyword, null, buyer, supplier,
+        PurchaseDeliveryAnalysisQuery query = query(createdStart, createdEnd, keyword, node, buyer, supplier,
                 warehouse, deliveryStatus, null, "createdAt", "desc", 1, 1);
         return ApiResponse.success(appService.summary(query));
     }
