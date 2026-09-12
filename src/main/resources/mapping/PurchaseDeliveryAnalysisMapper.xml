@@ -672,45 +672,36 @@
         ORDER BY
         <choose>
             <when test="query.sortBy == 'orderRisk'">
-                CASE WHEN pf.order_timeliness = 'OVERDUE' THEN 0 ELSE 1 END ASC,
-                CASE WHEN pf.order_timeliness = 'OVERDUE' THEN pf.order_lead_hours END DESC,
+                <!-- 下单超时：已完成排最后；下单超时且未完成优先，再按采购计划创建时间正序 -->
+                CASE WHEN COALESCE(pf.current_node, '') = 'COMPLETED' THEN 1 ELSE 0 END ASC,
                 CASE
-                    WHEN pf.order_timeliness = 'OVERDUE' THEN 0
-                    WHEN pf.approval_at IS NULL THEN 1
-                    ELSE 0
+                    WHEN pf.order_timeliness = 'OVERDUE'
+                         AND COALESCE(pf.current_node, '') &lt;&gt; 'COMPLETED'
+                        THEN 0
+                    ELSE 1
                 END ASC,
-                CASE WHEN pf.order_timeliness = 'OVERDUE' THEN NULL ELSE pf.approval_at END ASC,
+                pf.created_at ASC,
                 pf.plan_sn ASC
             </when>
             <when test="query.sortBy == 'deliveryRisk'">
+                <!-- 交付超时：已完成排最后；交付未完成且交付超时优先，再按采购计划创建时间正序 -->
+                CASE WHEN COALESCE(pf.current_node, '') = 'COMPLETED' THEN 1 ELSE 0 END ASC,
                 CASE
-                    WHEN pf.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA') THEN 0
+                    WHEN COALESCE(pf.current_node, '') &lt;&gt; 'COMPLETED'
+                         AND pf.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')
+                        THEN 0
                     ELSE 1
                 END ASC,
-                CASE
-                    WHEN pf.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')
-                        THEN pf.max_delivery_hours
-                END DESC,
-                CASE
-                    WHEN pf.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA') THEN 0
-                    WHEN pf.first_sent_at IS NULL THEN 1
-                    ELSE 0
-                END ASC,
-                CASE
-                    WHEN pf.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA') THEN NULL
-                    ELSE pf.first_sent_at
-                END ASC,
+                pf.created_at ASC,
                 pf.plan_sn ASC
             </when>
             <when test="query.sortBy == 'overdueFirst'">
+                <!-- 全部：未完成且下单超时 > 未完成且交付超时 > 其他未完成 > 已完成，再按采购计划创建时间正序 -->
                 CASE
-                    WHEN COALESCE(pf.current_node, '') &lt;&gt; 'COMPLETED'
-                        AND (
-                            pf.order_timeliness = 'OVERDUE'
-                            OR pf.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')
-                        )
-                        THEN 0
-                    ELSE 1
+                    WHEN COALESCE(pf.current_node, '') = 'COMPLETED' THEN 3
+                    WHEN pf.order_timeliness = 'OVERDUE' THEN 0
+                    WHEN pf.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA') THEN 1
+                    ELSE 2
                 END ASC,
                 pf.created_at ASC,
                 pf.plan_sn ASC
