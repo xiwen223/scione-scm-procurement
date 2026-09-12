@@ -690,16 +690,34 @@
                 END ASC,
                 pf.plan_sn ASC
             </when>
+            <when test="query.sortBy == 'overdueFirst'">
+                CASE
+                    WHEN COALESCE(pf.current_node, '') &lt;&gt; 'COMPLETED'
+                        AND (
+                            pf.order_timeliness = 'OVERDUE'
+                            OR pf.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')
+                        )
+                        THEN 0
+                    ELSE 1
+                END ASC,
+                pf.created_at ASC,
+                pf.plan_sn ASC
+            </when>
             <when test="query.sortBy == 'createdAt'">
-                pf.created_at
                 <choose>
-                    <when test="query.sortOrder == 'asc'">ASC</when>
-                    <otherwise>DESC</otherwise>
-                </choose>
-                , pf.plan_sn
-                <choose>
-                    <when test="query.sortOrder == 'asc'">ASC</when>
-                    <otherwise>DESC</otherwise>
+                    <!-- 默认排序：已完成排最后；非完成按创建时间升序，再按下单耗时、交付耗时降序、达成率升序 -->
+                    <when test="query.sortOrder == 'asc'">
+                        CASE WHEN pf.current_node = 'COMPLETED' THEN 1 ELSE 0 END ASC,
+                        pf.created_at ASC,
+                        pf.order_lead_hours DESC,
+                        pf.max_delivery_hours DESC,
+                        pf.achievement_rate ASC,
+                        pf.plan_sn ASC
+                    </when>
+                    <otherwise>
+                        pf.created_at DESC,
+                        pf.plan_sn DESC
+                    </otherwise>
                 </choose>
             </when>
             <otherwise>

@@ -51,7 +51,7 @@ public class PurchaseDeliveryAnalysisController {
     private static final Set<String> RISKS = Set.of("order", "delivery");
     private static final Set<String> SORT_FIELDS = Set.of(
             "createdAt", "orderLeadHours", "maxDeliveryHours", "achievementRate",
-            "orderRisk", "deliveryRisk");
+            "orderRisk", "deliveryRisk", "overdueFirst");
     private static final Set<String> SORT_ORDERS = Set.of("asc", "desc");
 
     private final PurchaseDeliveryAnalysisAppService appService;
