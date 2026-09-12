@@ -21,5 +21,6 @@ public interface PurchaseDeliveryAnalysisRepository {
 
     PurchaseDeliveryPlanDetail findPlanDetail(String planSn, PurchaseDeliveryAnalysisQuery query);
 
-    PurchaseDeliveryOrderDetail findOrderDetail(String orderSn, PurchaseDeliveryAnalysisQuery query);
+    PurchaseDeliveryOrderDetail findOrderDetail(String orderSn, String planSn, String sku,
+                                                PurchaseDeliveryAnalysisQuery query);
 }

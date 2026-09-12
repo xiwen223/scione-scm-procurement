@@ -132,8 +132,11 @@ public class PurchaseDeliveryAnalysisController {
 
     @GetMapping("/orders/{orderSn}")
     public ApiResponse<PurchaseDeliveryOrderDetailDTO> orderDetail(
-            @PathVariable @NotBlank @Size(max = 64) String orderSn) {
-        return ApiResponse.success(appService.findOrderDetail(orderSn.trim(), emptyQuery()));
+            @PathVariable @NotBlank @Size(max = 64) String orderSn,
+            @RequestParam(required = false) @Size(max = 64) String planSn,
+            @RequestParam(required = false) @Size(max = 100) String sku) {
+        return ApiResponse.success(appService.findOrderDetail(
+                orderSn.trim(), blankToNull(planSn), blankToNull(sku), emptyQuery()));
     }
 
     private PurchaseDeliveryAnalysisQuery emptyQuery() {

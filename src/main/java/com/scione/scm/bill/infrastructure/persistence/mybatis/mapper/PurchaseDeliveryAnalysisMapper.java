@@ -36,14 +36,20 @@ public interface PurchaseDeliveryAnalysisMapper {
             @Param("query") PurchaseDeliveryAnalysisQuery query);
 
     PurchaseDeliveryOrderPO findOrder(@Param("orderSn") String orderSn,
+                                      @Param("planSn") String planSn,
+                                      @Param("sku") String sku,
                                       @Param("query") PurchaseDeliveryAnalysisQuery query);
 
     List<PurchaseDeliveryInboundPO> findInboundFacts(@Param("orderSn") String orderSn,
+                                                      @Param("planSn") String planSn,
+                                                      @Param("sku") String sku,
                                                       @Param("query") PurchaseDeliveryAnalysisQuery query);
 
     List<PurchaseDeliveryEventPO> findPlanTimeline(@Param("planSn") String planSn,
                                                     @Param("query") PurchaseDeliveryAnalysisQuery query);
 
     List<PurchaseDeliveryEventPO> findOrderTimeline(@Param("orderSn") String orderSn,
+                                                     @Param("planSn") String planSn,
+                                                     @Param("sku") String sku,
                                                      @Param("query") PurchaseDeliveryAnalysisQuery query);
 }

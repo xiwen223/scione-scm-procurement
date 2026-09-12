@@ -63,9 +63,10 @@ public class PurchaseDeliveryAnalysisAppService {
                 repository.findPlanDetail(planSn, withConfiguredStartDate(query)));
     }
 
-    public PurchaseDeliveryOrderDetailDTO findOrderDetail(String orderSn, PurchaseDeliveryAnalysisQuery query) {
+    public PurchaseDeliveryOrderDetailDTO findOrderDetail(String orderSn, String planSn, String sku,
+                                                          PurchaseDeliveryAnalysisQuery query) {
         return PurchaseDeliveryOrderDetailDTO.from(
-                repository.findOrderDetail(orderSn, withConfiguredStartDate(query)));
+                repository.findOrderDetail(orderSn, planSn, sku, withConfiguredStartDate(query)));
     }
 
     private PurchaseDeliveryAnalysisQuery withConfiguredStartDate(PurchaseDeliveryAnalysisQuery query) {

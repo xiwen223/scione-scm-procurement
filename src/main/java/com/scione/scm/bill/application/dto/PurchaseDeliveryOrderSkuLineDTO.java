@@ -40,8 +40,13 @@ public class PurchaseDeliveryOrderSkuLineDTO {
     private String poCompletionInboundSn;
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime poCompletionAt;
+    private String skuCompletionInboundSn;
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private LocalDateTime skuCompletionAt;
     private Long poDeliveryHours;
     private String poDeliveryStatus;
+    private Long skuDeliveryHours;
+    private String skuDeliveryStatus;
     private String poCurrentNode;
     private boolean allocationAvailable;
     private Long allocatedQty;
@@ -73,8 +78,12 @@ public class PurchaseDeliveryOrderSkuLineDTO {
         dto.setValidInboundQty(line.validInboundQty());
         dto.setPoCompletionInboundSn(line.poCompletionInboundSn());
         dto.setPoCompletionAt(line.poCompletionAt());
+        dto.setSkuCompletionInboundSn(line.skuCompletionInboundSn());
+        dto.setSkuCompletionAt(line.skuCompletionAt());
         dto.setPoDeliveryHours(line.poDeliveryHours());
         dto.setPoDeliveryStatus(line.poDeliveryStatus());
+        dto.setSkuDeliveryHours(line.skuDeliveryHours());
+        dto.setSkuDeliveryStatus(line.skuDeliveryStatus());
         dto.setPoCurrentNode(line.poCurrentNode());
         dto.setAllocationAvailable(line.allocationAvailable());
         dto.setAllocatedQty(line.allocatedQty());

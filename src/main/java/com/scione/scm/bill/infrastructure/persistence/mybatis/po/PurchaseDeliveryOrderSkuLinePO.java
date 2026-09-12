@@ -31,8 +31,12 @@ public class PurchaseDeliveryOrderSkuLinePO {
     private Long validInboundQty;
     private String poCompletionInboundSn;
     private LocalDateTime poCompletionAt;
+    private String skuCompletionInboundSn;
+    private LocalDateTime skuCompletionAt;
     private Long poDeliveryHours;
     private String poDeliveryStatus;
+    private Long skuDeliveryHours;
+    private String skuDeliveryStatus;
     private String poCurrentNode;
     private Boolean allocationAvailable;
     private Long allocatedQty;

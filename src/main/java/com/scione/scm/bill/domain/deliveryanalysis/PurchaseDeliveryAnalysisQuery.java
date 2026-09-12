@@ -34,4 +34,18 @@ public record PurchaseDeliveryAnalysisQuery(
     public int offset() {
         return Math.multiplyExact(pageNum - 1, pageSize);
     }
+
+    /**
+     * 是否存在需要把 PP 列表投影收窄到「命中订单」的订单级过滤条件。存在时 findPage 需要
+     * 走 filtered_plan_projection 重新聚合 order_sns/buyers/suppliers/warehouses 等字段；
+     * 不存在时直接复用 plan_facts 已聚合好的列，省去一次 GROUP_CONCAT DISTINCT。
+     */
+    public boolean hasOrderFilter() {
+        return isNotBlank(keyword) || isNotBlank(buyer) || isNotBlank(supplier)
+                || isNotBlank(warehouse) || isNotBlank(deliveryStatus);
+    }
+
+    private static boolean isNotBlank(String value) {
+        return value != null && !value.isBlank();
+    }
 }

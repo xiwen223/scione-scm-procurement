@@ -92,14 +92,15 @@ public class MybatisPurchaseDeliveryAnalysisRepository implements PurchaseDelive
     }
 
     @Override
-    public PurchaseDeliveryOrderDetail findOrderDetail(String orderSn, PurchaseDeliveryAnalysisQuery query) {
-        PurchaseDeliveryOrderPO po = mapper.findOrder(orderSn, query);
+    public PurchaseDeliveryOrderDetail findOrderDetail(String orderSn, String planSn, String sku,
+                                                       PurchaseDeliveryAnalysisQuery query) {
+        PurchaseDeliveryOrderPO po = mapper.findOrder(orderSn, planSn, sku, query);
         if (po == null) {
             throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND);
         }
-        List<PurchaseDeliveryInbound> inbounds = mapper.findInboundFacts(orderSn, query).stream()
+        List<PurchaseDeliveryInbound> inbounds = mapper.findInboundFacts(orderSn, planSn, sku, query).stream()
                 .map(this::toInbound).toList();
-        List<PurchaseDeliveryEvent> timeline = mapper.findOrderTimeline(orderSn, query).stream()
+        List<PurchaseDeliveryEvent> timeline = mapper.findOrderTimeline(orderSn, planSn, sku, query).stream()
                 .map(this::toEvent).toList();
         return new PurchaseDeliveryOrderDetail(toOrder(po), inbounds, timeline);
     }
@@ -140,7 +141,9 @@ public class MybatisPurchaseDeliveryAnalysisRepository implements PurchaseDelive
                 po.getCreatedAt(), po.getApprovalAt(), po.getSentAt(), po.getPurchaseQty(),
                 split(po.getReceiptSns()), po.getReceiptCount(), po.getReceiptQty(), split(po.getInboundSns()),
                 po.getInboundCount(), po.getValidInboundQty(), po.getPoCompletionInboundSn(),
-                po.getPoCompletionAt(), po.getPoDeliveryHours(), po.getPoDeliveryStatus(), po.getPoCurrentNode(),
+                po.getPoCompletionAt(), po.getSkuCompletionInboundSn(), po.getSkuCompletionAt(),
+                po.getPoDeliveryHours(), po.getPoDeliveryStatus(), po.getSkuDeliveryHours(),
+                po.getSkuDeliveryStatus(), po.getPoCurrentNode(),
                 Boolean.TRUE.equals(po.getAllocationAvailable()), po.getAllocatedQty());
     }
 
