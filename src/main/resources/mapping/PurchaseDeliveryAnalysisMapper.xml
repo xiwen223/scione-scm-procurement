@@ -481,6 +481,7 @@
                     ), '||', 1
                 ) AS first_completion_delivery_status,
                 SUM(CASE WHEN pof.completion_at IS NOT NULL THEN 1 ELSE 0 END) AS completed_order_count,
+                SUM(CASE WHEN pof.status_text = '已完成' THEN 1 ELSE 0 END) AS completed_status_order_count,
                 SUM(CASE WHEN pof.delivery_status = 'PENDING' THEN 1 ELSE 0 END) AS pending_order_count,
                 SUM(CASE WHEN pof.delivery_status = 'IN_TRANSIT_OVERDUE' THEN 1 ELSE 0 END) AS transit_overdue_count,
                 SUM(CASE WHEN pof.delivery_status = 'COMPLETED_OVER_SLA' THEN 1 ELSE 0 END) AS completed_over_sla_count,
@@ -512,8 +513,9 @@
                     ELSE 0
                 END AS order_coverage_confirmed,
                 CASE
-                    WHEN pr.status_text = '已完成' THEN 'COMPLETED'
-                    WHEN pr.purchase_qty &gt; 0 AND pr.po_inbound_qty &gt;= pr.purchase_qty THEN 'COMPLETED'
+                    WHEN pr.status_text = '已完成' AND pr.related_order_count = 0 THEN 'COMPLETED'
+                    WHEN pr.related_order_count &gt; 0 AND pr.completed_order_count = pr.related_order_count THEN 'COMPLETED'
+                    WHEN pr.related_order_count &gt; 0 AND pr.completed_status_order_count = pr.related_order_count THEN 'COMPLETED'
                     WHEN pr.status_text = '待审批' THEN 'PP_CREATE'
                     WHEN pr.status_text = '待采购' THEN 'PP_APPROVAL'
                     WHEN pr.related_order_count = 0 THEN 'PP_APPROVAL'
