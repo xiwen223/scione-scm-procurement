@@ -27,6 +27,8 @@
         <result property="allocationAvailable" column="allocation_available"/>
         <result property="inboundQty" column="inbound_qty"/>
         <result property="achievementRate" column="achievement_rate"/>
+        <result property="returnedQty" column="returned_qty"/>
+        <result property="exchangeQty" column="exchange_qty"/>
     </resultMap>
 
     <resultMap id="orderMap" type="com.scione.scm.bill.infrastructure.persistence.mybatis.po.PurchaseDeliveryOrderPO">
@@ -200,6 +202,8 @@
                 poi.product_name,
                 poi.quantity_real,
                 poi.quantity_entry,
+                poi.quantity_return,
+                poi.quantity_exchange,
                 poi.relation_purchase_plan
             FROM lx_purchase_order_item poi
             INNER JOIN valid_po po ON po.order_sn = poi.order_sn
@@ -435,7 +439,9 @@
             SELECT
                 rs.plan_sn,
                 SUM(pif.quantity_real) AS purchase_qty,
-                SUM(pif.quantity_entry) AS inbound_qty
+                SUM(pif.quantity_entry) AS inbound_qty,
+                SUM(COALESCE(pif.quantity_return, 0)) AS returned_qty,
+                SUM(COALESCE(pif.quantity_exchange, 0)) AS exchange_qty
             FROM relation_skus rs
             INNER JOIN po_item_facts pif
                     ON pif.order_sn = rs.order_sn
@@ -460,6 +466,8 @@
                 CAST(pp.quantity_plan AS SIGNED) AS plan_qty,
                 COALESCE(MAX(ppt.purchase_qty), 0) AS purchase_qty,
                 COALESCE(MAX(ppt.inbound_qty), 0) AS po_inbound_qty,
+                COALESCE(MAX(ppt.returned_qty), 0) AS returned_qty,
+                COALESCE(MAX(ppt.exchange_qty), 0) AS exchange_qty,
                 COUNT(DISTINCT pof.order_sn) AS related_order_count,
                 GROUP_CONCAT(DISTINCT pof.order_sn ORDER BY pof.order_sn SEPARATOR '||') AS order_sns,
                 GROUP_CONCAT(DISTINCT NULLIF(TRIM(pof.buyer), '') ORDER BY pof.buyer SEPARATOR '||') AS buyers,
@@ -769,7 +777,9 @@
             pf.delivery_status,
             pf.allocation_available,
             pf.inbound_qty,
-            pf.achievement_rate
+            pf.achievement_rate,
+            pf.returned_qty,
+            pf.exchange_qty
         FROM plan_facts pf
         LEFT JOIN filtered_plan_projection fpp ON fpp.plan_sn = pf.plan_sn
         WHERE 1 = 1

@@ -31,4 +31,6 @@ public class PurchaseDeliveryPlanPO {
     private Boolean allocationAvailable;
     private Long inboundQty;
     private BigDecimal achievementRate;
+    private Long returnedQty;
+    private Long exchangeQty;
 }

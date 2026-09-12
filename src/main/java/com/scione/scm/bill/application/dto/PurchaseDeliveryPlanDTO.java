@@ -39,6 +39,8 @@ public class PurchaseDeliveryPlanDTO {
     private boolean allocationAvailable;
     private Long inboundQty;
     private BigDecimal achievementRate;
+    private Long returnedQty;
+    private Long exchangeQty;
 
     public static PurchaseDeliveryPlanDTO from(PurchaseDeliveryPlan plan) {
         PurchaseDeliveryPlanDTO dto = new PurchaseDeliveryPlanDTO();
@@ -66,6 +68,8 @@ public class PurchaseDeliveryPlanDTO {
         dto.setAllocationAvailable(plan.allocationAvailable());
         dto.setInboundQty(plan.inboundQty());
         dto.setAchievementRate(plan.achievementRate());
+        dto.setReturnedQty(plan.returnedQty());
+        dto.setExchangeQty(plan.exchangeQty());
         return dto;
     }
 }

@@ -29,5 +29,7 @@ public record PurchaseDeliveryPlan(
         String deliveryStatus,
         boolean allocationAvailable,
         Long inboundQty,
-        BigDecimal achievementRate) {
+        BigDecimal achievementRate,
+        Long returnedQty,
+        Long exchangeQty) {
 }

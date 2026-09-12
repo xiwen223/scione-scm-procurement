@@ -119,7 +119,8 @@ public class MybatisPurchaseDeliveryAnalysisRepository implements PurchaseDelive
                 split(po.getSuppliers()), split(po.getWarehouses()), po.getLastPoCreatedAt(),
                 po.getOrderLeadHours(), po.getOrderTimeliness(), Boolean.TRUE.equals(po.getOrderCoverageConfirmed()),
                 po.getCurrentNode(), po.getMaxDeliveryHours(), po.getDeliveryStatus(),
-                Boolean.TRUE.equals(po.getAllocationAvailable()), po.getInboundQty(), po.getAchievementRate());
+                Boolean.TRUE.equals(po.getAllocationAvailable()), po.getInboundQty(), po.getAchievementRate(),
+                po.getReturnedQty(), po.getExchangeQty());
     }
 
     private PurchaseDeliveryOrder toOrder(PurchaseDeliveryOrderPO po) {
