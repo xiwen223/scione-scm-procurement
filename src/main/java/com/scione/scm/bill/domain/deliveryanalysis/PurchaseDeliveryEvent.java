@@ -1,5 +1,6 @@
 package com.scione.scm.bill.domain.deliveryanalysis;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /** PP/PO 抽屉时间线事件。 */
@@ -12,5 +13,6 @@ public record PurchaseDeliveryEvent(
         String description,
         String operator,
         Long quantity,
-        Long cumulativeQuantity) {
+        Long cumulativeQuantity,
+        BigDecimal amount) {
 }

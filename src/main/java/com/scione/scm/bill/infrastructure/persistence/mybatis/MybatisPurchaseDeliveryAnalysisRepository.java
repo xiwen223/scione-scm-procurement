@@ -157,7 +157,8 @@ public class MybatisPurchaseDeliveryAnalysisRepository implements PurchaseDelive
 
     private PurchaseDeliveryEvent toEvent(PurchaseDeliveryEventPO po) {
         return new PurchaseDeliveryEvent(po.getEventId(), po.getSourceType(), po.getSourceSn(), po.getEventTime(),
-                po.getTitle(), po.getDescription(), po.getOperator(), po.getQuantity(), po.getCumulativeQuantity());
+                po.getTitle(), po.getDescription(), po.getOperator(), po.getQuantity(), po.getCumulativeQuantity(),
+                po.getAmount());
     }
 
     private List<String> split(String value) {

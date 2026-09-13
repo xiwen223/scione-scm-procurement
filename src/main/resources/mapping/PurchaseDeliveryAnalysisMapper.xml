@@ -135,6 +135,7 @@
         <result property="operator" column="operator_name"/>
         <result property="quantity" column="quantity"/>
         <result property="cumulativeQuantity" column="cumulative_quantity"/>
+        <result property="amount" column="amount"/>
     </resultMap>
 
     <!--
@@ -1597,7 +1598,8 @@
         SELECT CONCAT('PP_APPROVAL_', pp.id) AS event_id, 'PP' AS source_type, pp.plan_sn AS source_sn,
                pf.approval_at AS event_time, 'PP 最终审批' AS title,
                CONCAT('PP ', pp.plan_sn, ' 审批通过') AS description, pf.approver AS operator_name,
-               CAST(NULL AS SIGNED) AS quantity, CAST(NULL AS SIGNED) AS cumulative_quantity
+               CAST(NULL AS SIGNED) AS quantity, CAST(NULL AS SIGNED) AS cumulative_quantity,
+               CAST(NULL AS DECIMAL(18,4)) AS amount
         FROM
         <choose>
             <when test="sku != null">relation_skus</when>
@@ -1613,19 +1615,19 @@
           <if test="planSn != null"> AND rel.plan_sn = #{planSn}</if>
         UNION ALL
         SELECT CONCAT('PO_CREATE_', po.id), 'PO', po.order_sn,
-               po.create_time, 'PO 创建', '', po.opt_realname, NULL, NULL
+               po.create_time, 'PO 创建', '', po.opt_realname, NULL, NULL, NULL
         FROM valid_po po
         WHERE po.order_sn = #{orderSn}
         UNION ALL
         SELECT CONCAT('PO_APPROVAL_', po.id), 'PO', po.order_sn, po.auditor_time, 'PO 审批',
-               'PO 审批通过', po.auditor_realname, NULL, NULL
+               'PO 审批通过', po.auditor_realname, NULL, NULL, NULL
         FROM valid_po po
         WHERE po.order_sn = #{orderSn} AND po.auditor_time IS NOT NULL
         UNION ALL
         SELECT CONCAT('PO_SENT_', psl.sent_log_id), 'PO', psl.order_sn, psl.sent_at, '下发供应商',
                CASE WHEN NULLIF(TRIM(pof.supplier), '') IS NULL
                     THEN '' ELSE CONCAT('供应商：', pof.supplier) END,
-               COALESCE(psl.sent_operator, pof.buyer), NULL, NULL
+               COALESCE(psl.sent_operator, pof.buyer), NULL, NULL, NULL
         FROM po_facts pof
         INNER JOIN po_sent_log psl ON psl.order_sn = pof.order_sn
         WHERE pof.order_sn = #{orderSn} AND psl.sent_at IS NOT NULL
@@ -1634,7 +1636,8 @@
                COALESCE(CAST(rfo.real_pay_time AS DATETIME), rfo.apply_time),
                CASE WHEN rfo.real_pay_time IS NOT NULL THEN '付款' ELSE '请款' END,
                CASE WHEN rfo.real_pay_time IS NOT NULL THEN '付款完成' ELSE '请款已提交' END,
-               COALESCE(rfo.pay_user, rfo.apply_user), NULL, NULL
+               COALESCE(rfo.pay_user, rfo.apply_user), NULL, NULL,
+               CASE WHEN rfo.real_pay_time IS NOT NULL THEN COALESCE(rfo.amount_paid, rfo.amount_total) ELSE rfo.amount_total END
         FROM lx_request_funds_order_item rfoi
         INNER JOIN lx_request_funds_order rfo ON rfo.order_sn = rfoi.order_sn
         WHERE rfoi.business_sn = #{orderSn}
@@ -1644,14 +1647,14 @@
         <choose>
             <when test="sku != null">
                 SELECT CONCAT('CR_', rsf.receipt_id), 'CR', rsf.receipt_sn, rsf.created_at, 'CR 收货',
-                       '', rsf.operator_name, rsf.receipt_qty, NULL
+                       '', rsf.operator_name, rsf.receipt_qty, NULL, NULL
                 FROM receipt_sku_facts rsf
                 WHERE rsf.order_sn = #{orderSn}
                   AND rsf.sku &lt;=&gt; #{sku}
             </when>
             <when test="planSn != null">
                 SELECT CONCAT('CR_', rsf.receipt_id), 'CR', rsf.receipt_sn, MAX(rsf.created_at), 'CR 收货',
-                       '', MAX(rsf.operator_name), SUM(rsf.receipt_qty), NULL
+                       '', MAX(rsf.operator_name), SUM(rsf.receipt_qty), NULL, NULL
                 FROM relation_skus rs
                 INNER JOIN receipt_sku_facts rsf
                         ON rsf.order_sn = rs.order_sn
@@ -1662,7 +1665,7 @@
             </when>
             <otherwise>
                 SELECT CONCAT('CR_', rf.receipt_id), 'CR', rf.receipt_sn, rf.created_at, 'CR 收货',
-                       '', rf.operator_name, rf.receipt_qty, NULL
+                       '', rf.operator_name, rf.receipt_qty, NULL, NULL
                 FROM receipt_facts rf
                 WHERE rf.order_sn = #{orderSn}
             </otherwise>
@@ -1678,7 +1681,7 @@
                        SUM(g.inbound_qty) OVER (
                            ORDER BY g.created_at, g.inbound_id, g.inbound_sn
                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                       )
+                       ), NULL
                 FROM (
                     SELECT
                         vii.inbound_id,
@@ -1702,7 +1705,7 @@
                        SUM(g.inbound_qty) OVER (
                            ORDER BY g.created_at, g.inbound_id, g.inbound_sn
                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                       )
+                       ), NULL
                 FROM (
                     SELECT
                         vii.inbound_id,
@@ -1729,7 +1732,7 @@
                        SUM(g.inbound_qty) OVER (
                            ORDER BY g.created_at, g.inbound_id, g.inbound_sn
                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                       )
+                       ), NULL
                 FROM (
                     SELECT
                         vii.inbound_id,
@@ -1763,27 +1766,28 @@
             SELECT CONCAT('PP_CREATE_', pp.id) AS event_id, 'PP' AS source_type, pp.plan_sn AS source_sn,
                    pp.create_time AS event_time, 'PP创建' AS title,
                    COALESCE(pp.status_text, '') AS description, pp.creator_real_name AS operator_name,
-                   CAST(NULL AS SIGNED) AS quantity, CAST(NULL AS SIGNED) AS cumulative_quantity
+                   CAST(NULL AS SIGNED) AS quantity, CAST(NULL AS SIGNED) AS cumulative_quantity,
+                   CAST(NULL AS DECIMAL(18,4)) AS amount
             FROM valid_pp pp WHERE pp.plan_sn = #{planSn}
             UNION ALL
             SELECT CONCAT('PP_APPROVAL_', pp.id), 'PP', pp.plan_sn, pf.approval_at, 'PP审批',
-                   COALESCE(pf.approval_status, ''), pf.approver, NULL, NULL
+                   COALESCE(pf.approval_status, ''), pf.approver, NULL, NULL, NULL
             FROM valid_pp pp
             INNER JOIN pp_facts pf ON pf.plan_sn = pp.plan_sn
             WHERE pp.plan_sn = #{planSn} AND pf.approval_at IS NOT NULL
             UNION ALL
             SELECT CONCAT('PO_CREATE_', po.id), 'PO', po.order_sn, po.create_time, 'PO创建',
-                   COALESCE(po.status_text, ''), po.opt_realname, NULL, NULL
+                   COALESCE(po.status_text, ''), po.opt_realname, NULL, NULL, NULL
             FROM relation_orders rel INNER JOIN valid_po po ON po.order_sn = rel.order_sn
             WHERE rel.plan_sn = #{planSn}
             UNION ALL
             SELECT CONCAT('PO_APPROVAL_', po.id), 'PO', po.order_sn, po.auditor_time, 'PO审批',
-                   COALESCE(po.status_text, ''), po.auditor_realname, NULL, NULL
+                   COALESCE(po.status_text, ''), po.auditor_realname, NULL, NULL, NULL
             FROM relation_orders rel INNER JOIN valid_po po ON po.order_sn = rel.order_sn
             WHERE rel.plan_sn = #{planSn} AND po.auditor_time IS NOT NULL
             UNION ALL
             SELECT CONCAT('PO_SENT_', psl.sent_log_id), 'PO', pof.order_sn, psl.sent_at, '下发供应商',
-                   COALESCE(pof.supplier, ''), COALESCE(psl.sent_operator, pof.buyer), NULL, NULL
+                   COALESCE(pof.supplier, ''), COALESCE(psl.sent_operator, pof.buyer), NULL, NULL, NULL
             FROM relation_orders rel INNER JOIN po_facts pof ON pof.order_sn = rel.order_sn
             INNER JOIN po_sent_log psl ON psl.order_sn = pof.order_sn
             WHERE rel.plan_sn = #{planSn} AND psl.sent_at IS NOT NULL
@@ -1791,7 +1795,8 @@
             SELECT CONCAT('PAY_', rfo.id), 'PAYMENT', rfo.order_sn,
                    COALESCE(CAST(rfo.real_pay_time AS DATETIME), rfo.apply_time),
                    CASE WHEN rfo.real_pay_time IS NOT NULL THEN '付款完成' ELSE '请款' END,
-                   CONCAT('关联PO: ', rfoi.business_sn), COALESCE(rfo.pay_user, rfo.apply_user), NULL, NULL
+                   CONCAT('关联PO: ', rfoi.business_sn), COALESCE(rfo.pay_user, rfo.apply_user), NULL, NULL,
+                   CASE WHEN rfo.real_pay_time IS NOT NULL THEN COALESCE(rfo.amount_paid, rfo.amount_total) ELSE rfo.amount_total END
             FROM relation_orders rel
             INNER JOIN lx_request_funds_order_item rfoi ON rfoi.business_sn = rel.order_sn
             INNER JOIN lx_request_funds_order rfo ON rfo.order_sn = rfoi.order_sn
@@ -1800,7 +1805,7 @@
               AND COALESCE(CAST(rfo.real_pay_time AS DATETIME), rfo.apply_time) &lt;= #{query.asOf}
             UNION ALL
             SELECT CONCAT('CR_', rf.receipt_id), 'CR', rf.receipt_sn, rf.created_at, 'CR收货',
-                   CONCAT('来源PO: ', rf.order_sn), rf.operator_name, NULL, NULL
+                   CONCAT('来源PO: ', rf.order_sn), rf.operator_name, NULL, NULL, NULL
             FROM relation_orders rel
             INNER JOIN receipt_facts rf ON rf.order_sn = rel.order_sn
             WHERE rel.plan_sn = #{planSn}
@@ -1815,7 +1820,7 @@
                        PARTITION BY g.order_sn
                        ORDER BY g.created_at, g.inbound_id, g.inbound_sn
                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                   )
+                   ), NULL
             FROM (
                 SELECT
                     vii.order_sn,

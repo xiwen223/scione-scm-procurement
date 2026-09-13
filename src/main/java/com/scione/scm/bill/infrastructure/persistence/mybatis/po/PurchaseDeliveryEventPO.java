@@ -2,6 +2,7 @@ package com.scione.scm.bill.infrastructure.persistence.mybatis.po;
 
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
@@ -15,4 +16,5 @@ public class PurchaseDeliveryEventPO {
     private String operator;
     private Long quantity;
     private Long cumulativeQuantity;
+    private BigDecimal amount;
 }

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonFormat;
 import com.scione.scm.bill.domain.deliveryanalysis.PurchaseDeliveryEvent;
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
@@ -18,6 +19,7 @@ public class PurchaseDeliveryEventDTO {
     private String operator;
     private Long quantity;
     private Long cumulativeQuantity;
+    private BigDecimal amount;
 
     public static PurchaseDeliveryEventDTO from(PurchaseDeliveryEvent event) {
         PurchaseDeliveryEventDTO dto = new PurchaseDeliveryEventDTO();
@@ -30,6 +32,7 @@ public class PurchaseDeliveryEventDTO {
         dto.setOperator(event.operator());
         dto.setQuantity(event.quantity());
         dto.setCumulativeQuantity(event.cumulativeQuantity());
+        dto.setAmount(event.amount());
         return dto;
     }
 }
