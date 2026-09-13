@@ -360,6 +360,7 @@
                 pdf.pp_supplier,
                 pdf.created_at,
                 pdf.approval_at,
+                pdf.approver,
                 pdf.plan_qty,
                 pdf.purchase_qty,
                 pdf.inbound_qty AS po_inbound_qty,
@@ -1594,8 +1595,8 @@
 
     <sql id="orderTimelineUnion">
         SELECT CONCAT('PP_APPROVAL_', pp.id) AS event_id, 'PP' AS source_type, pp.plan_sn AS source_sn,
-               pp.approval_time AS event_time, 'PP 最终审批' AS title,
-               CONCAT('PP ', pp.plan_sn, ' 审批通过') AS description, pp.approver AS operator_name,
+               pf.approval_at AS event_time, 'PP 最终审批' AS title,
+               CONCAT('PP ', pp.plan_sn, ' 审批通过') AS description, pf.approver AS operator_name,
                CAST(NULL AS SIGNED) AS quantity, CAST(NULL AS SIGNED) AS cumulative_quantity
         FROM
         <choose>
@@ -1604,10 +1605,11 @@
         </choose>
         rel
         INNER JOIN valid_pp pp ON pp.plan_sn = rel.plan_sn
+        INNER JOIN pp_facts pf ON pf.plan_sn = pp.plan_sn
         WHERE rel.order_sn = #{orderSn}
           <if test="sku != null"> AND rel.sku &lt;=&gt; #{sku}</if>
-          AND pp.approval_time IS NOT NULL
-          AND pp.approval_time &lt;= #{query.asOf}
+          AND pf.approval_at IS NOT NULL
+          AND pf.approval_at &lt;= #{query.asOf}
           <if test="planSn != null"> AND rel.plan_sn = #{planSn}</if>
         UNION ALL
         SELECT CONCAT('PO_CREATE_', po.id), 'PO', po.order_sn,
@@ -1764,9 +1766,11 @@
                    CAST(NULL AS SIGNED) AS quantity, CAST(NULL AS SIGNED) AS cumulative_quantity
             FROM valid_pp pp WHERE pp.plan_sn = #{planSn}
             UNION ALL
-            SELECT CONCAT('PP_APPROVAL_', pp.id), 'PP', pp.plan_sn, pp.approval_time, 'PP审批',
-                   COALESCE(pp.approval_status, ''), pp.approver, NULL, NULL
-            FROM valid_pp pp WHERE pp.plan_sn = #{planSn} AND pp.approval_time IS NOT NULL
+            SELECT CONCAT('PP_APPROVAL_', pp.id), 'PP', pp.plan_sn, pf.approval_at, 'PP审批',
+                   COALESCE(pf.approval_status, ''), pf.approver, NULL, NULL
+            FROM valid_pp pp
+            INNER JOIN pp_facts pf ON pf.plan_sn = pp.plan_sn
+            WHERE pp.plan_sn = #{planSn} AND pf.approval_at IS NOT NULL
             UNION ALL
             SELECT CONCAT('PO_CREATE_', po.id), 'PO', po.order_sn, po.create_time, 'PO创建',
                    COALESCE(po.status_text, ''), po.opt_realname, NULL, NULL
