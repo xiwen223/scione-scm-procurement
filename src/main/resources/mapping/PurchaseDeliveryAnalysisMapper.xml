@@ -380,6 +380,12 @@
                 pdf.earliest_po_node_rank
             FROM pp_delivery_facts pdf
             WHERE pdf.created_at &lt;= #{query.asOf}
+            <if test="query.startDate != null">
+              AND pdf.created_at &gt;= #{query.startDate}
+            </if>
+            <if test="query.endDate != null">
+              AND pdf.created_at &lt; DATE_ADD(#{query.endDate}, INTERVAL 1 DAY)
+            </if>
         ),
         /*
           PP×SKU 交付派生（asOf 依赖，现算）：按 relation_skus 关联的 SKU 行逐行判定
