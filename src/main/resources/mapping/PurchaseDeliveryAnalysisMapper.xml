@@ -138,22 +138,72 @@
     </resultMap>
 
     <!--
-      “有效 IB”集中定义：必须有稳定单号和创建时间、创建时间不晚于同请求 asOf、未撤销，
-      且入库数量非空、非负。官方 status 白名单未知，当前集中排除明显无效状态文本，待官方
-      白名单确认后用白名单替换，禁止臆造状态码。
+      “有效 IB”以宽表 po_delivery_facts 口径为准：官方入库状态白名单 status IN (20, 40)，
+      且入库数量非空、非负。实时查询仍保留稳定单号 + 创建时间 + 不晚于同请求 asOf 的过滤。
     -->
     <sql id="validInboundCondition">
         ib.order_sn IS NOT NULL
         AND ib.order_sn &lt;&gt; ''
         AND ib.create_time IS NOT NULL
         AND ib.create_time &lt;= #{query.asOf}
-        AND ib.revoke_time IS NULL
-        AND COALESCE(ib.status_text, '') NOT REGEXP '取消|作废|撤销|无效'
+        AND ib.status IN (20, 40)
         AND ibi.product_total IS NOT NULL
         AND ibi.product_total &gt;= 0
     </sql>
 
-    <!-- 所有分析 SQL 共享的事实 CTE。MySQL 8+。 -->
+    <!-- 所有分析 SQL 共享的事实 CTE。MySQL 8+。
+         采购/入库/收货的事实（PO 头、明细行、SKU 级累计入库与达标）改读宽表
+         po_delivery_facts（由 scione-lingxing-sync 的 cron 全量重建），查询时不再对
+         入库明细做窗口累计与达标判定；只有宽表读不到、或必须保持 '||' 分隔契约的
+         单据号列表（收货单号、有效入库单号）与时间线仍读原始表。
+         列表主查询（count / findPage / summary / findPlan）的 PO 头也读宽表，不再扫描
+         lx_purchase_order；valid_po 移入 orderDetailCtes 仅供详情实时口径使用。 -->
+    <!-- PO 事实派生列：交付耗时 / 交付状态 / 当前节点 / 节点序。
+         列表 po_facts_lite（宽表快照）与详情 po_facts（原始表实时）共用同一套判定；
+         输入列统一为 has_receipt / has_inbound（是否有收货 / 有效入库的布尔），
+         两个数据源在该布尔上语义一致，仅快照 vs 实时的新鲜度不同。 -->
+    <sql id="poFactsDerivedColumns">
+        CASE
+            WHEN pofr.sent_at IS NULL THEN NULL
+            ELSE TIMESTAMPDIFF(HOUR, pofr.sent_at, COALESCE(pofr.completion_at, #{query.asOf}))
+        END AS delivery_hours,
+        CASE
+            WHEN pofr.sent_at IS NULL THEN 'PENDING'
+            WHEN pofr.completion_at IS NOT NULL
+                 AND pofr.completion_at &lt;= DATE_ADD(pofr.sent_at, INTERVAL 360 HOUR)
+                THEN 'COMPLETED_WITHIN_SLA'
+            WHEN pofr.completion_at IS NOT NULL THEN 'COMPLETED_OVER_SLA'
+            WHEN #{query.asOf} &gt;= DATE_ADD(pofr.sent_at, INTERVAL 360 HOUR) THEN 'IN_TRANSIT_OVERDUE'
+            ELSE 'IN_TRANSIT'
+        END AS delivery_status,
+        CASE
+            WHEN pofr.completion_at IS NOT NULL THEN 'COMPLETED'
+            WHEN pofr.has_inbound = 1 AND pofr.completion_at IS NULL THEN 'IB_CREATE'
+            WHEN pofr.has_receipt = 1 AND pofr.has_inbound = 0 THEN 'CR_RECEIPT'
+            WHEN pofr.status = 3 THEN 'PO_CREATE'
+            WHEN pofr.status = 121 THEN 'PO_APPROVAL'
+            WHEN pofr.status = 1 THEN 'SUPPLIER_SENT'
+            WHEN pofr.sent_at IS NOT NULL
+                 AND pofr.settlement_method = 7
+                 AND pofr.has_receipt = 0
+                THEN 'FINANCE_PAYMENT'
+            ELSE CAST(NULL AS CHAR)
+        END AS current_node,
+        CASE
+            WHEN pofr.completion_at IS NOT NULL THEN 9
+            WHEN pofr.has_inbound = 1 AND pofr.completion_at IS NULL THEN 8
+            WHEN pofr.has_receipt = 1 AND pofr.has_inbound = 0 THEN 7
+            WHEN pofr.status = 3 THEN 3
+            WHEN pofr.status = 121 THEN 4
+            WHEN pofr.status = 1 THEN 5
+            WHEN pofr.sent_at IS NOT NULL
+                 AND pofr.settlement_method = 7
+                 AND pofr.has_receipt = 0
+                THEN 6
+            ELSE CAST(NULL AS SIGNED)
+        END AS node_rank
+    </sql>
+
     <sql id="analysisCtes">
         WITH
         valid_pp AS (
@@ -180,73 +230,86 @@
               AND pp.create_time &lt; DATE_ADD(#{query.endDate}, INTERVAL 1 DAY)
             </if>
         ),
-        valid_po AS (
-            SELECT po.*
-            FROM lx_purchase_order po
-            WHERE po.status NOT IN (-1, 124)
-              AND po.create_time IS NOT NULL
-              AND po.create_time &lt;= #{query.asOf}
-            <if test="_parameter.containsKey('planSn') and planSn != null and planSn != ''">
-              AND EXISTS (
-                  SELECT 1
-                  FROM lx_pp_po_sku_ass ass
-                  WHERE ass.order_sn = po.order_sn
-                    AND ass.plan_sn = #{planSn}
-              )
-            </if>
-            <if test="_parameter.containsKey('orderSn') and orderSn != null and orderSn != ''">
-              AND po.order_sn = #{orderSn}
-            </if>
-        ),
-        po_sent_log_ranked AS (
+        /* PO 整单事实：从宽表按 order_sn 聚合 PO 头字段（order_id / 状态 / 供应商 / 仓库 /
+           采购员 / 结算方式 / 1688单号 / 创建时间 / 审批时间）与明细行聚合（采购数量、
+           SKU/品名串、下发时间、收货/入库单号列表与「有无」布尔），供列表与详情共用——
+           列表不再 JOIN 采购单表，全部读宽表快照。 */
+        po_item_agg AS (
             SELECT
-                po.order_sn,
-                bl.id AS sent_log_id,
-                bl.ol_time AS sent_at,
-                bl.realname AS sent_operator,
-                ROW_NUMBER() OVER (
-                    PARTITION BY po.order_sn
-                    ORDER BY bl.ol_time ASC, bl.id ASC
-                ) AS rn
-            FROM valid_po po
-            INNER JOIN lx_business_log bl
-                    ON bl.business_id = CONCAT('1_', po.order_sn)
-            WHERE bl.ol_type_text = '下单'
-              AND bl.ol_time IS NOT NULL
-              AND bl.ol_time &lt;= #{query.asOf}
+                pdf.order_sn,
+                MAX(pdf.po_id) AS order_id,
+                MAX(pdf.po_status) AS status,
+                MAX(pdf.po_status_text) AS status_text,
+                MAX(pdf.po_supplier_name) AS supplier,
+                MAX(pdf.po_warehouse_name) AS warehouse,
+                MAX(pdf.purchaser) AS buyer,
+                MAX(pdf.settlement_method) AS settlement_method,
+                MAX(pdf.alibaba_order_sn) AS alibaba_order_sn,
+                MAX(pdf.create_time) AS created_at,
+                MAX(pdf.auditor_time) AS approval_at,
+                SUM(GREATEST(COALESCE(pdf.quantity_real, 0), 0)) AS purchase_qty,
+                GROUP_CONCAT(DISTINCT NULLIF(TRIM(pdf.sku), '') ORDER BY NULLIF(TRIM(pdf.sku), '') SEPARATOR '、') AS skus,
+                GROUP_CONCAT(DISTINCT NULLIF(TRIM(pdf.product_name), '') ORDER BY NULLIF(TRIM(pdf.product_name), '') SEPARATOR '、') AS product_names,
+                MAX(pdf.sent_at) AS sent_at,
+                GROUP_CONCAT(DISTINCT NULLIF(TRIM(pdf.receipt_sns), '') ORDER BY NULLIF(TRIM(pdf.receipt_sns), '') SEPARATOR ',') AS receipt_sns,
+                GROUP_CONCAT(DISTINCT NULLIF(TRIM(pdf.inbound_sns), '') ORDER BY NULLIF(TRIM(pdf.inbound_sns), '') SEPARATOR ',') AS inbound_sns,
+                MAX(CASE WHEN NULLIF(TRIM(pdf.receipt_sns), '') IS NOT NULL THEN 1 ELSE 0 END) AS has_receipt,
+                MAX(CASE WHEN NULLIF(TRIM(pdf.inbound_sns), '') IS NOT NULL THEN 1 ELSE 0 END) AS has_inbound
+            FROM po_delivery_facts pdf
+            WHERE pdf.po_status NOT IN (-1, 124)
+              AND pdf.create_time IS NOT NULL
+              AND pdf.create_time &lt;= #{query.asOf}
+            GROUP BY pdf.order_sn
         ),
-        po_sent_log AS (
-            SELECT order_sn, sent_log_id, sent_at, sent_operator
-            FROM po_sent_log_ranked
-            WHERE rn = 1
-        ),
-        po_item_facts AS (
+        /*
+          PO×SKU 事实：从宽表按 (order_sn, sku) 聚合。line_qty 为 SKU 合并后的采购数量，
+          completion_inbound__sn / completion_inbound__at 为宽表预计算的 SKU 级达标（首次
+          累计有效入库达到 line_qty 的那张入库单）。达标粒度按宽表口径下沉到 SKU。
+        */
+        po_sku_facts AS (
             SELECT
-                poi.id AS item_id,
-                poi.order_sn,
-                NULLIF(TRIM(poi.sku), '') AS sku,
-                poi.product_name,
-                poi.quantity_real,
-                poi.quantity_entry,
-                poi.quantity_return,
-                poi.quantity_exchange
-            FROM lx_purchase_order_item poi
-            INNER JOIN valid_po po ON po.order_sn = poi.order_sn
-            WHERE poi.is_delete = 0
+                pdf.order_sn,
+                NULLIF(TRIM(pdf.sku), '') AS sku,
+                GROUP_CONCAT(DISTINCT NULLIF(TRIM(pdf.product_name), '') ORDER BY NULLIF(TRIM(pdf.product_name), '') SEPARATOR '、') AS product_name,
+                SUM(GREATEST(COALESCE(pdf.quantity_real, 0), 0)) AS line_qty,
+                MAX(pdf.completion_inbound__sn) AS completion_inbound_sn,
+                MAX(pdf.completion_inbound__at) AS completion_at
+            FROM po_delivery_facts pdf
+            WHERE pdf.po_status NOT IN (-1, 124)
+              AND pdf.create_time IS NOT NULL
+              AND pdf.create_time &lt;= #{query.asOf}
+            GROUP BY pdf.order_sn, NULLIF(TRIM(pdf.sku), '')
         ),
-        po_items AS (
+        /*
+          PO 整单达标：全部正数量 SKU 均达标才视为完成，completionAt 取最后达标 SKU 的达标
+          时间（按宽表 SKU 级达标口径）。line_qty≤0 的 SKU 视为无需入库，不阻塞完成。
+        */
+        po_completion AS (
             SELECT
-                pif.order_sn,
-                SUM(GREATEST(COALESCE(pif.quantity_real, 0), 0)) AS purchase_qty,
-                GROUP_CONCAT(DISTINCT pif.sku ORDER BY pif.sku SEPARATOR '、') AS skus,
-                GROUP_CONCAT(DISTINCT NULLIF(TRIM(pif.product_name), '') ORDER BY pif.product_name SEPARATOR '、') AS product_names
-            FROM po_item_facts pif
-            GROUP BY pif.order_sn
+                psf.order_sn,
+                CASE
+                    WHEN COUNT(CASE WHEN psf.line_qty &gt; 0 THEN 1 END) &gt; 0
+                     AND COUNT(CASE WHEN psf.line_qty &gt; 0 THEN 1 END)
+                        = COUNT(CASE WHEN psf.line_qty &gt; 0 AND psf.completion_at IS NOT NULL THEN 1 END)
+                    THEN MAX(psf.completion_at)
+                END AS completion_at,
+                CASE
+                    WHEN COUNT(CASE WHEN psf.line_qty &gt; 0 THEN 1 END) &gt; 0
+                     AND COUNT(CASE WHEN psf.line_qty &gt; 0 THEN 1 END)
+                        = COUNT(CASE WHEN psf.line_qty &gt; 0 AND psf.completion_at IS NOT NULL THEN 1 END)
+                    THEN SUBSTRING_INDEX(
+                        GROUP_CONCAT(psf.completion_inbound_sn
+                            ORDER BY psf.completion_at DESC, psf.sku SEPARATOR '||'),
+                        '||', 1
+                    )
+                END AS completion_inbound_sn
+            FROM po_sku_facts psf
+            GROUP BY psf.order_sn
         ),
         /*
           PP-PO-SKU 关系唯一由 lx_pp_po_sku_ass 提供（plan_sn×order_sn×sku，带
           idx_pp_po_sku 索引）。下游所有 PP×PO 关联一律通过 relation_skus 的
-          (order_sn, sku) 连接 po_item_facts 确定，不再对 PO item 的 JSON 关联字段做
+          (order_sn, sku) 连接宽表/原始表确定，不再对 PO item 的 JSON 关联字段做
           逐行判定——JSON 函数无法走索引，是明细/列表查询的主要开销。该表和原始
           PO item 都没有分摊数量，因此这里只用于确定关联关系，不推算任何 PP 分摊数量。
         */
@@ -257,7 +320,7 @@
                 NULLIF(TRIM(ass.sku), '') AS sku
             FROM lx_pp_po_sku_ass ass
             INNER JOIN valid_pp pp ON pp.plan_sn = ass.plan_sn
-            INNER JOIN valid_po po ON po.order_sn = ass.order_sn
+            INNER JOIN po_item_agg pia ON pia.order_sn = ass.order_sn
             WHERE ass.plan_sn IS NOT NULL AND ass.plan_sn &lt;&gt; ''
               AND ass.order_sn IS NOT NULL AND ass.order_sn &lt;&gt; ''
         ),
@@ -265,499 +328,23 @@
             SELECT DISTINCT rs.plan_sn, rs.order_sn
             FROM relation_skus rs
         ),
-        receipt_facts AS (
-            SELECT
-                ro.id AS receipt_id,
-                ro.order_sn AS receipt_sn,
-                pif.order_sn,
-                ro.create_time AS created_at,
-                ro.create_realname AS operator_name,
-                SUM(GREATEST(COALESCE(roi.product_receive_num, 0), 0)) AS receipt_qty
-            FROM lx_receipt_order ro
-            INNER JOIN lx_receipt_order_item roi ON roi.order_sn = ro.order_sn
-            INNER JOIN po_item_facts pif ON pif.item_id = roi.order_item_id
-            WHERE ro.create_time IS NOT NULL
-              AND ro.create_time &lt;= #{query.asOf}
-            GROUP BY ro.id, ro.order_sn, pif.order_sn, ro.create_time, ro.create_realname
-        ),
-        /* 与 receipt_facts 同源，但保留 SKU 维度，供 PO 详情按单个 SKU / PP×PO 限定时的
-           CR 收货时间线使用；receipt_qty 为该收货单内该 SKU 的收货数量。 */
-        receipt_sku_facts AS (
-            SELECT
-                ro.id AS receipt_id,
-                ro.order_sn AS receipt_sn,
-                pif.order_sn,
-                pif.sku,
-                ro.create_time AS created_at,
-                ro.create_realname AS operator_name,
-                SUM(GREATEST(COALESCE(roi.product_receive_num, 0), 0)) AS receipt_qty
-            FROM lx_receipt_order ro
-            INNER JOIN lx_receipt_order_item roi ON roi.order_sn = ro.order_sn
-            INNER JOIN po_item_facts pif ON pif.item_id = roi.order_item_id
-            WHERE ro.create_time IS NOT NULL
-              AND ro.create_time &lt;= #{query.asOf}
-            GROUP BY ro.id, ro.order_sn, pif.order_sn, pif.sku, ro.create_time, ro.create_realname
-        ),
-        receipt_summary AS (
-            SELECT
-                rf.order_sn,
-                COUNT(DISTINCT rf.receipt_id) AS receipt_count,
-                GROUP_CONCAT(DISTINCT rf.receipt_sn ORDER BY rf.created_at, rf.receipt_id SEPARATOR '||') AS receipt_sns,
-                MIN(rf.created_at) AS first_receipt_at
-            FROM receipt_facts rf
-            GROUP BY rf.order_sn
-        ),
-        /* PO×SKU 维度 CR 收货汇总：PO 详情按单个 SKU 限定时的 CR 单号/单量。与 PO 整单的
-           receipt_summary 不同，这里只统计含该 SKU 明细行的收货单，避免共享 PO 其他 SKU 的
-           CR 单被带入。 */
-        order_sku_receipt_summary AS (
-            SELECT
-                pif.order_sn,
-                pif.sku,
-                COUNT(DISTINCT ro.id) AS receipt_count,
-                GROUP_CONCAT(DISTINCT ro.order_sn ORDER BY ro.create_time, ro.id SEPARATOR '||') AS receipt_sns
-            FROM po_item_facts pif
-            INNER JOIN lx_receipt_order_item roi ON roi.order_item_id = pif.item_id
-            INNER JOIN lx_receipt_order ro ON ro.order_sn = roi.order_sn
-            WHERE ro.create_time IS NOT NULL
-              AND ro.create_time &lt;= #{query.asOf}
-            GROUP BY pif.order_sn, pif.sku
-        ),
-        /* PP×PO 维度 CR 收货汇总：PO 详情按 PP×PO 关联 SKU 限定时的 CR 单号/单量。口径与
-           pp_po_item_totals 一致，只统计本 PP 关联 SKU 明细行对应的收货单。 */
-        pp_po_receipt_summary AS (
-            SELECT
-                rs.plan_sn,
-                rs.order_sn,
-                COUNT(DISTINCT ro.id) AS receipt_count,
-                GROUP_CONCAT(DISTINCT ro.order_sn ORDER BY ro.create_time, ro.id SEPARATOR '||') AS receipt_sns
-            FROM relation_skus rs
-            INNER JOIN po_item_facts pif
-                    ON pif.order_sn = rs.order_sn
-                   AND pif.sku &lt;=&gt; rs.sku
-            INNER JOIN lx_receipt_order_item roi ON roi.order_item_id = pif.item_id
-            INNER JOIN lx_receipt_order ro ON ro.order_sn = roi.order_sn
-            WHERE ro.create_time IS NOT NULL
-              AND ro.create_time &lt;= #{query.asOf}
-            GROUP BY rs.plan_sn, rs.order_sn
-        ),
-        valid_ib_items AS (
-            SELECT
-                ib.id AS inbound_id,
-                ib.order_sn AS inbound_sn,
-                poi.order_sn,
-                poi.item_id AS purchase_item_id,
-                ib.create_time AS created_at,
-                COALESCE(ib.create_realname, ib.opt_realname) AS operator_name,
-                ibi.product_total AS inbound_qty
-            FROM lx_inbound_order ib
-            INNER JOIN lx_inbound_order_item ibi ON ibi.order_sn = ib.order_sn
-            INNER JOIN po_item_facts poi
-                    ON poi.item_id = ibi.purchase_item_id
-                   AND poi.order_sn = ib.purchase_order_sn
-            WHERE <include refid="validInboundCondition"/>
-        ),
-        ib_per_document AS (
-            SELECT
-                vii.inbound_id,
-                vii.inbound_sn,
-                vii.order_sn,
-                vii.created_at,
-                MAX(vii.operator_name) AS operator_name,
-                SUM(vii.inbound_qty) AS inbound_qty
-            FROM valid_ib_items vii
-            GROUP BY vii.inbound_id, vii.inbound_sn, vii.order_sn, vii.created_at
-        ),
-        ib_running AS (
-            SELECT
-                ibd.*,
-                SUM(ibd.inbound_qty) OVER (
-                    PARTITION BY ibd.order_sn
-                    ORDER BY ibd.created_at, ibd.inbound_id, ibd.inbound_sn
-                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                ) AS cumulative_qty
-            FROM ib_per_document ibd
-        ),
-        ib_progress AS (
-            SELECT
-                ibr.inbound_id,
-                ibr.inbound_sn,
-                ibr.order_sn,
-                ibr.created_at,
-                ibr.operator_name,
-                ibr.inbound_qty,
-                ibr.cumulative_qty
-            FROM ib_running ibr
-        ),
+        /* PP×PO 维度数量：PP 详情「关联 PO」的采购数量（SKU 合并口径）。 */
         /*
-          达标判定下沉到 PO×SKU（采购明细行）粒度：每条明细行按自身 quantity_real 与自身
-          累计有效入库(product_total)比较，避免跨 SKU 的 PO 总量互相抹平。PO 在其全部有效
-          明细行均入库达标后才视为完成，completionAt 取最后一行达标时间；quantity_real≤0 的
-          行视为无需入库，不阻塞完成。
+          PP 维度达标：按 relation_skus 的 SKU（PP×PO×SKU）计数，正数量 SKU 为相关行，
+          其中已达标的为完成行。达成率与达标/完成都按 relation_skus 的 SKU 算，不按 PO 整单。
         */
-        ib_per_document_sku AS (
-            SELECT
-                vii.order_sn,
-                vii.purchase_item_id,
-                vii.inbound_id,
-                vii.inbound_sn,
-                vii.created_at,
-                SUM(vii.inbound_qty) AS inbound_qty
-            FROM valid_ib_items vii
-            GROUP BY vii.order_sn, vii.purchase_item_id, vii.inbound_id, vii.inbound_sn, vii.created_at
-        ),
-        ib_sku_running AS (
-            SELECT
-                idsk.*,
-                GREATEST(COALESCE(pif.quantity_real, 0), 0) AS line_qty,
-                SUM(idsk.inbound_qty) OVER (
-                    PARTITION BY idsk.purchase_item_id
-                    ORDER BY idsk.created_at, idsk.inbound_id, idsk.inbound_sn
-                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                ) AS line_cumulative_qty
-            FROM ib_per_document_sku idsk
-            INNER JOIN po_item_facts pif ON pif.item_id = idsk.purchase_item_id
-        ),
-        sku_completion AS (
-            SELECT
-                isr.purchase_item_id,
-                MIN(CASE WHEN isr.line_qty &gt; 0 AND isr.line_cumulative_qty &gt;= isr.line_qty
-                         THEN isr.created_at END) AS sku_completion_at,
-                SUBSTRING_INDEX(
-                    GROUP_CONCAT(
-                        CASE WHEN isr.line_qty &gt; 0 AND isr.line_cumulative_qty &gt;= isr.line_qty
-                             THEN isr.inbound_sn END
-                        ORDER BY isr.created_at, isr.inbound_id, isr.inbound_sn SEPARATOR '||'
-                    ), '||', 1
-                ) AS sku_completion_inbound_sn
-            FROM ib_sku_running isr
-            GROUP BY isr.purchase_item_id
-        ),
-        /*
-          PO×SKU 粒度达标：供 findOrderSkuLines 的"达标IB"列使用。与上面的 sku_completion
-          （按采购明细行 purchase_item_id）不同，这里按 (order_sn, sku) 聚合，取该 SKU 累计
-          有效入库首次达到其 quantity_real 合计的那张入库单；quantity_real≤0 的 SKU 不判达标。
-        */
-        order_sku_running AS (
-            SELECT
-                idsk.order_sn,
-                idsk.sku,
-                idsk.inbound_id,
-                idsk.inbound_sn,
-                idsk.created_at,
-                idsk.inbound_qty,
-                SUM(idsk.inbound_qty) OVER (
-                    PARTITION BY idsk.order_sn, idsk.sku
-                    ORDER BY idsk.created_at, idsk.inbound_id, idsk.inbound_sn
-                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                ) AS cumulative_qty
-            FROM (
-                SELECT
-                    vii.order_sn,
-                    pif.sku,
-                    vii.inbound_id,
-                    vii.inbound_sn,
-                    vii.created_at,
-                    SUM(vii.inbound_qty) AS inbound_qty
-                FROM valid_ib_items vii
-                INNER JOIN po_item_facts pif ON pif.item_id = vii.purchase_item_id
-                GROUP BY vii.order_sn, pif.sku, vii.inbound_id, vii.inbound_sn, vii.created_at
-            ) idsk
-        ),
-        order_sku_target AS (
-            SELECT
-                pif.order_sn,
-                pif.sku,
-                SUM(GREATEST(COALESCE(pif.quantity_real, 0), 0)) AS line_qty
-            FROM po_item_facts pif
-            GROUP BY pif.order_sn, pif.sku
-        ),
-        order_sku_completion AS (
-            SELECT
-                osr.order_sn,
-                osr.sku,
-                MIN(CASE WHEN ost.line_qty &gt; 0 AND osr.cumulative_qty &gt;= ost.line_qty
-                         THEN osr.created_at END) AS sku_completion_at,
-                SUBSTRING_INDEX(
-                    GROUP_CONCAT(
-                        CASE WHEN ost.line_qty &gt; 0 AND osr.cumulative_qty &gt;= ost.line_qty
-                             THEN osr.inbound_sn END
-                        ORDER BY osr.created_at, osr.inbound_id, osr.inbound_sn SEPARATOR '||'
-                    ), '||', 1
-                ) AS sku_completion_inbound_sn
-            FROM order_sku_running osr
-            INNER JOIN order_sku_target ost
-                    ON ost.order_sn = osr.order_sn
-                   AND ost.sku &lt;=&gt; osr.sku
-            GROUP BY osr.order_sn, osr.sku
-        ),
-        po_completion AS (
-            SELECT
-                pif.order_sn,
-                CASE
-                    WHEN COUNT(DISTINCT CASE WHEN GREATEST(COALESCE(pif.quantity_real, 0), 0) &gt; 0
-                                            THEN pif.item_id END) &gt; 0
-                     AND COUNT(DISTINCT CASE WHEN GREATEST(COALESCE(pif.quantity_real, 0), 0) &gt; 0
-                                            THEN pif.item_id END)
-                        = COUNT(DISTINCT CASE WHEN sc.sku_completion_at IS NOT NULL THEN sc.purchase_item_id END)
-                    THEN MAX(sc.sku_completion_at)
-                END AS completion_at,
-                CASE
-                    WHEN COUNT(DISTINCT CASE WHEN GREATEST(COALESCE(pif.quantity_real, 0), 0) &gt; 0
-                                            THEN pif.item_id END) &gt; 0
-                     AND COUNT(DISTINCT CASE WHEN GREATEST(COALESCE(pif.quantity_real, 0), 0) &gt; 0
-                                            THEN pif.item_id END)
-                        = COUNT(DISTINCT CASE WHEN sc.sku_completion_at IS NOT NULL THEN sc.purchase_item_id END)
-                    THEN SUBSTRING_INDEX(
-                        GROUP_CONCAT(sc.sku_completion_inbound_sn
-                            ORDER BY sc.sku_completion_at DESC, sc.purchase_item_id SEPARATOR '||'),
-                        '||', 1
-                    )
-                END AS completion_inbound_sn
-            FROM po_item_facts pif
-            LEFT JOIN sku_completion sc ON sc.purchase_item_id = pif.item_id
-            GROUP BY pif.order_sn
-        ),
-        po_ib_summary AS (
-            SELECT
-                ip.order_sn,
-                COUNT(*) AS inbound_count,
-                GROUP_CONCAT(ip.inbound_sn ORDER BY ip.created_at, ip.inbound_id SEPARATOR '||') AS inbound_sns,
-                MAX(ip.cumulative_qty) AS valid_inbound_qty,
-                pc.completion_at,
-                pc.completion_inbound_sn
-            FROM ib_progress ip
-            LEFT JOIN po_completion pc ON pc.order_sn = ip.order_sn
-            GROUP BY ip.order_sn, pc.completion_at, pc.completion_inbound_sn
-        ),
         pp_sku_completion AS (
             SELECT
                 rs.plan_sn,
-                COUNT(DISTINCT CASE WHEN GREATEST(COALESCE(pif.quantity_real, 0), 0) &gt; 0
-                                    THEN pif.item_id END) AS related_sku_line_count,
-                COUNT(DISTINCT CASE WHEN GREATEST(COALESCE(pif.quantity_real, 0), 0) &gt; 0
-                                         AND sc.sku_completion_at IS NOT NULL
-                                    THEN pif.item_id END) AS completed_sku_line_count
+                COUNT(CASE WHEN psf.line_qty &gt; 0 THEN 1 END) AS related_sku_line_count,
+                COUNT(CASE WHEN psf.line_qty &gt; 0 AND psf.completion_at IS NOT NULL THEN 1 END) AS completed_sku_line_count
             FROM relation_skus rs
-            INNER JOIN po_item_facts pif
-                    ON pif.order_sn = rs.order_sn
-                   AND pif.sku &lt;=&gt; rs.sku
-            LEFT JOIN sku_completion sc ON sc.purchase_item_id = pif.item_id
+            INNER JOIN po_sku_facts psf
+                    ON psf.order_sn = rs.order_sn
+                   AND psf.sku &lt;=&gt; rs.sku
             GROUP BY rs.plan_sn
         ),
-        /*
-          PP×PO 维度达标：PP 详情「关联 PO」的达标IB。与 po_completion（PO 整单）不同，这里
-          按单个 PP 在某 PO 关联的 SKU 判定——共享 PO 时只受本 PP 关联 SKU 影响，不被其他
-          PP 的 SKU 阻塞；判定口径与 pp_sku_completion 一致，只是细到 PO。
-        */
-        pp_po_sku_completion AS (
-            SELECT
-                rs.plan_sn,
-                rs.order_sn,
-                CASE
-                    WHEN COUNT(DISTINCT CASE WHEN GREATEST(COALESCE(pif.quantity_real, 0), 0) &gt; 0
-                                            THEN pif.item_id END) &gt; 0
-                     AND COUNT(DISTINCT CASE WHEN GREATEST(COALESCE(pif.quantity_real, 0), 0) &gt; 0
-                                            THEN pif.item_id END)
-                        = COUNT(DISTINCT CASE WHEN sc.sku_completion_at IS NOT NULL THEN sc.purchase_item_id END)
-                    THEN MAX(sc.sku_completion_at)
-                END AS completion_at,
-                CASE
-                    WHEN COUNT(DISTINCT CASE WHEN GREATEST(COALESCE(pif.quantity_real, 0), 0) &gt; 0
-                                            THEN pif.item_id END) &gt; 0
-                     AND COUNT(DISTINCT CASE WHEN GREATEST(COALESCE(pif.quantity_real, 0), 0) &gt; 0
-                                            THEN pif.item_id END)
-                        = COUNT(DISTINCT CASE WHEN sc.sku_completion_at IS NOT NULL THEN sc.purchase_item_id END)
-                    THEN SUBSTRING_INDEX(
-                        GROUP_CONCAT(sc.sku_completion_inbound_sn
-                            ORDER BY sc.sku_completion_at DESC, sc.purchase_item_id SEPARATOR '||'),
-                        '||', 1
-                    )
-                END AS completion_inbound_sn
-            FROM relation_skus rs
-            INNER JOIN po_item_facts pif
-                    ON pif.order_sn = rs.order_sn
-                   AND pif.sku &lt;=&gt; rs.sku
-            LEFT JOIN sku_completion sc ON sc.purchase_item_id = pif.item_id
-            GROUP BY rs.plan_sn, rs.order_sn
-        ),
-        /*
-          PP×PO 维度数量：PP 详情「关联 PO」的采购数量与累计有效入库。共享 PO 时只统计本
-          PP 关联 SKU，不把其他 PP 的 SKU 数量并入；口径与 pp_po_sku_completion 一致。
-        */
-        pp_po_item_totals AS (
-            SELECT
-                rs.plan_sn,
-                rs.order_sn,
-                SUM(GREATEST(COALESCE(pif.quantity_real, 0), 0)) AS purchase_qty
-            FROM relation_skus rs
-            INNER JOIN po_item_facts pif
-                    ON pif.order_sn = rs.order_sn
-                   AND pif.sku &lt;=&gt; rs.sku
-            GROUP BY rs.plan_sn, rs.order_sn
-        ),
-        pp_po_inbound_totals AS (
-            SELECT
-                rs.plan_sn,
-                rs.order_sn,
-                SUM(vii.inbound_qty) AS valid_inbound_qty
-            FROM relation_skus rs
-            INNER JOIN po_item_facts pif
-                    ON pif.order_sn = rs.order_sn
-                   AND pif.sku &lt;=&gt; rs.sku
-            INNER JOIN valid_ib_items vii ON vii.purchase_item_id = pif.item_id
-            GROUP BY rs.plan_sn, rs.order_sn
-        ),
-        /* PO×SKU 有效 IB 汇总：供 PO 详情按单个 SKU 限定时的单量/单号列表。 */
-        order_sku_ib_summary AS (
-            SELECT
-                osr.order_sn,
-                osr.sku,
-                COUNT(DISTINCT osr.inbound_id) AS inbound_count,
-                GROUP_CONCAT(DISTINCT osr.inbound_sn
-                    ORDER BY osr.created_at, osr.inbound_id SEPARATOR '||') AS inbound_sns,
-                SUM(osr.inbound_qty) AS valid_inbound_qty
-            FROM order_sku_running osr
-            GROUP BY osr.order_sn, osr.sku
-        ),
-        /* PP×PO 有效 IB 汇总：供 PO 详情按 PP×PO 关联 SKU 限定时的单号列表。 */
-        pp_po_ib_summary AS (
-            SELECT
-                rs.plan_sn,
-                rs.order_sn,
-                COUNT(DISTINCT vii.inbound_id) AS inbound_count,
-                GROUP_CONCAT(DISTINCT vii.inbound_sn
-                    ORDER BY vii.created_at, vii.inbound_id SEPARATOR '||') AS inbound_sns
-            FROM relation_skus rs
-            INNER JOIN po_item_facts pif
-                    ON pif.order_sn = rs.order_sn
-                   AND pif.sku &lt;=&gt; rs.sku
-            INNER JOIN valid_ib_items vii ON vii.purchase_item_id = pif.item_id
-            GROUP BY rs.plan_sn, rs.order_sn
-        ),
-        /* PP×PO 有效 IB 入库流水：按 PP×PO 关联 SKU 聚合成每张入库单，累计口径同样限定在
-           该 PP 关联 SKU 范围内。供 PO 详情（PP×PO 模式）的入库明细与时间线使用。 */
-        pp_po_ib_running AS (
-            SELECT
-                per_doc.plan_sn,
-                per_doc.order_sn,
-                per_doc.inbound_id,
-                per_doc.inbound_sn,
-                per_doc.created_at,
-                per_doc.inbound_qty,
-                SUM(per_doc.inbound_qty) OVER (
-                    PARTITION BY per_doc.plan_sn, per_doc.order_sn
-                    ORDER BY per_doc.created_at, per_doc.inbound_id, per_doc.inbound_sn
-                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                ) AS cumulative_qty
-            FROM (
-                SELECT
-                    rs.plan_sn,
-                    rs.order_sn,
-                    vii.inbound_id,
-                    vii.inbound_sn,
-                    vii.created_at,
-                    SUM(vii.inbound_qty) AS inbound_qty
-                FROM relation_skus rs
-                INNER JOIN po_item_facts pif
-                        ON pif.order_sn = rs.order_sn
-                       AND pif.sku &lt;=&gt; rs.sku
-                INNER JOIN valid_ib_items vii ON vii.purchase_item_id = pif.item_id
-                GROUP BY rs.plan_sn, rs.order_sn, vii.inbound_id, vii.inbound_sn, vii.created_at
-            ) per_doc
-        ),
-        po_facts_raw AS (
-            SELECT
-                po.id AS order_id,
-                po.order_sn,
-                pi.skus,
-                pi.product_names,
-                po.status,
-                po.status_text,
-                po.supplier_name AS supplier,
-                po.ware_house_name AS warehouse,
-                po.opt_realname AS buyer,
-                po.settlement_method,
-                CASE
-                    WHEN po.settlement_method = 7 THEN 'SPOT'
-                    WHEN po.settlement_method = 8 THEN 'MONTHLY'
-                    ELSE 'OTHER'
-                END AS settlement_type,
-                CASE WHEN NULLIF(TRIM(po.alibaba_order_sn), '') IS NOT NULL THEN '1688' ELSE 'NORMAL' END AS source_type,
-                po.create_time AS created_at,
-                po.auditor_time AS approval_at,
-                psl.sent_log_id,
-                psl.sent_at,
-                psl.sent_operator,
-                pi.purchase_qty,
-                COALESCE(rs.receipt_sns, '') AS receipt_sns,
-                COALESCE(rs.receipt_count, 0) AS receipt_count,
-                rs.first_receipt_at,
-                COALESCE(pis.inbound_sns, '') AS inbound_sns,
-                COALESCE(pis.inbound_count, 0) AS inbound_count,
-                COALESCE(pis.valid_inbound_qty, 0) AS valid_inbound_qty,
-                pis.completion_inbound_sn,
-                pis.completion_at,
-                CASE
-                    WHEN psl.sent_at IS NULL THEN NULL
-                    ELSE TIMESTAMPDIFF(HOUR, psl.sent_at, COALESCE(pis.completion_at, #{query.asOf}))
-                END AS delivery_hours
-            FROM valid_po po
-            LEFT JOIN po_sent_log psl ON psl.order_sn = po.order_sn
-            LEFT JOIN po_items pi ON pi.order_sn = po.order_sn
-            LEFT JOIN receipt_summary rs ON rs.order_sn = po.order_sn
-            LEFT JOIN po_ib_summary pis ON pis.order_sn = po.order_sn
-        ),
-        po_facts AS (
-            SELECT
-                pofr.*,
-                CASE
-                    WHEN pofr.sent_at IS NULL THEN 'PENDING'
-                    WHEN pofr.completion_at IS NOT NULL
-                         AND pofr.completion_at &lt;= DATE_ADD(pofr.sent_at, INTERVAL 360 HOUR)
-                        THEN 'COMPLETED_WITHIN_SLA'
-                    WHEN pofr.completion_at IS NOT NULL THEN 'COMPLETED_OVER_SLA'
-                    WHEN #{query.asOf} &gt;= DATE_ADD(pofr.sent_at, INTERVAL 360 HOUR) THEN 'IN_TRANSIT_OVERDUE'
-                    ELSE 'IN_TRANSIT'
-                END AS delivery_status,
-                CASE
-                    WHEN pofr.completion_at IS NOT NULL THEN 'COMPLETED'
-                    WHEN pofr.inbound_count &gt; 0 AND pofr.completion_at IS NULL THEN 'IB_CREATE'
-                    WHEN pofr.receipt_count &gt; 0 AND pofr.inbound_count = 0 THEN 'CR_RECEIPT'
-                    WHEN pofr.status = 3 THEN 'PO_CREATE'
-                    WHEN pofr.status = 121 THEN 'PO_APPROVAL'
-                    WHEN pofr.status = 1 THEN 'SUPPLIER_SENT'
-                    WHEN pofr.sent_at IS NOT NULL
-                         AND pofr.settlement_method = 7
-                         AND pofr.receipt_count = 0
-                        THEN 'FINANCE_PAYMENT'
-                    ELSE CAST(NULL AS CHAR)
-                END AS current_node,
-                CASE
-                    WHEN pofr.completion_at IS NOT NULL THEN 9
-                    WHEN pofr.inbound_count &gt; 0 AND pofr.completion_at IS NULL THEN 8
-                    WHEN pofr.receipt_count &gt; 0 AND pofr.inbound_count = 0 THEN 7
-                    WHEN pofr.status = 3 THEN 3
-                    WHEN pofr.status = 121 THEN 4
-                    WHEN pofr.status = 1 THEN 5
-                    WHEN pofr.sent_at IS NOT NULL
-                         AND pofr.settlement_method = 7
-                         AND pofr.receipt_count = 0
-                        THEN 6
-                    ELSE CAST(NULL AS SIGNED)
-                END AS node_rank
-            FROM po_facts_raw pofr
-        ),
         /* 原始数据不包含 PP 分摊数量，所有分摊字段固定为不可用。 */
-        plan_order_allocation AS (
-            SELECT
-                rel.plan_sn,
-                rel.order_sn,
-                0 AS allocation_available,
-                CAST(NULL AS SIGNED) AS allocated_qty,
-                CAST(NULL AS SIGNED) AS inbound_qty
-            FROM relation_orders rel
-        ),
         plan_allocation AS (
             SELECT
                 rel.plan_sn,
@@ -767,27 +354,61 @@
             FROM relation_orders rel
             GROUP BY rel.plan_sn
         ),
-        order_allocation AS (
-            SELECT
-                rel.order_sn,
-                COUNT(DISTINCT rel.plan_sn) AS related_plan_count,
-                0 AS allocation_available,
-                CAST(NULL AS SIGNED) AS allocated_qty
-            FROM relation_orders rel
-            GROUP BY rel.order_sn
-        ),
         plan_item_totals AS (
             SELECT
                 rs.plan_sn,
-                SUM(pif.quantity_real) AS purchase_qty,
-                SUM(pif.quantity_entry) AS inbound_qty,
-                SUM(COALESCE(pif.quantity_return, 0)) AS returned_qty,
-                SUM(COALESCE(pif.quantity_exchange, 0)) AS exchange_qty
+                SUM(pdf.quantity_real) AS purchase_qty,
+                SUM(pdf.quantity_entry) AS inbound_qty,
+                SUM(COALESCE(pdf.quantity_return, 0)) AS returned_qty,
+                SUM(COALESCE(pdf.quantity_exchange, 0)) AS exchange_qty
             FROM relation_skus rs
-            INNER JOIN po_item_facts pif
-                    ON pif.order_sn = rs.order_sn
-                   AND pif.sku &lt;=&gt; rs.sku
+            INNER JOIN po_delivery_facts pdf
+                    ON pdf.order_sn = rs.order_sn
+                   AND NULLIF(TRIM(pdf.sku), '') &lt;=&gt; rs.sku
             GROUP BY rs.plan_sn
+        ),
+        /*
+          列表（主记录）专用 PO 事实：收货/入库「有无」与单号列表直接取自宽表
+          po_delivery_facts（快照口径，最多滞后一个同步周期），不再扫
+          lx_receipt_order / lx_inbound_order。列表只把单号用于关键字 LIKE、把「有无」
+          用于节点判定，宽表逗号分隔单号与布尔即可满足，无需 '||' 契约与精确单量。
+        */
+        po_facts_raw_lite AS (
+            SELECT
+                pia.order_id,
+                pia.order_sn,
+                pia.skus,
+                pia.product_names,
+                pia.status,
+                pia.status_text,
+                pia.supplier,
+                pia.warehouse,
+                pia.buyer,
+                pia.settlement_method,
+                CASE
+                    WHEN pia.settlement_method = 7 THEN 'SPOT'
+                    WHEN pia.settlement_method = 8 THEN 'MONTHLY'
+                    ELSE 'OTHER'
+                END AS settlement_type,
+                CASE WHEN NULLIF(TRIM(pia.alibaba_order_sn), '') IS NOT NULL THEN '1688' ELSE 'NORMAL' END AS source_type,
+                pia.created_at,
+                pia.approval_at,
+                pia.sent_at,
+                COALESCE(pia.purchase_qty, 0) AS purchase_qty,
+                COALESCE(pia.receipt_sns, '') AS receipt_sns,
+                COALESCE(pia.inbound_sns, '') AS inbound_sns,
+                COALESCE(pia.has_receipt, 0) AS has_receipt,
+                COALESCE(pia.has_inbound, 0) AS has_inbound,
+                pc.completion_inbound_sn,
+                pc.completion_at
+            FROM po_item_agg pia
+            LEFT JOIN po_completion pc ON pc.order_sn = pia.order_sn
+        ),
+        po_facts_lite AS (
+            SELECT
+                pofr.*,
+                <include refid="poFactsDerivedColumns"/>
+            FROM po_facts_raw_lite pofr
         ),
         plan_rollup AS (
             SELECT
@@ -810,8 +431,6 @@
                 GROUP_CONCAT(DISTINCT NULLIF(TRIM(pof.supplier), '') ORDER BY pof.supplier SEPARATOR '||') AS suppliers,
                 GROUP_CONCAT(DISTINCT NULLIF(TRIM(pof.warehouse), '') ORDER BY pof.warehouse SEPARATOR '||') AS warehouses,
                 GROUP_CONCAT(DISTINCT NULLIF(TRIM(pof.skus), '') ORDER BY pof.skus SEPARATOR '||') AS related_skus,
-                GROUP_CONCAT(DISTINCT NULLIF(TRIM(pof.receipt_sns), '') ORDER BY pof.receipt_sns SEPARATOR '||') AS receipt_sns,
-                GROUP_CONCAT(DISTINCT NULLIF(TRIM(pof.inbound_sns), '') ORDER BY pof.inbound_sns SEPARATOR '||') AS inbound_sns,
                 MAX(pof.created_at) AS last_po_created_at,
                 MIN(pof.sent_at) AS first_sent_at,
                 TIMESTAMPDIFF(HOUR, pp.create_time, COALESCE(MAX(pof.created_at), #{query.asOf})) AS order_lead_hours,
@@ -834,7 +453,7 @@
                 MAX(pa.inbound_qty) AS allocated_inbound_qty
             FROM valid_pp pp
             LEFT JOIN relation_orders rel ON rel.plan_sn = pp.plan_sn
-            LEFT JOIN po_facts pof ON pof.order_sn = rel.order_sn
+            LEFT JOIN po_facts_lite pof ON pof.order_sn = rel.order_sn
             LEFT JOIN plan_item_totals ppt ON ppt.plan_sn = pp.plan_sn
             LEFT JOIN plan_allocation pa ON pa.plan_sn = pp.plan_sn
             GROUP BY pp.plan_sn, pp.product_name, pp.sku, pp.status_text, pp.approval_status,
@@ -899,12 +518,17 @@
                 END AS achievement_rate
             FROM plan_rollup pr
             LEFT JOIN pp_sku_completion psc ON psc.plan_sn = pr.plan_sn
-        ),
-        filtered_relation_orders AS (
+        )
+    </sql>
+
+    <!-- 订单级过滤（keyword / buyer / supplier / warehouse / deliveryStatus / risk）用的
+         PO 粒度收窄：仅当对应过滤存在时才按需 include，避免列表查询带用不上的子查询。 -->
+    <sql id="filteredRelationOrdersCte">
+        , filtered_relation_orders AS (
             SELECT DISTINCT rel.plan_sn, rel.order_sn
             FROM relation_orders rel
             INNER JOIN valid_pp pp ON pp.plan_sn = rel.plan_sn
-            INNER JOIN po_facts pof ON pof.order_sn = rel.order_sn
+            INNER JOIN po_facts_lite pof ON pof.order_sn = rel.order_sn
             WHERE 1 = 1
             <if test="query.keyword != null and query.keyword != ''">
               AND (
@@ -932,8 +556,12 @@
             <if test="query.deliveryStatus != null and query.deliveryStatus != ''">
               AND pof.delivery_status = #{query.deliveryStatus}
             </if>
-        ),
-        filtered_plan_projection AS (
+        )
+    </sql>
+
+    <!-- 订单级过滤时，PP 列表投影收窄到命中订单后的重新聚合（仅 findPage 需要）。 -->
+    <sql id="filteredPlanProjectionCte">
+        , filtered_plan_projection AS (
             SELECT
                 fro.plan_sn,
                 COUNT(DISTINCT pof.order_sn) AS related_order_count,
@@ -942,8 +570,326 @@
                 GROUP_CONCAT(DISTINCT NULLIF(TRIM(pof.supplier), '') ORDER BY pof.supplier SEPARATOR '||') AS suppliers,
                 GROUP_CONCAT(DISTINCT NULLIF(TRIM(pof.warehouse), '') ORDER BY pof.warehouse SEPARATOR '||') AS warehouses
             FROM filtered_relation_orders fro
-            INNER JOIN po_facts pof ON pof.order_sn = fro.order_sn
+            INNER JOIN po_facts_lite pof ON pof.order_sn = fro.order_sn
             GROUP BY fro.plan_sn
+        )
+    </sql>
+
+    <!-- 详情类查询（findOrders / findOrderSkuLines / findOrder / findInboundFacts /
+         findOrderTimeline / findPlanTimeline）在 analysisCtes 基础上追加的 CTE。
+         这里承载两类「仅详情需要」的事实：① 原始表收货/入库 CTE（receipt_facts /
+         receipt_summary / valid_ib_items / ib_per_document / po_ib_sn_summary），
+         用于 '||' 分隔单号与精确单量；② 实时口径的 po_facts_raw / po_facts
+         （在列表快照口径 po_facts_lite 之上，再连接原始表取精确单量与实时节点）。
+         列表主查询（count / findPage / summary / findPlan）不引用这些。 -->
+    <sql id="orderDetailCtes">
+        /* valid_po：详情专用「有效 PO」。列表不再 JOIN lx_purchase_order（PO 头读宽表），
+           详情仍读原始表保持实时口径；planSn/orderSn 收窄在入口落地。 */
+        , valid_po AS (
+            SELECT po.*
+            FROM lx_purchase_order po
+            WHERE po.status NOT IN (-1, 124)
+              AND po.create_time IS NOT NULL
+              AND po.create_time &lt;= #{query.asOf}
+            <if test="_parameter.containsKey('planSn') and planSn != null and planSn != ''">
+              AND EXISTS (
+                  SELECT 1
+                  FROM lx_pp_po_sku_ass ass
+                  WHERE ass.order_sn = po.order_sn
+                    AND ass.plan_sn = #{planSn}
+              )
+            </if>
+            <if test="_parameter.containsKey('orderSn') and orderSn != null and orderSn != ''">
+              AND po.order_sn = #{orderSn}
+            </if>
+        ),
+        po_sent_log_ranked AS (
+            SELECT
+                po.order_sn,
+                bl.id AS sent_log_id,
+                bl.ol_time AS sent_at,
+                bl.realname AS sent_operator,
+                ROW_NUMBER() OVER (
+                    PARTITION BY po.order_sn
+                    ORDER BY bl.ol_time ASC, bl.id ASC
+                ) AS rn
+            FROM valid_po po
+            INNER JOIN lx_business_log bl
+                    ON bl.business_id = CONCAT('1_', po.order_sn)
+            WHERE bl.ol_type_text = '下单'
+              AND bl.ol_time IS NOT NULL
+              AND bl.ol_time &lt;= #{query.asOf}
+        ),
+        po_sent_log AS (
+            SELECT order_sn, sent_log_id, sent_at, sent_operator
+            FROM po_sent_log_ranked
+            WHERE rn = 1
+        ),
+        /*
+          CR 收货事实（PO 级，原始表）：按宽表口径改用 (business_order_sn, sku) 关联，
+          供详情页与时间线取 '||' 分隔收货单号 / 精确单量。
+        */
+        receipt_facts AS (
+            SELECT
+                ro.id AS receipt_id,
+                ro.order_sn AS receipt_sn,
+                ro.business_order_sn AS order_sn,
+                ro.create_time AS created_at,
+                ro.create_realname AS operator_name,
+                SUM(GREATEST(COALESCE(roi.product_receive_num, 0), 0)) AS receipt_qty
+            FROM lx_receipt_order ro
+            INNER JOIN lx_receipt_order_item roi ON roi.order_sn = ro.order_sn
+            WHERE ro.create_time IS NOT NULL
+              AND ro.create_time &lt;= #{query.asOf}
+            GROUP BY ro.id, ro.order_sn, ro.business_order_sn, ro.create_time, ro.create_realname
+        ),
+        receipt_summary AS (
+            SELECT
+                rf.order_sn,
+                COUNT(DISTINCT rf.receipt_id) AS receipt_count,
+                GROUP_CONCAT(DISTINCT rf.receipt_sn ORDER BY rf.created_at, rf.receipt_id SEPARATOR '||') AS receipt_sns,
+                MIN(rf.created_at) AS first_receipt_at
+            FROM receipt_facts rf
+            GROUP BY rf.order_sn
+        ),
+        receipt_sku_facts AS (
+            SELECT
+                ro.id AS receipt_id,
+                ro.order_sn AS receipt_sn,
+                ro.business_order_sn AS order_sn,
+                NULLIF(TRIM(roi.sku), '') AS sku,
+                ro.create_time AS created_at,
+                ro.create_realname AS operator_name,
+                SUM(GREATEST(COALESCE(roi.product_receive_num, 0), 0)) AS receipt_qty
+            FROM lx_receipt_order ro
+            INNER JOIN lx_receipt_order_item roi ON roi.order_sn = ro.order_sn
+            WHERE ro.create_time IS NOT NULL
+              AND ro.create_time &lt;= #{query.asOf}
+            GROUP BY ro.id, ro.order_sn, ro.business_order_sn, NULLIF(TRIM(roi.sku), ''), ro.create_time, ro.create_realname
+        ),
+        /* PO×SKU 维度 CR 收货汇总：PO 详情按单个 SKU 限定时的 CR 单号/单量。 */
+        order_sku_receipt_summary AS (
+            SELECT
+                rsf.order_sn,
+                rsf.sku,
+                COUNT(DISTINCT rsf.receipt_id) AS receipt_count,
+                GROUP_CONCAT(DISTINCT rsf.receipt_sn ORDER BY rsf.created_at, rsf.receipt_id SEPARATOR '||') AS receipt_sns,
+                SUM(rsf.receipt_qty) AS receipt_qty
+            FROM receipt_sku_facts rsf
+            GROUP BY rsf.order_sn, rsf.sku
+        ),
+        /* PP×PO 维度 CR 收货汇总：PO 详情按 PP×PO 关联 SKU 限定时的 CR 单号/单量。 */
+        pp_po_receipt_summary AS (
+            SELECT
+                rs.plan_sn,
+                rs.order_sn,
+                COUNT(DISTINCT rsf.receipt_id) AS receipt_count,
+                GROUP_CONCAT(DISTINCT rsf.receipt_sn ORDER BY rsf.created_at, rsf.receipt_id SEPARATOR '||') AS receipt_sns
+            FROM relation_skus rs
+            INNER JOIN receipt_sku_facts rsf
+                    ON rsf.order_sn = rs.order_sn
+                   AND rsf.sku &lt;=&gt; rs.sku
+            GROUP BY rs.plan_sn, rs.order_sn
+        ),
+        /*
+          有效 IB 明细（原始表）：白名单口径（status IN (20,40) + product_total≥0），
+          关联宽表取 (order_sn, sku)。这里仅用于详情页单号列表与逐单时间线。
+        */
+        valid_ib_items AS (
+            SELECT
+                ib.id AS inbound_id,
+                ib.order_sn AS inbound_sn,
+                pdf.order_sn,
+                ibi.purchase_item_id AS purchase_item_id,
+                NULLIF(TRIM(pdf.sku), '') AS sku,
+                ib.create_time AS created_at,
+                COALESCE(ib.create_realname, ib.opt_realname) AS operator_name,
+                ibi.product_total AS inbound_qty
+            FROM lx_inbound_order ib
+            INNER JOIN lx_inbound_order_item ibi ON ibi.order_sn = ib.order_sn
+            INNER JOIN po_delivery_facts pdf
+                    ON pdf.po_item_id = ibi.purchase_item_id
+                   AND pdf.order_sn = ib.purchase_order_sn
+            WHERE <include refid="validInboundCondition"/>
+        ),
+        ib_per_document AS (
+            SELECT
+                vii.inbound_id,
+                vii.inbound_sn,
+                vii.order_sn,
+                vii.created_at,
+                MAX(vii.operator_name) AS operator_name,
+                SUM(vii.inbound_qty) AS inbound_qty
+            FROM valid_ib_items vii
+            GROUP BY vii.inbound_id, vii.inbound_sn, vii.order_sn, vii.created_at
+        ),
+        /* PO 整单有效 IB 汇总（原始表）：单量、'||' 分隔单号、累计有效入库。 */
+        po_ib_sn_summary AS (
+            SELECT
+                ibd.order_sn,
+                COUNT(*) AS inbound_count,
+                GROUP_CONCAT(ibd.inbound_sn ORDER BY ibd.created_at, ibd.inbound_id SEPARATOR '||') AS inbound_sns,
+                SUM(ibd.inbound_qty) AS valid_inbound_qty
+            FROM ib_per_document ibd
+            GROUP BY ibd.order_sn
+        ),
+        /* PO×SKU 有效 IB 汇总：供 PO 详情按单个 SKU 限定时的单量/单号列表。 */
+        order_sku_ib_summary AS (
+            SELECT
+                per_doc.order_sn,
+                per_doc.sku,
+                COUNT(*) AS inbound_count,
+                GROUP_CONCAT(per_doc.inbound_sn ORDER BY per_doc.created_at, per_doc.inbound_id SEPARATOR '||') AS inbound_sns,
+                SUM(per_doc.inbound_qty) AS valid_inbound_qty
+            FROM (
+                SELECT
+                    vii.inbound_id,
+                    vii.inbound_sn,
+                    vii.order_sn,
+                    vii.sku,
+                    vii.created_at,
+                    SUM(vii.inbound_qty) AS inbound_qty
+                FROM valid_ib_items vii
+                GROUP BY vii.inbound_id, vii.inbound_sn, vii.order_sn, vii.sku, vii.created_at
+            ) per_doc
+            GROUP BY per_doc.order_sn, per_doc.sku
+        ),
+        /* PP×PO 有效 IB 汇总：供 PO 详情按 PP×PO 关联 SKU 限定时的单号列表。 */
+        pp_po_ib_summary AS (
+            SELECT
+                rs.plan_sn,
+                rs.order_sn,
+                COUNT(DISTINCT vii.inbound_id) AS inbound_count,
+                GROUP_CONCAT(DISTINCT vii.inbound_sn
+                    ORDER BY vii.created_at, vii.inbound_id SEPARATOR '||') AS inbound_sns
+            FROM relation_skus rs
+            INNER JOIN valid_ib_items vii
+                    ON vii.order_sn = rs.order_sn
+                   AND vii.sku &lt;=&gt; rs.sku
+            GROUP BY rs.plan_sn, rs.order_sn
+        ),
+        /* PP×PO 维度数量：PP 详情「关联 PO」的采购数量（SKU 合并口径）。 */
+        pp_po_item_totals AS (
+            SELECT
+                rs.plan_sn,
+                rs.order_sn,
+                SUM(psf.line_qty) AS purchase_qty
+            FROM relation_skus rs
+            INNER JOIN po_sku_facts psf
+                    ON psf.order_sn = rs.order_sn
+                   AND psf.sku &lt;=&gt; rs.sku
+            GROUP BY rs.plan_sn, rs.order_sn
+        ),
+        /* PP×PO 维度累计有效入库（白名单口径）。 */
+        pp_po_inbound_totals AS (
+            SELECT
+                rs.plan_sn,
+                rs.order_sn,
+                SUM(vii.inbound_qty) AS valid_inbound_qty
+            FROM relation_skus rs
+            INNER JOIN valid_ib_items vii
+                    ON vii.order_sn = rs.order_sn
+                   AND vii.sku &lt;=&gt; rs.sku
+            GROUP BY rs.plan_sn, rs.order_sn
+        ),
+        /*
+          PP×PO 维度达标：PP 详情「关联 PO」的达标IB。与 po_completion（PO 整单）不同，这里
+          按单个 PP 在某 PO 关联的 SKU 判定——共享 PO 时只受本 PP 关联 SKU 影响，不被其他
+          PP 的 SKU 阻塞；判定口径与 pp_sku_completion 一致，只是细到 PO。
+        */
+        pp_po_sku_completion AS (
+            SELECT
+                rs.plan_sn,
+                rs.order_sn,
+                CASE
+                    WHEN COUNT(CASE WHEN psf.line_qty &gt; 0 THEN 1 END) &gt; 0
+                     AND COUNT(CASE WHEN psf.line_qty &gt; 0 THEN 1 END)
+                        = COUNT(CASE WHEN psf.line_qty &gt; 0 AND psf.completion_at IS NOT NULL THEN 1 END)
+                    THEN MAX(psf.completion_at)
+                END AS completion_at,
+                CASE
+                    WHEN COUNT(CASE WHEN psf.line_qty &gt; 0 THEN 1 END) &gt; 0
+                     AND COUNT(CASE WHEN psf.line_qty &gt; 0 THEN 1 END)
+                        = COUNT(CASE WHEN psf.line_qty &gt; 0 AND psf.completion_at IS NOT NULL THEN 1 END)
+                    THEN SUBSTRING_INDEX(
+                        GROUP_CONCAT(psf.completion_inbound_sn
+                            ORDER BY psf.completion_at DESC, psf.sku SEPARATOR '||'),
+                        '||', 1
+                    )
+                END AS completion_inbound_sn
+            FROM relation_skus rs
+            INNER JOIN po_sku_facts psf
+                    ON psf.order_sn = rs.order_sn
+                   AND psf.sku &lt;=&gt; rs.sku
+            GROUP BY rs.plan_sn, rs.order_sn
+        ),
+        /* 原始数据不包含 PP 分摊数量，所有分摊字段固定为不可用。 */
+        plan_order_allocation AS (
+            SELECT
+                rel.plan_sn,
+                rel.order_sn,
+                0 AS allocation_available,
+                CAST(NULL AS SIGNED) AS allocated_qty,
+                CAST(NULL AS SIGNED) AS inbound_qty
+            FROM relation_orders rel
+        ),
+        order_allocation AS (
+            SELECT
+                rel.order_sn,
+                COUNT(DISTINCT rel.plan_sn) AS related_plan_count,
+                0 AS allocation_available,
+                CAST(NULL AS SIGNED) AS allocated_qty
+            FROM relation_orders rel
+            GROUP BY rel.order_sn
+        ),
+        /*
+          详情 PO 事实（实时口径）：收货/入库单量、'||' 分隔单号、有效入库累计仍读原始表
+          receipt_summary / po_ib_sn_summary，保证详情页单号可解析、单量精确、节点实时。
+          has_receipt / has_inbound 由精确单量推导，与列表宽表口径的布尔等价，供共用派生列。
+        */
+        po_facts_raw AS (
+            SELECT
+                po.id AS order_id,
+                po.order_sn,
+                pia.skus,
+                pia.product_names,
+                po.status,
+                po.status_text,
+                po.supplier_name AS supplier,
+                po.ware_house_name AS warehouse,
+                po.opt_realname AS buyer,
+                po.settlement_method,
+                CASE
+                    WHEN po.settlement_method = 7 THEN 'SPOT'
+                    WHEN po.settlement_method = 8 THEN 'MONTHLY'
+                    ELSE 'OTHER'
+                END AS settlement_type,
+                CASE WHEN NULLIF(TRIM(po.alibaba_order_sn), '') IS NOT NULL THEN '1688' ELSE 'NORMAL' END AS source_type,
+                po.create_time AS created_at,
+                po.auditor_time AS approval_at,
+                pia.sent_at,
+                COALESCE(pia.purchase_qty, 0) AS purchase_qty,
+                COALESCE(rs.receipt_sns, '') AS receipt_sns,
+                COALESCE(rs.receipt_count, 0) AS receipt_count,
+                CASE WHEN COALESCE(rs.receipt_count, 0) &gt; 0 THEN 1 ELSE 0 END AS has_receipt,
+                rs.first_receipt_at,
+                COALESCE(pis.inbound_sns, '') AS inbound_sns,
+                COALESCE(pis.inbound_count, 0) AS inbound_count,
+                CASE WHEN COALESCE(pis.inbound_count, 0) &gt; 0 THEN 1 ELSE 0 END AS has_inbound,
+                COALESCE(pis.valid_inbound_qty, 0) AS valid_inbound_qty,
+                pc.completion_inbound_sn,
+                pc.completion_at
+            FROM valid_po po
+            LEFT JOIN po_item_agg pia ON pia.order_sn = po.order_sn
+            LEFT JOIN receipt_summary rs ON rs.order_sn = po.order_sn
+            LEFT JOIN po_ib_sn_summary pis ON pis.order_sn = po.order_sn
+            LEFT JOIN po_completion pc ON pc.order_sn = po.order_sn
+        ),
+        po_facts AS (
+            SELECT
+                pofr.*,
+                <include refid="poFactsDerivedColumns"/>
+            FROM po_facts_raw pofr
         )
     </sql>
 
@@ -993,7 +939,7 @@
             AND EXISTS (
                 SELECT 1
                 FROM filtered_relation_orders risk_rel
-                INNER JOIN po_facts risk_po ON risk_po.order_sn = risk_rel.order_sn
+                INNER JOIN po_facts_lite risk_po ON risk_po.order_sn = risk_rel.order_sn
                 WHERE risk_rel.plan_sn = pf.plan_sn
                   AND risk_po.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')
             )
@@ -1079,6 +1025,9 @@
 
     <select id="count" resultType="long">
         <include refid="analysisCtes"/>
+        <if test="query.hasOrderFilter or query.risk == 'delivery'">
+        <include refid="filteredRelationOrdersCte"/>
+        </if>
         SELECT COUNT(*)
         FROM plan_facts pf
         WHERE 1 = 1
@@ -1087,6 +1036,12 @@
 
     <select id="findPage" resultMap="planMap">
         <include refid="analysisCtes"/>
+        <if test="query.hasOrderFilter or query.risk == 'delivery'">
+        <include refid="filteredRelationOrdersCte"/>
+        </if>
+        <if test="query.hasOrderFilter">
+        <include refid="filteredPlanProjectionCte"/>
+        </if>
         SELECT
             pf.plan_sn,
             pf.product_name,
@@ -1137,6 +1092,7 @@
 
     <select id="summary" resultMap="summaryMap">
         <include refid="analysisCtes"/>
+        <include refid="filteredRelationOrdersCte"/>
         , filtered_plans AS (
             SELECT pf.*
             FROM plan_facts pf
@@ -1187,7 +1143,7 @@
                     SELECT COUNT(DISTINCT selected_pf.plan_sn)
                     FROM node_scoped_plans selected_pf
                     INNER JOIN filtered_relation_orders fro ON fro.plan_sn = selected_pf.plan_sn
-                    INNER JOIN po_facts pof ON pof.order_sn = fro.order_sn
+                    INNER JOIN po_facts_lite pof ON pof.order_sn = fro.order_sn
                     WHERE pof.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')
                 ) AS delivery_overdue_count
         )
@@ -1207,31 +1163,56 @@
         CROSS JOIN latest_sync ls
     </select>
 
+    <!--
+      筛选维度直查采购单表 + lx_pp_po_sku_ass + lx_purchase_plan，只取有效 PO 且存在有效
+      PP 关联的采购员/供应商/仓库，不再物化 analysisCtes 全量 CTE。
+    -->
     <select id="findDistinctBuyers" resultType="string">
-        <include refid="analysisCtes"/>
-        SELECT DISTINCT po.buyer
-        FROM relation_orders rel
-        INNER JOIN po_facts po ON po.order_sn = rel.order_sn
-        WHERE po.buyer IS NOT NULL AND po.buyer &lt;&gt; ''
-        ORDER BY po.buyer
+        SELECT DISTINCT po.opt_realname
+        FROM lx_purchase_order po
+        INNER JOIN lx_pp_po_sku_ass ass ON ass.order_sn = po.order_sn
+        INNER JOIN lx_purchase_plan pp ON pp.plan_sn = ass.plan_sn
+        WHERE po.status NOT IN (-1, 124)
+          AND po.create_time IS NOT NULL
+          AND po.create_time &lt;= #{query.asOf}
+          AND pp.status NOT IN (-3, 122, 124)
+          AND pp.create_time IS NOT NULL
+          AND pp.create_time &lt;= #{query.asOf}
+          AND po.opt_realname IS NOT NULL
+          AND po.opt_realname &lt;&gt; ''
+        ORDER BY po.opt_realname
     </select>
 
     <select id="findDistinctSuppliers" resultType="string">
-        <include refid="analysisCtes"/>
-        SELECT DISTINCT po.supplier
-        FROM relation_orders rel
-        INNER JOIN po_facts po ON po.order_sn = rel.order_sn
-        WHERE po.supplier IS NOT NULL AND po.supplier &lt;&gt; ''
-        ORDER BY po.supplier
+        SELECT DISTINCT po.supplier_name
+        FROM lx_purchase_order po
+        INNER JOIN lx_pp_po_sku_ass ass ON ass.order_sn = po.order_sn
+        INNER JOIN lx_purchase_plan pp ON pp.plan_sn = ass.plan_sn
+        WHERE po.status NOT IN (-1, 124)
+          AND po.create_time IS NOT NULL
+          AND po.create_time &lt;= #{query.asOf}
+          AND pp.status NOT IN (-3, 122, 124)
+          AND pp.create_time IS NOT NULL
+          AND pp.create_time &lt;= #{query.asOf}
+          AND po.supplier_name IS NOT NULL
+          AND po.supplier_name &lt;&gt; ''
+        ORDER BY po.supplier_name
     </select>
 
     <select id="findDistinctWarehouses" resultType="string">
-        <include refid="analysisCtes"/>
-        SELECT DISTINCT po.warehouse
-        FROM relation_orders rel
-        INNER JOIN po_facts po ON po.order_sn = rel.order_sn
-        WHERE po.warehouse IS NOT NULL AND po.warehouse &lt;&gt; ''
-        ORDER BY po.warehouse
+        SELECT DISTINCT po.ware_house_name
+        FROM lx_purchase_order po
+        INNER JOIN lx_pp_po_sku_ass ass ON ass.order_sn = po.order_sn
+        INNER JOIN lx_purchase_plan pp ON pp.plan_sn = ass.plan_sn
+        WHERE po.status NOT IN (-1, 124)
+          AND po.create_time IS NOT NULL
+          AND po.create_time &lt;= #{query.asOf}
+          AND pp.status NOT IN (-3, 122, 124)
+          AND pp.create_time IS NOT NULL
+          AND pp.create_time &lt;= #{query.asOf}
+          AND po.ware_house_name IS NOT NULL
+          AND po.ware_house_name &lt;&gt; ''
+        ORDER BY po.ware_house_name
     </select>
 
     <select id="findPlan" resultMap="planMap">
@@ -1300,6 +1281,7 @@
 
     <select id="findOrders" resultMap="orderMap">
         <include refid="analysisCtes"/>
+        <include refid="orderDetailCtes"/>
         SELECT <include refid="orderProjection"/>
         FROM relation_orders rel
         INNER JOIN po_facts pof ON pof.order_sn = rel.order_sn
@@ -1321,11 +1303,12 @@
     </select>
 
     <!--
-      展开明细以当前 PP + PO + SKU 为一行。PO item、CR item、IB item 分别先聚合到
-      PO+SKU 再连接，避免 CR 与 IB 的一对多事实相互放大；PO 完成和 SLA 仍沿用订单级口径。
+      展开明细以当前 PP + PO + SKU 为一行。SKU 级事实（采购数量、达标）读宽表 po_sku_facts，
+      CR 收货与有效 IB 的单号列表走原始表（SKU 口径 / 白名单口径）；PO 完成和 SLA 仍沿用订单级口径。
     -->
     <select id="findOrderSkuLines" resultMap="orderSkuLineMap">
         <include refid="analysisCtes"/>
+        <include refid="orderDetailCtes"/>
         SELECT
             CONCAT(rel.plan_sn, '::', pof.order_id, '::', COALESCE(HEX(psf.sku), 'NO_SKU')) AS row_key,
             pof.order_id AS order_id,
@@ -1343,28 +1326,28 @@
             pof.created_at AS created_at,
             pof.approval_at AS approval_at,
             pof.sent_at AS sent_at,
-            psf.purchase_qty AS purchase_qty,
-            COALESCE(rss.receipt_sns, '') AS receipt_sns,
-            COALESCE(rss.receipt_count, 0) AS receipt_count,
-            COALESCE(rss.receipt_qty, 0) AS receipt_qty,
-            COALESCE(ibs.inbound_sns, '') AS inbound_sns,
-            COALESCE(ibs.inbound_count, 0) AS inbound_count,
-            COALESCE(ibs.valid_inbound_qty, 0) AS valid_inbound_qty,
+            psf.line_qty AS purchase_qty,
+            COALESCE(osrs.receipt_sns, '') AS receipt_sns,
+            COALESCE(osrs.receipt_count, 0) AS receipt_count,
+            COALESCE(osrs.receipt_qty, 0) AS receipt_qty,
+            COALESCE(osis.inbound_sns, '') AS inbound_sns,
+            COALESCE(osis.inbound_count, 0) AS inbound_count,
+            COALESCE(osis.valid_inbound_qty, 0) AS valid_inbound_qty,
             pof.completion_inbound_sn AS po_completion_inbound_sn,
             pof.completion_at AS po_completion_at,
-            osc.sku_completion_inbound_sn AS sku_completion_inbound_sn,
-            osc.sku_completion_at AS sku_completion_at,
+            psf.completion_inbound_sn AS sku_completion_inbound_sn,
+            psf.completion_at AS sku_completion_at,
             pof.delivery_hours AS po_delivery_hours,
             pof.delivery_status AS po_delivery_status,
             CASE WHEN pof.sent_at IS NULL THEN NULL
-                 ELSE TIMESTAMPDIFF(HOUR, pof.sent_at, COALESCE(osc.sku_completion_at, #{query.asOf}))
+                 ELSE TIMESTAMPDIFF(HOUR, pof.sent_at, COALESCE(psf.completion_at, #{query.asOf}))
             END AS sku_delivery_hours,
             CASE
                 WHEN pof.sent_at IS NULL THEN 'PENDING'
-                WHEN osc.sku_completion_at IS NOT NULL
-                     AND osc.sku_completion_at &lt;= DATE_ADD(pof.sent_at, INTERVAL 360 HOUR)
+                WHEN psf.completion_at IS NOT NULL
+                     AND psf.completion_at &lt;= DATE_ADD(pof.sent_at, INTERVAL 360 HOUR)
                     THEN 'COMPLETED_WITHIN_SLA'
-                WHEN osc.sku_completion_at IS NOT NULL THEN 'COMPLETED_OVER_SLA'
+                WHEN psf.completion_at IS NOT NULL THEN 'COMPLETED_OVER_SLA'
                 WHEN #{query.asOf} &gt;= DATE_ADD(pof.sent_at, INTERVAL 360 HOUR) THEN 'IN_TRANSIT_OVERDUE'
                 ELSE 'IN_TRANSIT'
             END AS sku_delivery_status,
@@ -1373,80 +1356,15 @@
             CAST(NULL AS SIGNED) AS allocated_qty
         FROM relation_skus rel
         INNER JOIN po_facts pof ON pof.order_sn = rel.order_sn
-        INNER JOIN (
-            SELECT
-                pif.order_sn,
-                pif.sku,
-                GROUP_CONCAT(
-                    DISTINCT NULLIF(TRIM(pif.product_name), '')
-                    ORDER BY pif.product_name SEPARATOR '、'
-                ) AS product_name,
-                SUM(GREATEST(COALESCE(pif.quantity_real, 0), 0)) AS purchase_qty
-            FROM po_item_facts pif
-            GROUP BY pif.order_sn, pif.sku
-        ) psf
+        INNER JOIN po_sku_facts psf
                 ON psf.order_sn = rel.order_sn
                AND psf.sku &lt;=&gt; rel.sku
-        LEFT JOIN (
-            SELECT
-                receipt_per_document.order_sn,
-                receipt_per_document.sku,
-                COUNT(*) AS receipt_count,
-                GROUP_CONCAT(
-                    receipt_per_document.receipt_sn
-                    ORDER BY receipt_per_document.created_at, receipt_per_document.receipt_id
-                    SEPARATOR '||'
-                ) AS receipt_sns,
-                SUM(receipt_per_document.receipt_qty) AS receipt_qty
-            FROM (
-                SELECT
-                    ro.id AS receipt_id,
-                    ro.order_sn AS receipt_sn,
-                    pif.order_sn,
-                    pif.sku,
-                    ro.create_time AS created_at,
-                    SUM(GREATEST(COALESCE(roi.product_receive_num, 0), 0)) AS receipt_qty
-                FROM lx_receipt_order ro
-                INNER JOIN lx_receipt_order_item roi ON roi.order_sn = ro.order_sn
-                INNER JOIN po_item_facts pif ON pif.item_id = roi.order_item_id
-                WHERE ro.create_time IS NOT NULL
-                  AND ro.create_time &lt;= #{query.asOf}
-                GROUP BY ro.id, ro.order_sn, pif.order_sn, pif.sku, ro.create_time
-            ) receipt_per_document
-            GROUP BY receipt_per_document.order_sn, receipt_per_document.sku
-        ) rss
-               ON rss.order_sn = rel.order_sn
-              AND rss.sku &lt;=&gt; rel.sku
-        LEFT JOIN (
-            SELECT
-                inbound_per_document.order_sn,
-                inbound_per_document.sku,
-                COUNT(*) AS inbound_count,
-                GROUP_CONCAT(
-                    inbound_per_document.inbound_sn
-                    ORDER BY inbound_per_document.created_at, inbound_per_document.inbound_id
-                    SEPARATOR '||'
-                ) AS inbound_sns,
-                SUM(inbound_per_document.inbound_qty) AS valid_inbound_qty
-            FROM (
-                SELECT
-                    vii.inbound_id,
-                    vii.inbound_sn,
-                    vii.order_sn,
-                    pif.sku,
-                    vii.created_at,
-                    SUM(vii.inbound_qty) AS inbound_qty
-                FROM valid_ib_items vii
-                INNER JOIN po_item_facts pif ON pif.item_id = vii.purchase_item_id
-                GROUP BY vii.inbound_id, vii.inbound_sn, vii.order_sn, pif.sku, vii.created_at
-            ) inbound_per_document
-            GROUP BY inbound_per_document.order_sn, inbound_per_document.sku
-        ) ibs
-               ON ibs.order_sn = rel.order_sn
-              AND ibs.sku &lt;=&gt; rel.sku
-        LEFT JOIN order_sku_completion osc
-               ON osc.order_sn = rel.order_sn
-              AND osc.sku &lt;=&gt; rel.sku
+        LEFT JOIN order_sku_receipt_summary osrs
+               ON osrs.order_sn = rel.order_sn
+              AND osrs.sku &lt;=&gt; rel.sku
+        LEFT JOIN order_sku_ib_summary osis
+               ON osis.order_sn = rel.order_sn
+              AND osis.sku &lt;=&gt; rel.sku
         WHERE rel.plan_sn = #{planSn}
         <include refid="orderFilters"/>
         ORDER BY pof.created_at ASC, pof.order_sn ASC, psf.sku ASC
@@ -1454,6 +1372,7 @@
 
     <select id="findOrder" resultMap="orderMap">
         <include refid="analysisCtes"/>
+        <include refid="orderDetailCtes"/>
         SELECT
             pof.order_id,
             pof.order_sn,
@@ -1473,21 +1392,21 @@
             pof.sent_at,
             <choose>
                 <when test="sku != null">
-                    COALESCE(ost.line_qty, 0) AS purchase_qty,
+                    COALESCE(psf.line_qty, 0) AS purchase_qty,
                     COALESCE(osis.valid_inbound_qty, 0) AS valid_inbound_qty,
-                    osc.sku_completion_inbound_sn AS completion_inbound_sn,
-                    osc.sku_completion_at AS completion_at,
+                    psf.completion_inbound_sn AS completion_inbound_sn,
+                    psf.completion_at AS completion_at,
                     COALESCE(osis.inbound_sns, '') AS inbound_sns,
                     COALESCE(osis.inbound_count, 0) AS inbound_count,
                     CASE WHEN pof.sent_at IS NULL THEN NULL
-                         ELSE TIMESTAMPDIFF(HOUR, pof.sent_at, COALESCE(osc.sku_completion_at, #{query.asOf}))
+                         ELSE TIMESTAMPDIFF(HOUR, pof.sent_at, COALESCE(psf.completion_at, #{query.asOf}))
                     END AS delivery_hours,
                     CASE
                         WHEN pof.sent_at IS NULL THEN 'PENDING'
-                        WHEN osc.sku_completion_at IS NOT NULL
-                             AND osc.sku_completion_at &lt;= DATE_ADD(pof.sent_at, INTERVAL 360 HOUR)
+                        WHEN psf.completion_at IS NOT NULL
+                             AND psf.completion_at &lt;= DATE_ADD(pof.sent_at, INTERVAL 360 HOUR)
                             THEN 'COMPLETED_WITHIN_SLA'
-                        WHEN osc.sku_completion_at IS NOT NULL THEN 'COMPLETED_OVER_SLA'
+                        WHEN psf.completion_at IS NOT NULL THEN 'COMPLETED_OVER_SLA'
                         WHEN #{query.asOf} &gt;= DATE_ADD(pof.sent_at, INTERVAL 360 HOUR) THEN 'IN_TRANSIT_OVERDUE'
                         ELSE 'IN_TRANSIT'
                     END AS delivery_status,
@@ -1543,10 +1462,8 @@
         FROM po_facts pof
         <choose>
             <when test="sku != null">
-                LEFT JOIN order_sku_target ost
-                       ON ost.order_sn = pof.order_sn AND ost.sku &lt;=&gt; #{sku}
-                LEFT JOIN order_sku_completion osc
-                       ON osc.order_sn = pof.order_sn AND osc.sku &lt;=&gt; #{sku}
+                LEFT JOIN po_sku_facts psf
+                       ON psf.order_sn = pof.order_sn AND psf.sku &lt;=&gt; #{sku}
                 LEFT JOIN order_sku_ib_summary osis
                        ON osis.order_sn = pof.order_sn AND osis.sku &lt;=&gt; #{sku}
                 LEFT JOIN order_sku_receipt_summary osrs
@@ -1576,60 +1493,98 @@
 
     <select id="findInboundFacts" resultMap="inboundMap">
         <include refid="analysisCtes"/>
+        <include refid="orderDetailCtes"/>
         <choose>
             <when test="sku != null">
                 SELECT
-                    osr.inbound_id,
-                    osr.inbound_sn,
-                    osr.created_at,
-                    osr.inbound_qty,
-                    osr.cumulative_qty,
+                    g.inbound_id,
+                    g.inbound_sn,
+                    g.created_at,
+                    g.inbound_qty,
+                    SUM(g.inbound_qty) OVER (
+                        ORDER BY g.created_at, g.inbound_id, g.inbound_sn
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ) AS cumulative_qty,
                     CASE
-                        WHEN osc.sku_completion_inbound_sn = osr.inbound_sn
-                             AND osc.sku_completion_at = osr.created_at THEN 1
+                        WHEN psf.completion_inbound_sn = g.inbound_sn
+                             AND psf.completion_at = g.created_at THEN 1
                         ELSE 0
                     END AS completion_inbound
-                FROM order_sku_running osr
-                LEFT JOIN order_sku_completion osc
-                       ON osc.order_sn = osr.order_sn AND osc.sku &lt;=&gt; osr.sku
-                WHERE osr.order_sn = #{orderSn}
-                  AND osr.sku &lt;=&gt; #{sku}
-                ORDER BY osr.created_at, osr.inbound_id, osr.inbound_sn
+                FROM (
+                    SELECT
+                        vii.inbound_id,
+                        vii.inbound_sn,
+                        vii.created_at,
+                        SUM(vii.inbound_qty) AS inbound_qty
+                    FROM valid_ib_items vii
+                    WHERE vii.order_sn = #{orderSn}
+                      AND vii.sku &lt;=&gt; #{sku}
+                    GROUP BY vii.inbound_id, vii.inbound_sn, vii.created_at
+                ) g
+                LEFT JOIN po_sku_facts psf
+                       ON psf.order_sn = #{orderSn} AND psf.sku &lt;=&gt; #{sku}
+                ORDER BY g.created_at, g.inbound_id, g.inbound_sn
             </when>
             <when test="planSn != null">
                 SELECT
-                    ppir.inbound_id,
-                    ppir.inbound_sn,
-                    ppir.created_at,
-                    ppir.inbound_qty,
-                    ppir.cumulative_qty,
+                    g.inbound_id,
+                    g.inbound_sn,
+                    g.created_at,
+                    g.inbound_qty,
+                    SUM(g.inbound_qty) OVER (
+                        ORDER BY g.created_at, g.inbound_id, g.inbound_sn
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ) AS cumulative_qty,
                     CASE
-                        WHEN ppc.completion_inbound_sn = ppir.inbound_sn
-                             AND ppc.completion_at = ppir.created_at THEN 1
+                        WHEN ppc.completion_inbound_sn = g.inbound_sn
+                             AND ppc.completion_at = g.created_at THEN 1
                         ELSE 0
                     END AS completion_inbound
-                FROM pp_po_ib_running ppir
+                FROM (
+                    SELECT
+                        vii.inbound_id,
+                        vii.inbound_sn,
+                        vii.created_at,
+                        SUM(vii.inbound_qty) AS inbound_qty
+                    FROM valid_ib_items vii
+                    INNER JOIN relation_skus rs
+                            ON rs.order_sn = vii.order_sn
+                           AND rs.sku &lt;=&gt; vii.sku
+                    WHERE rs.plan_sn = #{planSn}
+                      AND rs.order_sn = #{orderSn}
+                    GROUP BY vii.inbound_id, vii.inbound_sn, vii.created_at
+                ) g
                 LEFT JOIN pp_po_sku_completion ppc
-                       ON ppc.plan_sn = ppir.plan_sn AND ppc.order_sn = ppir.order_sn
-                WHERE ppir.plan_sn = #{planSn}
-                  AND ppir.order_sn = #{orderSn}
-                ORDER BY ppir.created_at, ppir.inbound_id, ppir.inbound_sn
+                       ON ppc.plan_sn = #{planSn} AND ppc.order_sn = #{orderSn}
+                ORDER BY g.created_at, g.inbound_id, g.inbound_sn
             </when>
             <otherwise>
                 SELECT
-                    ip.inbound_id,
-                    ip.inbound_sn,
-                    ip.created_at,
-                    ip.inbound_qty,
-                    ip.cumulative_qty,
+                    g.inbound_id,
+                    g.inbound_sn,
+                    g.created_at,
+                    g.inbound_qty,
+                    SUM(g.inbound_qty) OVER (
+                        ORDER BY g.created_at, g.inbound_id, g.inbound_sn
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ) AS cumulative_qty,
                     CASE
-                        WHEN pis.completion_inbound_sn = ip.inbound_sn AND pis.completion_at = ip.created_at THEN 1
+                        WHEN pc.completion_inbound_sn = g.inbound_sn
+                             AND pc.completion_at = g.created_at THEN 1
                         ELSE 0
                     END AS completion_inbound
-                FROM ib_progress ip
-                LEFT JOIN po_ib_summary pis ON pis.order_sn = ip.order_sn
-                WHERE ip.order_sn = #{orderSn}
-                ORDER BY ip.created_at, ip.inbound_id, ip.inbound_sn
+                FROM (
+                    SELECT
+                        vii.inbound_id,
+                        vii.inbound_sn,
+                        vii.created_at,
+                        SUM(vii.inbound_qty) AS inbound_qty
+                    FROM valid_ib_items vii
+                    WHERE vii.order_sn = #{orderSn}
+                    GROUP BY vii.inbound_id, vii.inbound_sn, vii.created_at
+                ) g
+                LEFT JOIN po_completion pc ON pc.order_sn = #{orderSn}
+                ORDER BY g.created_at, g.inbound_id, g.inbound_sn
             </otherwise>
         </choose>
     </select>
@@ -1662,12 +1617,13 @@
         FROM valid_po po
         WHERE po.order_sn = #{orderSn} AND po.auditor_time IS NOT NULL
         UNION ALL
-        SELECT CONCAT('PO_SENT_', pof.sent_log_id), 'PO', pof.order_sn, pof.sent_at, '下发供应商',
+        SELECT CONCAT('PO_SENT_', psl.sent_log_id), 'PO', psl.order_sn, psl.sent_at, '下发供应商',
                CASE WHEN NULLIF(TRIM(pof.supplier), '') IS NULL
                     THEN '' ELSE CONCAT('供应商：', pof.supplier) END,
-               COALESCE(pof.sent_operator, pof.buyer), NULL, NULL
+               COALESCE(psl.sent_operator, pof.buyer), NULL, NULL
         FROM po_facts pof
-        WHERE pof.order_sn = #{orderSn} AND pof.sent_at IS NOT NULL
+        INNER JOIN po_sent_log psl ON psl.order_sn = pof.order_sn
+        WHERE pof.order_sn = #{orderSn} AND psl.sent_at IS NOT NULL
         UNION ALL
         SELECT CONCAT('PAY_', rfo.id), 'PAYMENT', rfo.order_sn,
                COALESCE(CAST(rfo.real_pay_time AS DATETIME), rfo.apply_time),
@@ -1691,18 +1647,12 @@
             <when test="planSn != null">
                 SELECT CONCAT('CR_', rsf.receipt_id), 'CR', rsf.receipt_sn, MAX(rsf.created_at), 'CR 收货',
                        '', MAX(rsf.operator_name), SUM(rsf.receipt_qty), NULL
-                FROM (
-                    SELECT DISTINCT pif.order_sn, pif.sku
-                    FROM relation_skus rs
-                    INNER JOIN po_item_facts pif
-                            ON pif.order_sn = rs.order_sn
-                           AND pif.sku &lt;=&gt; rs.sku
-                    WHERE rs.plan_sn = #{planSn}
-                      AND rs.order_sn = #{orderSn}
-                ) assoc
+                FROM relation_skus rs
                 INNER JOIN receipt_sku_facts rsf
-                        ON rsf.order_sn = assoc.order_sn
-                       AND rsf.sku &lt;=&gt; assoc.sku
+                        ON rsf.order_sn = rs.order_sn
+                       AND rsf.sku &lt;=&gt; rs.sku
+                WHERE rs.plan_sn = #{planSn}
+                  AND rs.order_sn = #{orderSn}
                 GROUP BY rsf.receipt_id, rsf.receipt_sn
             </when>
             <otherwise>
@@ -1715,43 +1665,85 @@
         UNION ALL
         <choose>
             <when test="sku != null">
-                SELECT CONCAT('IB_', osr.inbound_id), 'IB', osr.inbound_sn, osr.created_at, '有效 IB 创建',
-                       CASE WHEN osc.sku_completion_inbound_sn = osr.inbound_sn
-                                 AND osc.sku_completion_at = osr.created_at
+                SELECT CONCAT('IB_', g.inbound_id), 'IB', g.inbound_sn, g.created_at, '有效 IB 创建',
+                       CASE WHEN psf.completion_inbound_sn = g.inbound_sn
+                                 AND psf.completion_at = g.created_at
                             THEN '累计达到采购数量，采购流程完成' ELSE '' END,
-                       NULL, osr.inbound_qty, osr.cumulative_qty
-                FROM order_sku_running osr
-                LEFT JOIN order_sku_completion osc
-                       ON osc.order_sn = osr.order_sn AND osc.sku &lt;=&gt; osr.sku
-                WHERE osr.order_sn = #{orderSn}
-                  AND osr.sku &lt;=&gt; #{sku}
+                       NULL, g.inbound_qty,
+                       SUM(g.inbound_qty) OVER (
+                           ORDER BY g.created_at, g.inbound_id, g.inbound_sn
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                       )
+                FROM (
+                    SELECT
+                        vii.inbound_id,
+                        vii.inbound_sn,
+                        vii.created_at,
+                        SUM(vii.inbound_qty) AS inbound_qty
+                    FROM valid_ib_items vii
+                    WHERE vii.order_sn = #{orderSn}
+                      AND vii.sku &lt;=&gt; #{sku}
+                    GROUP BY vii.inbound_id, vii.inbound_sn, vii.created_at
+                ) g
+                LEFT JOIN po_sku_facts psf
+                       ON psf.order_sn = #{orderSn} AND psf.sku &lt;=&gt; #{sku}
             </when>
             <when test="planSn != null">
-                SELECT CONCAT('IB_', ppir.inbound_id), 'IB', ppir.inbound_sn, ppir.created_at, '有效 IB 创建',
-                       CASE WHEN ppc.completion_inbound_sn = ppir.inbound_sn
-                                 AND ppc.completion_at = ppir.created_at
+                SELECT CONCAT('IB_', g.inbound_id), 'IB', g.inbound_sn, g.created_at, '有效 IB 创建',
+                       CASE WHEN ppc.completion_inbound_sn = g.inbound_sn
+                                 AND ppc.completion_at = g.created_at
                             THEN '累计达到采购数量，采购流程完成' ELSE '' END,
-                       NULL, ppir.inbound_qty, ppir.cumulative_qty
-                FROM pp_po_ib_running ppir
+                       NULL, g.inbound_qty,
+                       SUM(g.inbound_qty) OVER (
+                           ORDER BY g.created_at, g.inbound_id, g.inbound_sn
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                       )
+                FROM (
+                    SELECT
+                        vii.inbound_id,
+                        vii.inbound_sn,
+                        vii.created_at,
+                        SUM(vii.inbound_qty) AS inbound_qty
+                    FROM valid_ib_items vii
+                    INNER JOIN relation_skus rs
+                            ON rs.order_sn = vii.order_sn
+                           AND rs.sku &lt;=&gt; vii.sku
+                    WHERE rs.plan_sn = #{planSn}
+                      AND rs.order_sn = #{orderSn}
+                    GROUP BY vii.inbound_id, vii.inbound_sn, vii.created_at
+                ) g
                 LEFT JOIN pp_po_sku_completion ppc
-                       ON ppc.plan_sn = ppir.plan_sn AND ppc.order_sn = ppir.order_sn
-                WHERE ppir.plan_sn = #{planSn}
-                  AND ppir.order_sn = #{orderSn}
+                       ON ppc.plan_sn = #{planSn} AND ppc.order_sn = #{orderSn}
             </when>
             <otherwise>
-                SELECT CONCAT('IB_', ip.inbound_id), 'IB', ip.inbound_sn, ip.created_at, '有效 IB 创建',
-                       CASE WHEN pis.completion_inbound_sn = ip.inbound_sn AND pis.completion_at = ip.created_at
+                SELECT CONCAT('IB_', g.inbound_id), 'IB', g.inbound_sn, g.created_at, '有效 IB 创建',
+                       CASE WHEN pc.completion_inbound_sn = g.inbound_sn
+                                 AND pc.completion_at = g.created_at
                             THEN '累计达到采购数量，采购流程完成' ELSE '' END,
-                       ip.operator_name, ip.inbound_qty, ip.cumulative_qty
-                FROM ib_progress ip
-                LEFT JOIN po_ib_summary pis ON pis.order_sn = ip.order_sn
-                WHERE ip.order_sn = #{orderSn}
+                       g.operator_name, g.inbound_qty,
+                       SUM(g.inbound_qty) OVER (
+                           ORDER BY g.created_at, g.inbound_id, g.inbound_sn
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                       )
+                FROM (
+                    SELECT
+                        vii.inbound_id,
+                        vii.inbound_sn,
+                        vii.created_at,
+                        MAX(vii.operator_name) AS operator_name,
+                        SUM(vii.inbound_qty) AS inbound_qty
+                    FROM valid_ib_items vii
+                    WHERE vii.order_sn = #{orderSn}
+                    GROUP BY vii.inbound_id, vii.inbound_sn, vii.created_at
+                ) g
+                LEFT JOIN po_completion pc ON pc.order_sn = #{orderSn}
             </otherwise>
         </choose>
     </sql>
 
     <select id="findOrderTimeline" resultMap="eventMap">
         <include refid="analysisCtes"/>
+        <include refid="orderDetailCtes"/>
         SELECT events.*
         FROM (<include refid="orderTimelineUnion"/>) events
         WHERE events.event_time IS NOT NULL
@@ -1760,6 +1752,7 @@
 
     <select id="findPlanTimeline" resultMap="eventMap">
         <include refid="analysisCtes"/>
+        <include refid="orderDetailCtes"/>
         SELECT events.*
         FROM (
             SELECT CONCAT('PP_CREATE_', pp.id) AS event_id, 'PP' AS source_type, pp.plan_sn AS source_sn,
@@ -1782,10 +1775,11 @@
             FROM relation_orders rel INNER JOIN valid_po po ON po.order_sn = rel.order_sn
             WHERE rel.plan_sn = #{planSn} AND po.auditor_time IS NOT NULL
             UNION ALL
-            SELECT CONCAT('PO_SENT_', pof.sent_log_id), 'PO', pof.order_sn, pof.sent_at, '下发供应商',
-                   COALESCE(pof.supplier, ''), COALESCE(pof.sent_operator, pof.buyer), NULL, NULL
+            SELECT CONCAT('PO_SENT_', psl.sent_log_id), 'PO', pof.order_sn, psl.sent_at, '下发供应商',
+                   COALESCE(pof.supplier, ''), COALESCE(psl.sent_operator, pof.buyer), NULL, NULL
             FROM relation_orders rel INNER JOIN po_facts pof ON pof.order_sn = rel.order_sn
-            WHERE rel.plan_sn = #{planSn} AND pof.sent_at IS NOT NULL
+            INNER JOIN po_sent_log psl ON psl.order_sn = pof.order_sn
+            WHERE rel.plan_sn = #{planSn} AND psl.sent_at IS NOT NULL
             UNION ALL
             SELECT CONCAT('PAY_', rfo.id), 'PAYMENT', rfo.order_sn,
                    COALESCE(CAST(rfo.real_pay_time AS DATETIME), rfo.apply_time),
@@ -1804,16 +1798,31 @@
             INNER JOIN receipt_facts rf ON rf.order_sn = rel.order_sn
             WHERE rel.plan_sn = #{planSn}
             UNION ALL
-            SELECT CONCAT('IB_', ip.inbound_id), 'IB', ip.inbound_sn, ip.created_at,
-                   CASE WHEN pis.completion_inbound_sn = ip.inbound_sn AND pis.completion_at = ip.created_at
+            SELECT CONCAT('IB_', g.inbound_id), 'IB', g.inbound_sn, g.created_at,
+                   CASE WHEN pc.completion_inbound_sn = g.inbound_sn AND pc.completion_at = g.created_at
                         THEN 'IB创建（累计达标）' ELSE 'IB创建' END,
-                   CASE WHEN pis.completion_inbound_sn = ip.inbound_sn AND pis.completion_at = ip.created_at
+                   CASE WHEN pc.completion_inbound_sn = g.inbound_sn AND pc.completion_at = g.created_at
                         THEN '累计达到采购数量，采购流程完成' ELSE '有效入库累计未达标' END,
-                   ip.operator_name, ip.inbound_qty, ip.cumulative_qty
-            FROM relation_orders rel
-            INNER JOIN ib_progress ip ON ip.order_sn = rel.order_sn
-            LEFT JOIN po_ib_summary pis ON pis.order_sn = ip.order_sn
-            WHERE rel.plan_sn = #{planSn}
+                   g.operator_name, g.inbound_qty,
+                   SUM(g.inbound_qty) OVER (
+                       PARTITION BY g.order_sn
+                       ORDER BY g.created_at, g.inbound_id, g.inbound_sn
+                       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                   )
+            FROM (
+                SELECT
+                    vii.order_sn,
+                    vii.inbound_id,
+                    vii.inbound_sn,
+                    vii.created_at,
+                    MAX(vii.operator_name) AS operator_name,
+                    SUM(vii.inbound_qty) AS inbound_qty
+                FROM relation_orders rel
+                INNER JOIN valid_ib_items vii ON vii.order_sn = rel.order_sn
+                WHERE rel.plan_sn = #{planSn}
+                GROUP BY vii.order_sn, vii.inbound_id, vii.inbound_sn, vii.created_at
+            ) g
+            LEFT JOIN po_completion pc ON pc.order_sn = g.order_sn
         ) events
         WHERE events.event_time IS NOT NULL
         ORDER BY events.event_time, events.event_id
