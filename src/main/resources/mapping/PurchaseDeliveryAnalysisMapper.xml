@@ -955,13 +955,7 @@
             AND pf.order_timeliness = 'OVERDUE'
         </if>
         <if test="query.risk == 'delivery'">
-            AND EXISTS (
-                SELECT 1
-                FROM filtered_relation_orders risk_rel
-                INNER JOIN po_facts_lite risk_po ON risk_po.order_sn = risk_rel.order_sn
-                WHERE risk_rel.plan_sn = pf.plan_sn
-                  AND risk_po.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')
-            )
+            AND pf.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')
         </if>
     </sql>
 
@@ -1044,7 +1038,7 @@
 
     <select id="count" resultType="long">
         <include refid="analysisCtes"/>
-        <if test="query.hasOrderFilter or query.risk == 'delivery'">
+        <if test="query.hasOrderFilter">
         <include refid="filteredRelationOrdersCte"/>
         </if>
         SELECT COUNT(*)
@@ -1055,7 +1049,7 @@
 
     <select id="findPage" resultMap="planMap">
         <include refid="analysisCtes"/>
-        <if test="query.hasOrderFilter or query.risk == 'delivery'">
+        <if test="query.hasOrderFilter">
         <include refid="filteredRelationOrdersCte"/>
         </if>
         <if test="query.hasOrderFilter">
@@ -1158,13 +1152,8 @@
                 (SELECT COALESCE(SUM(current_node = 'IB_CREATE'), 0) FROM filtered_plans) AS inbound_create_count,
                 (SELECT COALESCE(SUM(current_node = 'COMPLETED'), 0) FROM filtered_plans) AS completed_count,
                 (SELECT COALESCE(SUM(order_timeliness = 'OVERDUE'), 0) FROM node_scoped_plans) AS order_overdue_count,
-                (
-                    SELECT COUNT(DISTINCT selected_pf.plan_sn)
-                    FROM node_scoped_plans selected_pf
-                    INNER JOIN filtered_relation_orders fro ON fro.plan_sn = selected_pf.plan_sn
-                    INNER JOIN po_facts_lite pof ON pof.order_sn = fro.order_sn
-                    WHERE pof.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')
-                ) AS delivery_overdue_count
+                (SELECT COALESCE(SUM(delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')), 0)
+                 FROM node_scoped_plans) AS delivery_overdue_count
         )
         SELECT
             sc.*,
