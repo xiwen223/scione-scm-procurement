@@ -94,6 +94,9 @@ public class MybatisPurchaseDeliveryAnalysisRepository implements PurchaseDelive
     @Override
     public PurchaseDeliveryOrderDetail findOrderDetail(String orderSn, String planSn, String sku,
                                                        PurchaseDeliveryAnalysisQuery query) {
+        if (planSn == null && sku == null) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "PO 详情需指定 planSn 或 sku");
+        }
         PurchaseDeliveryOrderPO po = mapper.findOrder(orderSn, planSn, sku, query);
         if (po == null) {
             throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND);
