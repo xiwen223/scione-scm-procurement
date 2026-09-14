@@ -492,6 +492,7 @@
             SELECT
                 pr.*,
                 CASE
+                    WHEN pr.related_order_count > 0 AND pr.last_po_created_at IS NULL THEN NULL
                     WHEN pr.last_po_created_at IS NOT NULL
                          AND pr.last_po_created_at &lt; DATE_ADD(pr.created_at, INTERVAL 24 HOUR)
                         THEN 'TIMELY'
