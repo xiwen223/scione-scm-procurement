@@ -26,6 +26,8 @@ public record PurchaseDeliveryOrderSkuLine(
         List<String> receiptSns,
         int receiptCount,
         Long receiptQty,
+        Long returnQty,
+        Long exchangeQty,
         List<String> inboundSns,
         int inboundCount,
         Long validInboundQty,

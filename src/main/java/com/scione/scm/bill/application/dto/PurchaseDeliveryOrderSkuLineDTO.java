@@ -35,6 +35,8 @@ public class PurchaseDeliveryOrderSkuLineDTO {
     private List<String> receiptSns;
     private int receiptCount;
     private Long receiptQty;
+    private Long returnQty;
+    private Long exchangeQty;
     private List<String> inboundSns;
     private int inboundCount;
     private Long validInboundQty;
@@ -75,6 +77,8 @@ public class PurchaseDeliveryOrderSkuLineDTO {
         dto.setReceiptSns(line.receiptSns());
         dto.setReceiptCount(line.receiptCount());
         dto.setReceiptQty(line.receiptQty());
+        dto.setReturnQty(line.returnQty());
+        dto.setExchangeQty(line.exchangeQty());
         dto.setInboundSns(line.inboundSns());
         dto.setInboundCount(line.inboundCount());
         dto.setValidInboundQty(line.validInboundQty());

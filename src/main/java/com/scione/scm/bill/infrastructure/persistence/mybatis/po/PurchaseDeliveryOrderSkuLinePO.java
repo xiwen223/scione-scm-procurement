@@ -27,6 +27,8 @@ public class PurchaseDeliveryOrderSkuLinePO {
     private String receiptSns;
     private int receiptCount;
     private Long receiptQty;
+    private Long returnQty;
+    private Long exchangeQty;
     private String inboundSns;
     private int inboundCount;
     private Long validInboundQty;

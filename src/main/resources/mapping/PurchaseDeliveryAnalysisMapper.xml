@@ -85,6 +85,8 @@
         <result property="receiptSns" column="receipt_sns"/>
         <result property="receiptCount" column="receipt_count"/>
         <result property="receiptQty" column="receipt_qty"/>
+        <result property="returnQty" column="return_qty"/>
+        <result property="exchangeQty" column="exchange_qty"/>
         <result property="inboundSns" column="inbound_sns"/>
         <result property="inboundCount" column="inbound_count"/>
         <result property="validInboundQty" column="valid_inbound_qty"/>
@@ -1385,6 +1387,8 @@
             COALESCE(osrs.receipt_sns, '') AS receipt_sns,
             COALESCE(osrs.receipt_count, 0) AS receipt_count,
             COALESCE(osrs.receipt_qty, 0) AS receipt_qty,
+            COALESCE(psf.return_qty, 0) AS return_qty,
+            COALESCE(psf.exchange_qty, 0) AS exchange_qty,
             COALESCE(osis.inbound_sns, '') AS inbound_sns,
             COALESCE(osis.inbound_count, 0) AS inbound_count,
             COALESCE(osis.valid_inbound_qty, 0) AS valid_inbound_qty,
