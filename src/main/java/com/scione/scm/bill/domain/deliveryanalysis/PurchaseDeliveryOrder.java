@@ -11,6 +11,7 @@ public record PurchaseDeliveryOrder(
         String skus,
         String productNames,
         String statusText,
+        String subStatusText,
         String supplier,
         String warehouse,
         String buyer,

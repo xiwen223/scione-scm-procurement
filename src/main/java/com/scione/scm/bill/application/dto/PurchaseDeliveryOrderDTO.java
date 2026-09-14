@@ -17,6 +17,7 @@ public class PurchaseDeliveryOrderDTO {
     private String skus;
     private String productNames;
     private String statusText;
+    private String subStatusText;
     private String supplier;
     private String warehouse;
     private String buyer;
@@ -52,6 +53,7 @@ public class PurchaseDeliveryOrderDTO {
         dto.setSkus(order.skus());
         dto.setProductNames(order.productNames());
         dto.setStatusText(order.statusText());
+        dto.setSubStatusText(order.subStatusText());
         dto.setSupplier(order.supplier());
         dto.setWarehouse(order.warehouse());
         dto.setBuyer(order.buyer());

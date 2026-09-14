@@ -12,6 +12,7 @@ public record PurchaseDeliveryOrderSkuLine(
         String sku,
         String productName,
         String statusText,
+        String subStatusText,
         String supplier,
         String warehouse,
         String buyer,

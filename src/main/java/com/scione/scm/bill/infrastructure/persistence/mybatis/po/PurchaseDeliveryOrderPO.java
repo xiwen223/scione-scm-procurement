@@ -12,6 +12,7 @@ public class PurchaseDeliveryOrderPO {
     private String skus;
     private String productNames;
     private String statusText;
+    private String subStatusText;
     private String supplier;
     private String warehouse;
     private String buyer;

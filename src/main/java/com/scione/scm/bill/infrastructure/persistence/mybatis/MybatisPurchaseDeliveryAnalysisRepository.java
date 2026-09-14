@@ -129,7 +129,8 @@ public class MybatisPurchaseDeliveryAnalysisRepository implements PurchaseDelive
 
     private PurchaseDeliveryOrder toOrder(PurchaseDeliveryOrderPO po) {
         return new PurchaseDeliveryOrder(po.getOrderId(), po.getOrderSn(), po.getPlanSn(), po.getSkus(),
-                po.getProductNames(), po.getStatusText(), po.getSupplier(), po.getWarehouse(), po.getBuyer(),
+                po.getProductNames(), po.getStatusText(), po.getSubStatusText(), po.getSupplier(),
+                po.getWarehouse(), po.getBuyer(),
                 po.getSettlementMethod(), po.getSettlementType(), po.getSourceType(), po.getCreatedAt(),
                 po.getApprovalAt(), po.getSentAt(), po.getPurchaseQty(), split(po.getReceiptSns()),
                 po.getReceiptCount(), split(po.getInboundSns()), po.getInboundCount(), po.getValidInboundQty(),
@@ -139,7 +140,8 @@ public class MybatisPurchaseDeliveryAnalysisRepository implements PurchaseDelive
 
     private PurchaseDeliveryOrderSkuLine toOrderSkuLine(PurchaseDeliveryOrderSkuLinePO po) {
         return new PurchaseDeliveryOrderSkuLine(po.getRowKey(), po.getOrderId(), po.getOrderSn(), po.getPlanSn(),
-                po.getSku(), po.getProductName(), po.getStatusText(), po.getSupplier(), po.getWarehouse(),
+                po.getSku(), po.getProductName(), po.getStatusText(), po.getSubStatusText(), po.getSupplier(),
+                po.getWarehouse(),
                 po.getBuyer(), po.getSettlementMethod(), po.getSettlementType(), po.getSourceType(),
                 po.getCreatedAt(), po.getApprovalAt(), po.getSentAt(), po.getPurchaseQty(),
                 split(po.getReceiptSns()), po.getReceiptCount(), po.getReceiptQty(), split(po.getInboundSns()),

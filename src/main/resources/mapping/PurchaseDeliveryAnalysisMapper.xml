@@ -38,6 +38,7 @@
         <result property="skus" column="skus"/>
         <result property="productNames" column="product_names"/>
         <result property="statusText" column="status_text"/>
+        <result property="subStatusText" column="sub_status_text"/>
         <result property="supplier" column="supplier"/>
         <result property="warehouse" column="warehouse"/>
         <result property="buyer" column="buyer"/>
@@ -70,6 +71,7 @@
         <result property="sku" column="sku"/>
         <result property="productName" column="product_name"/>
         <result property="statusText" column="status_text"/>
+        <result property="subStatusText" column="sub_status_text"/>
         <result property="supplier" column="supplier"/>
         <result property="warehouse" column="warehouse"/>
         <result property="buyer" column="buyer"/>
@@ -159,6 +161,9 @@
          scione-lingxing-sync 的 cron 在同一事务内从 po_item_delivery_facts 重建）。
          达标/完成/节点一律按 PP 关联的 SKU 口径，不按 PO 整单；asOf 依赖的交付耗时/状态
          （delivery_hours / delivery_status / order_timeliness）仍由 mapper 按 SKU 现算。
+         交易取消（sub_status_text='交易取消'）的 PO 无所谓交付时效：PP 聚合（达成率/交付状态/
+         节点/达标）一律剔除，明细（findOrders / findOrderSkuLines 等）仍完整展示，仅关联 PO 数
+         与单号串（related_order_count / order_sns）包含取消单。
          只有宽表读不到、或必须保持 '||' 分隔契约的单据号列表（收货单号、有效入库单号）
          与时间线仍读原始表。列表主查询（count / findPage / summary / findPlan）不再扫描
          lx_purchase_order；valid_po 移入 orderDetailCtes 仅供详情实时口径使用。 -->
@@ -260,6 +265,7 @@
                 pdf.order_id,
                 pdf.status,
                 pdf.status_text,
+                pdf.sub_status_text,
                 pdf.settlement_method,
                 pdf.alibaba_order_sn,
                 pdf.supplier,
@@ -270,6 +276,15 @@
                 pdf.sent_at
             FROM po_sku_facts_snapshot pdf
             WHERE pdf.created_at &lt;= #{query.asOf}
+            <if test="_parameter.containsKey('planSn') and planSn != null and planSn != ''">
+              AND pdf.order_sn IN (
+                  SELECT ass.order_sn
+                  FROM lx_pp_po_sku_ass ass
+                  WHERE ass.plan_sn = #{planSn}
+                    AND ass.order_sn IS NOT NULL
+                    AND ass.order_sn &lt;&gt; ''
+              )
+            </if>
         ),
         /*
           列表（主记录）与详情共用的 PO 整单事实（订单级）：从 enriched PO×SKU 宽表
@@ -417,6 +432,7 @@
             INNER JOIN po_sku_facts psf
                     ON psf.order_sn = rs.order_sn
                    AND psf.sku &lt;=&gt; rs.sku
+                   AND COALESCE(psf.sub_status_text, '') &lt;&gt; '交易取消'
             GROUP BY rs.plan_sn
         ),
         /* 原始数据不包含 PP 分摊数量，所有分摊字段固定为不可用。 */
@@ -490,10 +506,11 @@
                     WHEN pr.status_text = '已完成' AND pr.related_order_count = 0 THEN 'COMPLETED'
                     WHEN pr.related_order_count &gt; 0 AND pr.related_sku_line_count &gt; 0
                          AND pr.completed_sku_line_count = pr.related_sku_line_count THEN 'COMPLETED'
-                    WHEN pr.related_order_count &gt; 0 AND pr.completed_status_order_count = pr.related_order_count THEN 'COMPLETED'
+                    WHEN pr.related_order_count &gt; 0 AND pr.related_sku_line_count &gt; 0
+                         AND pr.completed_status_order_count = pr.related_order_count THEN 'COMPLETED'
                     WHEN pr.status_text = '待审批' THEN 'PP_CREATE'
                     WHEN pr.status_text = '待采购' THEN 'PP_APPROVAL'
-                    WHEN pr.related_order_count = 0 THEN 'PP_APPROVAL'
+                    WHEN pr.related_sku_line_count = 0 THEN 'PP_APPROVAL'
                     WHEN pr.earliest_po_node_rank = 3 THEN 'PO_CREATE'
                     WHEN pr.earliest_po_node_rank = 4 THEN 'PO_APPROVAL'
                     WHEN pr.earliest_po_node_rank = 5 THEN 'SUPPLIER_SENT'
@@ -503,7 +520,7 @@
                     ELSE CAST(NULL AS CHAR)
                 END AS current_node,
                 CASE
-                    WHEN pr.related_order_count = 0 THEN 'PENDING'
+                    WHEN pr.related_sku_line_count = 0 THEN 'PENDING'
                     WHEN pr.completed_sku_line_count &gt; 0
                          AND pr.first_completion_delivery_status = 'COMPLETED_OVER_SLA'
                         THEN 'COMPLETED_OVER_SLA'
@@ -650,6 +667,15 @@
             INNER JOIN lx_receipt_order_item roi ON roi.order_sn = ro.order_sn
             WHERE ro.create_time IS NOT NULL
               AND ro.create_time &lt;= #{query.asOf}
+            <if test="_parameter.containsKey('planSn') and planSn != null and planSn != ''">
+              AND ro.business_order_sn IN (
+                  SELECT ass.order_sn
+                  FROM lx_pp_po_sku_ass ass
+                  WHERE ass.plan_sn = #{planSn}
+                    AND ass.order_sn IS NOT NULL
+                    AND ass.order_sn &lt;&gt; ''
+              )
+            </if>
             GROUP BY ro.id, ro.order_sn, ro.business_order_sn, ro.create_time, ro.create_realname
         ),
         receipt_summary AS (
@@ -674,6 +700,15 @@
             INNER JOIN lx_receipt_order_item roi ON roi.order_sn = ro.order_sn
             WHERE ro.create_time IS NOT NULL
               AND ro.create_time &lt;= #{query.asOf}
+            <if test="_parameter.containsKey('planSn') and planSn != null and planSn != ''">
+              AND ro.business_order_sn IN (
+                  SELECT ass.order_sn
+                  FROM lx_pp_po_sku_ass ass
+                  WHERE ass.plan_sn = #{planSn}
+                    AND ass.order_sn IS NOT NULL
+                    AND ass.order_sn &lt;&gt; ''
+              )
+            </if>
             GROUP BY ro.id, ro.order_sn, ro.business_order_sn, NULLIF(TRIM(roi.sku), ''), ro.create_time, ro.create_realname
         ),
         /* PO×SKU 维度 CR 收货汇总：PO 详情按单个 SKU 限定时的 CR 单号/单量。 */
@@ -720,6 +755,15 @@
                     ON pdf.po_item_id = ibi.purchase_item_id
                    AND pdf.order_sn = ib.purchase_order_sn
             WHERE <include refid="validInboundCondition"/>
+            <if test="_parameter.containsKey('planSn') and planSn != null and planSn != ''">
+              AND ib.purchase_order_sn IN (
+                  SELECT ass.order_sn
+                  FROM lx_pp_po_sku_ass ass
+                  WHERE ass.plan_sn = #{planSn}
+                    AND ass.order_sn IS NOT NULL
+                    AND ass.order_sn &lt;&gt; ''
+              )
+            </if>
         ),
         ib_per_document AS (
             SELECT
@@ -875,6 +919,7 @@
                 pfl.product_names,
                 po.status,
                 po.status_text,
+                po.sub_status_text,
                 po.supplier_name AS supplier,
                 po.ware_house_name AS warehouse,
                 po.opt_realname AS buyer,
@@ -1237,6 +1282,7 @@
         pof.skus,
         pof.product_names,
         pof.status_text,
+        pof.sub_status_text,
         pof.supplier,
         pof.warehouse,
         pof.buyer,
@@ -1325,6 +1371,7 @@
             psf.sku AS sku,
             psf.product_name AS product_name,
             pof.status_text AS status_text,
+            pof.sub_status_text AS sub_status_text,
             pof.supplier AS supplier,
             pof.warehouse AS warehouse,
             pof.buyer AS buyer,
@@ -1389,6 +1436,7 @@
             pof.skus,
             pof.product_names,
             pof.status_text,
+            pof.sub_status_text,
             pof.supplier,
             pof.warehouse,
             pof.buyer,
