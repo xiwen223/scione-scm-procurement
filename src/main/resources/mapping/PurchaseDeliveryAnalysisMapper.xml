@@ -1006,6 +1006,8 @@
         </if>
         <if test="query.risk == 'delivery'">
             AND pf.delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')
+            <!-- 交付超时只针对尚未完成的 PP：节点已到流程完成的不再计入 -->
+            AND COALESCE(pf.current_node, '') &lt;&gt; 'COMPLETED'
         </if>
     </sql>
 
@@ -1203,7 +1205,7 @@
                 (SELECT COALESCE(SUM(current_node = 'COMPLETED'), 0) FROM filtered_plans) AS completed_count,
                 (SELECT COALESCE(SUM(order_timeliness = 'OVERDUE' AND current_node IN ('PP_CREATE', 'PP_APPROVAL')), 0)
                  FROM node_scoped_plans) AS order_overdue_count,
-                (SELECT COALESCE(SUM(delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA')), 0)
+                (SELECT COALESCE(SUM(delivery_status IN ('IN_TRANSIT_OVERDUE', 'COMPLETED_OVER_SLA') AND COALESCE(current_node, '') &lt;&gt; 'COMPLETED'), 0)
                  FROM node_scoped_plans) AS delivery_overdue_count
         )
         SELECT
