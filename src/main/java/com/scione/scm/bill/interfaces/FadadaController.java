@@ -1,0 +1,142 @@
+package com.scione.scm.bill.interfaces;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.scione.common.response.ApiResponse;
+import com.scione.scm.bill.application.BuyerCompanyApplicationService;
+import com.scione.scm.bill.application.FileApplicationService;
+import com.scione.scm.bill.application.ProcurementOperationLogRecorder;
+import com.scione.scm.bill.application.dto.BuyerCompanyDetailResponse;
+import com.scione.scm.bill.application.dto.BuyerCompanySealUploadResponse;
+import com.scione.scm.bill.application.dto.FadadaCorpAuthStatusResponse;
+import com.scione.scm.bill.application.dto.FadadaSealFreeSignUrlResponse;
+import com.scione.scm.bill.application.dto.FileUrlRequest;
+import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.util.Optional;
+
+import static com.scione.scm.bill.application.ProcurementOperationLogRecorder.OPERATOR_HEADER;
+import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementBusinessType.BUYER_COMPANY;
+import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.REMOVE_SEAL;
+import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.UPLOAD_SEAL;
+
+/**
+ * 法大大开放平台相关接口。
+ *
+ * <p>当前提供两类能力：</p>
+ * <ul>
+ *   <li>企业授权状态查询：按企业证件号（统一社会信用代码）调用法大大 {@code /corp/get}，
+ *       返回企业绑定、认证、授权与法大大公司 ID 等信息，供前端回显公司名称与法大大公司 ID；</li>
+ *   <li>印章上传：把需方公司的印章图片提交给法大大创建企业印章
+ *       （{@code /seal/create-by-image}），成功后把图片存到对象存储并写回公司档案；</li>
+ *   <li>印章图片访问地址：按 objectKey 换取对象存储的临时访问地址（预签名 URL），
+ *       供「我司信息」详情页预览与下载签章图片；</li>
+ *   <li>印章移除：按公司的印章审核状态决定是否先清理法大大侧印章，再删除对象存储图片并清空公司签章字段。</li>
+ * </ul>
+ */
+@Slf4j
+@RestController
+@Validated
+@RequestMapping("/api/v1/fadada")
+@Tag(name = "法大大", description = "法大大企业授权状态查询、印章上传 / 移除与签章图片访问地址")
+public class FadadaController {
+
+    @Autowired
+    private FadadaOpenApiClient fadadaOpenApiClient;
+
+    @Autowired
+    private BuyerCompanyApplicationService buyerCompanyApplicationService;
+
+    @Autowired
+    private FileApplicationService fileApplicationService;
+
+    @Autowired
+    private ProcurementOperationLogRecorder operationLog;
+
+    @GetMapping("/corp/auth-status")
+    @Operation(summary = "根据 corpIdentNo 查询企业授权状态")
+    public ApiResponse<FadadaCorpAuthStatusResponse> corpAuthStatus(
+            @RequestParam("corpIdentNo") @NotBlank String corpIdentNo) {
+        Optional<JsonNode> corp = fadadaOpenApiClient.getCorp(corpIdentNo);
+        return ApiResponse.success(corp.map(FadadaCorpAuthStatusResponse::from).orElse(null));
+    }
+
+    /**
+     * 上传印章图片：公司必须已通过法大大实名认证（buyer_company.ident_status = 1）。
+     * 服务端先把图片上传到对象存储（目录 company-seal）并写入库内签章字段，再调法大大创建企业印章；
+     * 这个顺序不能颠倒，原因见 {@link BuyerCompanyApplicationService#uploadSeal} 的时序说明。
+     * 法大大受理后立即返回受理号 verifyId，印章审核结果由回调异步回写。
+     */
+    @PostMapping(value = "/seal/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "上传印章图片并创建法大大企业印章")
+    public ApiResponse<BuyerCompanySealUploadResponse> uploadSeal(
+            @RequestParam("id") @Min(1) Long id,
+            @RequestPart("file") MultipartFile file,
+            @RequestParam("sealName") @NotBlank @Size(max = 50) String sealName,
+            @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail) {
+        BuyerCompanySealUploadResponse result = buyerCompanyApplicationService.uploadSeal(id, file, sealName);
+        operationLog.record(BUYER_COMPANY, id, result.company().companyName(), UPLOAD_SEAL, operatorEmail);
+        return ApiResponse.success(result);
+    }
+
+    /**
+     * 生成当前需方公司印章绑定免验证签场景码的法大大授权链接。
+     * 只返回链接，不会直接授权；打开链接后须由企业超管确认。
+     */
+    @PostMapping("/seal/free-sign-url")
+    @Operation(summary = "获取印章场景码免验证签授权链接")
+    public ApiResponse<FadadaSealFreeSignUrlResponse> sealFreeSignUrl(
+            @RequestParam("id") @Min(1) Long id,
+            @RequestHeader(value = "X-User-Email", required = false) String userEmail) {
+        return ApiResponse.success(buyerCompanyApplicationService.getSealFreeSignAuthorizationUrl(id, userEmail));
+    }
+
+    /**
+     * 按 objectKey 换取签章图片的临时访问地址（预签名 URL），供「我司信息」详情页预览与下载。
+     * 与通用文件接口 {@link FileController} 的 {@code /api/v1/files/file-url} 同源，
+     * 这里单独暴露是为了让签章相关的读写都收敛在法大大模块下。
+     */
+    @PostMapping("/seal/file-url")
+    @Operation(summary = "根据 objectKey 获取签章图片访问地址")
+    public ApiResponse<String> sealFileUrl(@Valid @RequestBody FileUrlRequest request) {
+        return ApiResponse.success(fileApplicationService.presignedUrl(request.objectKey(), request.minutes()));
+    }
+
+    /**
+     * 移除签章：按公司的印章审核状态决定是否清理法大大侧印章，
+     * 之后删除对象存储中的签章图片并清空买家公司的签章字段。
+     *
+     * <ul>
+     *   <li>印章审核中（{@code seal_flow_status = 0}）→ 409，不允许删除；</li>
+     *   <li>审核成功（{@code 1}）→ 先调用法大大 {@code /seal/set-status} 停用，再调 {@code /seal/delete} 删除；</li>
+     *   <li>审核失败（{@code 2}）→ 跳过法大大，直接清理。</li>
+     * </ul>
+     */
+    @PostMapping("/seal/remove")
+    @Operation(summary = "移除印章：同步清理法大大印章、对象存储图片与公司签章字段")
+    public ApiResponse<BuyerCompanyDetailResponse> removeSeal(
+            @RequestParam("id") @Min(1) Long id,
+            @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail) {
+        BuyerCompanyDetailResponse result = buyerCompanyApplicationService.removeSeal(id);
+        operationLog.record(BUYER_COMPANY, id, result.companyName(), REMOVE_SEAL, operatorEmail);
+        return ApiResponse.success(result);
+    }
+}

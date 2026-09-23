@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.PoSyncRecordMapper">
+
+    <insert id="upsert">
+        INSERT INTO po_sync_record
+        (purchase_order_no, custom_order_sn, supplier_id, supplier_name, supplier_phone, contact_person,
+        po_status, po_status_text, status_shipped, status_shipped_text, amount_total, total_price,
+        quantity_total, warehouse_name, remark, po_order_time, po_create_time, po_update_time, sync_time)
+        VALUES
+        (#{purchaseOrderNo}, #{customOrderSn}, #{supplierId}, #{supplierName}, #{supplierPhone}, #{contactPerson},
+        #{poStatus}, #{poStatusText}, #{statusShipped}, #{statusShippedText}, #{amountTotal}, #{totalPrice},
+        #{quantityTotal}, #{warehouseName}, #{remark}, #{poOrderTime}, #{poCreateTime}, #{poUpdateTime}, #{syncTime})
+        ON DUPLICATE KEY UPDATE
+        custom_order_sn     = VALUES(custom_order_sn),
+        supplier_id         = VALUES(supplier_id),
+        supplier_name       = VALUES(supplier_name),
+        supplier_phone      = VALUES(supplier_phone),
+        contact_person      = VALUES(contact_person),
+        po_status           = VALUES(po_status),
+        po_status_text      = VALUES(po_status_text),
+        status_shipped      = VALUES(status_shipped),
+        status_shipped_text = VALUES(status_shipped_text),
+        amount_total        = VALUES(amount_total),
+        total_price         = VALUES(total_price),
+        quantity_total      = VALUES(quantity_total),
+        warehouse_name      = VALUES(warehouse_name),
+        remark              = VALUES(remark),
+        po_order_time       = VALUES(po_order_time),
+        po_create_time      = VALUES(po_create_time),
+        po_update_time      = VALUES(po_update_time),
+        sync_time           = VALUES(sync_time)
+    </insert>
+
+    <select id="selectPendingForContract" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.PoSyncRecordPO">
+        SELECT *
+        FROM po_sync_record
+        WHERE po_status = 1
+          AND contract_created = 0
+          AND is_deleted = 0
+        ORDER BY po_order_time ASC
+    </select>
+
+    <select id="selectPendingForContractByOrderNos" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.PoSyncRecordPO">
+        SELECT *
+        FROM po_sync_record
+        WHERE purchase_order_no IN
+        <foreach collection="orderNos" item="orderNo" open="(" separator="," close=")">
+            #{orderNo}
+        </foreach>
+          AND po_status = 1
+          AND contract_created = 0
+          AND is_deleted = 0
+        ORDER BY po_order_time ASC
+    </select>
+
+    <update id="markContractCreated">
+        UPDATE po_sync_record
+        SET contract_created = 1,
+            contract_id = #{contractId},
+            update_time = NOW()
+        WHERE purchase_order_no = #{purchaseOrderNo}
+    </update>
+
+    <select id="selectByPurchaseOrderNo" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.PoSyncRecordPO">
+        SELECT *
+        FROM po_sync_record
+        WHERE purchase_order_no = #{purchaseOrderNo}
+        AND is_deleted = 0
+        LIMIT 1
+    </select>
+</mapper>

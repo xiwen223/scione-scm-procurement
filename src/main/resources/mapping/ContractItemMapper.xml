@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractItemMapper">
+
+    <insert id="batchInsert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO contract_item
+        (contract_id, contract_no, sku, product_id, product_name, specification,
+        quantity, unit, unit_price, amount, delivery_date, warehouse_name, remark,
+        cases_num, quantity_per_case, pic_url)
+        VALUES
+        <foreach collection="items" item="it" separator=",">
+            (#{it.contractId}, #{it.contractNo}, #{it.sku}, #{it.productId}, #{it.productName},
+            #{it.specification}, #{it.quantity}, #{it.unit}, #{it.unitPrice}, #{it.amount},
+            #{it.deliveryDate}, #{it.warehouseName}, #{it.remark},
+            #{it.casesNum}, #{it.quantityPerCase}, #{it.picUrl})
+        </foreach>
+    </insert>
+
+    <select id="selectByContractId" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractItemPO">
+        SELECT id, contract_id, contract_no, sku, product_id, product_name, specification,
+        quantity, unit, unit_price, amount, delivery_date, warehouse_name, remark,
+        cases_num, quantity_per_case, pic_url, create_time
+        FROM contract_item
+        WHERE contract_id = #{contractId}
+        ORDER BY id
+    </select>
+
+
+    <!-- 批量版：按 sku 取各自 id 最大的那条有图记录，一次查询覆盖整单明细 -->
+    <select id="selectLatestPicUrlsBySkus"
+            resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractItemPO">
+        SELECT ci.sku, ci.pic_url
+        FROM contract_item ci
+        JOIN (
+            SELECT sku, MAX(id) AS max_id
+            FROM contract_item
+            WHERE pic_url IS NOT NULL
+              AND pic_url != ''
+              AND sku IN
+              <foreach collection="skus" item="sku" open="(" separator="," close=")">#{sku}</foreach>
+            GROUP BY sku
+        ) latest ON ci.id = latest.max_id
+    </select>
+
+    <update id="updateById">
+        UPDATE contract_item
+        SET product_name = #{productName},
+            specification = #{specification},
+            quantity = #{quantity},
+            unit_price = #{unitPrice},
+            amount = #{amount},
+            delivery_date = #{deliveryDate},
+            warehouse_name = #{warehouseName},
+            pic_url = #{picUrl},
+            remark = #{remark}
+        WHERE id = #{id}
+    </update>
+
+    <update id="updatePricing">
+        UPDATE contract_item
+        SET quantity = #{quantity},
+            unit_price = #{unitPrice},
+            amount = #{amount}
+        WHERE id = #{id}
+          AND EXISTS (SELECT 1 FROM contract c
+                      WHERE c.id = contract_item.contract_id
+                        AND c.status = 1 AND c.is_deleted = 0)
+    </update>
+
+    <!-- 详情查询补齐的历史明细图片回写；带空值条件，已有图片的行不会被覆盖 -->
+    <update id="updatePicUrl">
+        UPDATE contract_item
+        SET pic_url = #{picUrl}
+        WHERE id = #{id}
+          AND (pic_url IS NULL OR pic_url = '')
+    </update>
+
+    <!-- contract_no 是明细表里的冗余列（便于按合同编号直接检索明细），主表编号变更时需一并刷新 -->
+    <update id="updateContractNoByContractId">
+        UPDATE contract_item
+        SET contract_no = #{contractNo}
+        WHERE contract_id = #{contractId}
+    </update>
+</mapper>

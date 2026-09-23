@@ -5,6 +5,11 @@ spring:
     banner-mode: off
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
+  servlet:
+    multipart:
+      # 印章图片允许 2MB（框架默认 1MB 偏小），与前端 2MB 校验保持一致
+      max-file-size: 2MB
+      max-request-size: 10MB
 
 shipping-mark:
   max-data-rows: 50
@@ -14,6 +19,12 @@ shipping-mark:
 
 delivery-alert:
   start-date: ${DELIVERY_ALERT_START_DATE:2026-08-01}
+
+contract:
+  auto-create:
+    enabled: ${CONTRACT_AUTO_CREATE_ENABLED:true}
+    # Spring cron：默认每 5 分钟同步领星 PO 后自动创建合同。
+    cron: ${CONTRACT_AUTO_CREATE_CRON:0 0/5 * * * ?}
 
 purchase-delivery-analysis:
   start-date: ${PURCHASE_DELIVERY_ANALYSIS_START_DATE:2026-01-01}
@@ -26,3 +37,19 @@ lingxing:
     connect-timeout: ${LINGXING_CONNECT_TIMEOUT:10s}
     read-timeout: ${LINGXING_READ_TIMEOUT:30s}
     token-ttl: ${LINGXING_TOKEN_TTL:90m}
+
+fadada:
+  open-api:
+    # 地址需要包含 /api/v5；生产环境请通过 Nacos 或环境变量覆盖。
+    endpoint: ${FADADA_OPEN_API_ENDPOINT:https://uat-api.fadada.com/api/v5}
+    app-id: ${FADADA_APP_ID:}
+    app-secret: ${FADADA_APP_SECRET:}
+    open-corp-id: ${FADADA_OPEN_CORP_ID:}
+    notify-url: ${FADADA_NOTIFY_URL:}
+    api-sub-version: ${FADADA_API_SUB_VERSION:5.1}
+    connect-timeout: ${FADADA_CONNECT_TIMEOUT:10s}
+    read-timeout: ${FADADA_READ_TIMEOUT:60s}
+    token-ttl: ${FADADA_TOKEN_TTL:7200s}
+    token-refresh-ahead: ${FADADA_TOKEN_REFRESH_AHEAD:60s}
+    max-attempts: ${FADADA_MAX_ATTEMPTS:3}
+    retry-initial-backoff: ${FADADA_RETRY_INITIAL_BACKOFF:2s}

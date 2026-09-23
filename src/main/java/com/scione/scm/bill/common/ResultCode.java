@@ -20,6 +20,33 @@ public enum ResultCode {
     DATABASE_ERROR(1099102, "数据库异常"),
     PRODUCT_NOT_FOUND(1011001, "商品不存在"),
     LINGXING_API_ERROR(1011002, "领星商品服务调用失败"),
+    FADADA_API_ERROR(1011003, "法大大电子签章服务调用失败"),
+    BUYER_COMPANY_NOT_FOUND(1012001, "需方公司不存在"),
+    BUYER_COMPANY_CREDIT_CODE_DUPLICATE(1012002, "统一社会信用代码已存在"),
+    BUYER_COMPANY_OPEN_CORPID_DUPLICATE(1012003, "法大大公司 ID 已存在"),
+    BUYER_COMPANY_DEFAULT_REQUIRED(1012004, "系统必须保留一个启用的默认合同需方"),
+    BUYER_COMPANY_DEFAULT_CANNOT_DELETE(1012005, "默认合同需方不可删除"),
+    BUYER_COMPANY_IN_USE(1012006, "需方公司已被合同引用，不能删除"),
+    BUYER_COMPANY_SEAL_NOT_IDENTIFIED(1012007, "公司未完成法大大实名认证，无法创建印章"),
+    BUYER_COMPANY_SEAL_AUDITING(1012008, "印章正在审核中，无法删除"),
+    CONTRACT_TEMPLATE_NOT_FOUND(1013001, "合同模板不存在"),
+    CONTRACT_TEMPLATE_DEFAULT_REQUIRED(1013002, "系统必须保留一个启用的默认合同模板"),
+    CONTRACT_TEMPLATE_DEFAULT_CANNOT_DELETE(1013003, "默认合同模板不可删除"),
+    CONTRACT_TEMPLATE_IN_USE(1013004, "合同模板已被合同引用，不能删除"),
+    /**
+     * 需方公司未配置（或已过期）法大大免验证签场景码，发起签署前即被拦截。
+     * 前端按该业务码弹出阻断提示弹窗，而不是只给一条容易忽略的轻提示。
+     */
+    CONTRACT_SIGN_FREE_SIGN_NOT_CONFIGURED(1013005, "我司未配置免验证签场景码，无法发起签署"),
+    /**
+     * 合同当前状态不允许该操作（如签署中/履行中不允许修改）。
+     * 与 PARAM_ERROR 区分开：调用方参数本身没错，是合同状态与本次操作冲突。
+     */
+    CONTRACT_STATUS_NOT_ALLOWED(1013006, "合同当前状态不允许该操作"),
+    CONTRACT_PURCHASE_ORDER_ALREADY_EXISTS(1013007, "该采购单已存在未取消的合同，不能重复创建"),
+    STORAGE_API_ERROR(1014001, "文件存储服务调用失败"),
+    PROCUREMENT_OPERATION_LOG_BUSINESS_TYPE_INVALID(1015001, "供应链操作日志业务类型无效"),
+    CONTRACT_TEMPLATE_FILL_FAILED(1013001, "合同模板填充失败"),
     SHIPPING_MARK_ALREADY_EXISTS(1010001, "单据编号已存在"),
     SHIPPING_MARK_NOT_FOUND(1010002, "单据不存在"),
     IMPORT_FILE_UNSUPPORTED(1010003, "仅支持 .xlsx / .xls 格式的 Excel 文件"),

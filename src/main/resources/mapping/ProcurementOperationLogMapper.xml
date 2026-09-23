@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ProcurementOperationLogMapper">
+
+    <insert id="insert">
+        INSERT INTO procurement_operation_log
+        (business_type, data_id, data_name, operator_id, operator_name, operation_type,
+         operation_desc, operation_details, ip_address, create_time)
+        VALUES
+        (#{businessType}, #{dataId}, #{dataName}, #{operatorId}, #{operatorName}, #{operationType},
+         #{operationDesc}, #{operationDetails}, #{ipAddress}, NOW(0))
+    </insert>
+
+    <!-- 合同编号变更后同步日志里的编号快照。business_type = 1 即 ProcurementBusinessType.CONTRACT；
+         按 data_id（合同ID）定位而非 data_name，避免误伤自动建单跳过时以 PO 单号占位的日志（其 data_id = 0）。 -->
+    <update id="updateDataNameByContractId">
+        UPDATE procurement_operation_log
+        SET data_name = #{contractNo}
+        WHERE business_type = 1
+          AND data_id = #{contractId}
+    </update>
+
+    <sql id="columns">
+        id,
+        business_type,
+        data_id,
+        data_name,
+        operator_id,
+        operator_name,
+        operation_type,
+        operation_desc,
+        operation_details,
+        ip_address,
+        create_time
+    </sql>
+
+    <sql id="filters">
+        <if test="dataName != null and dataName != ''">
+            AND data_name LIKE CONCAT('%', #{dataName}, '%')
+        </if>
+        <if test="businessType != null">
+            AND business_type = #{businessType}
+        </if>
+        <if test="operationType != null and operationType != ''">
+            AND operation_type LIKE CONCAT('%', #{operationType}, '%')
+        </if>
+        <if test="operator != null and operator != ''">
+            AND (
+                operator_name LIKE CONCAT('%', #{operator}, '%')
+                OR CAST(operator_id AS CHAR) LIKE CONCAT('%', #{operator}, '%')
+            )
+        </if>
+        <if test="startTime != null">
+            AND create_time <![CDATA[>=]]> #{startTime}
+        </if>
+        <if test="endTime != null">
+            AND create_time <![CDATA[<]]> #{endTime}
+        </if>
+    </sql>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(1)
+        FROM procurement_operation_log
+        WHERE 1 = 1
+        <include refid="filters"/>
+    </select>
+
+    <select id="findPage" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ProcurementOperationLogPO">
+        SELECT
+            <include refid="columns"/>
+        FROM procurement_operation_log
+        WHERE 1 = 1
+        <include refid="filters"/>
+        ORDER BY create_time DESC, id DESC
+        LIMIT #{pageSize} OFFSET #{offset}
+    </select>
+
+    <!-- 合同列表的「催办时间」：每个合同最近一次催办的时间（business_type = 1 合同，operation_type = URGE_SIGN）。
+         催办只写操作日志、合同表没有对应字段，所以这里按合同批量聚合，避免在合同列表 SQL 里逐行子查询。 -->
+    <select id="selectLatestUrgeTimes" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ProcurementOperationLogPO">
+        SELECT data_id,
+               MAX(create_time) AS create_time
+        FROM procurement_operation_log
+        WHERE business_type = 1
+          AND operation_type = 'URGE_SIGN'
+          AND data_id IN
+        <foreach collection="contractIds" item="contractId" open="(" separator="," close=")">
+            #{contractId}
+        </foreach>
+        GROUP BY data_id
+    </select>
+</mapper>

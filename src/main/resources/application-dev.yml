@@ -17,6 +17,10 @@ spring:
         group: DEFAULT_GROUP
         file-extension: yaml
 
+permission:
+  # 角色清单，逗号分隔。Nacos 中的 permission.roleList 会覆盖此默认值。
+  roleList: ADMIN,PURCHASER,BUYER
+
 springdoc:
   api-docs:
     path: /v3/api-docs

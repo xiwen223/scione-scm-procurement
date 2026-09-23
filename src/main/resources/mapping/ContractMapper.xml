@@ -1,0 +1,282 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractMapper">
+
+    <sql id="columns">
+        id, contract_no, contract_name, contract_type, purchase_order_no, source_type,
+        supplier_id, supplier_name, supplier_phone, supplier_credit_code, supplier_account_name,
+        supplier_bank_name, supplier_bank_account, prepay_percent, settlement_method, supplier_address, contact_person,
+        buyer_company_id, buyer_company_name, buyer_company_code, buyer_address,
+        post_code, buyer_phone, fax,
+        original_amount, discounted_amount, contract_amount, contract_date, delivery_date, template_id,
+        status, cancel_reason, cancel_time, fadada_contract_id, fadada_task_id,
+        (status = 3 AND NULLIF(TRIM(fadada_abolished_task_id), '') IS NOT NULL) AS abolish_pending,
+        contract_pdf_url, signed_pdf_url, sign_start_time, sign_complete_time, complete_time,
+        error_message, sign_launch_state, sign_launch_error, creator_id, creator_name, create_type, create_time, update_time, is_deleted
+    </sql>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO contract
+        (contract_no, contract_name, contract_type, purchase_order_no, source_type,
+        supplier_id, supplier_name, supplier_phone, supplier_credit_code, supplier_account_name,
+        supplier_bank_name, supplier_bank_account, prepay_percent, settlement_method, supplier_address, contact_person,
+        buyer_company_id, buyer_company_name, buyer_company_code, buyer_address,
+        post_code, buyer_phone, fax,
+        original_amount, discounted_amount, contract_amount, contract_date, delivery_date, template_id,
+        status, creator_id, creator_name, create_type)
+        VALUES
+        (#{contractNo}, #{contractName}, #{contractType}, #{purchaseOrderNo}, #{sourceType},
+        #{supplierId}, #{supplierName}, #{supplierPhone}, #{supplierCreditCode}, #{supplierAccountName},
+        #{supplierBankName}, #{supplierBankAccount}, #{prepayPercent}, #{settlementMethod}, #{supplierAddress}, #{contactPerson},
+        #{buyerCompanyId}, #{buyerCompanyName}, #{buyerCompanyCode}, #{buyerAddress},
+        #{postCode}, #{buyerPhone}, #{fax},
+        #{originalAmount}, #{discountedAmount}, #{contractAmount}, #{contractDate}, #{deliveryDate}, #{templateId},
+        #{status}, #{creatorId}, #{creatorName}, #{createType})
+    </insert>
+
+    <select id="existsActiveByPurchaseOrderNo" resultType="int">
+        SELECT COUNT(1)
+        FROM contract
+        WHERE purchase_order_no = #{purchaseOrderNo}
+        AND status != 5
+        AND is_deleted = 0
+        LIMIT 1
+    </select>
+
+    <select id="findActiveByPurchaseOrderNo" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractPO">
+        SELECT id, contract_no, status
+        FROM contract
+        WHERE purchase_order_no = #{purchaseOrderNo}
+        AND status != 5
+        AND is_deleted = 0
+        ORDER BY id DESC
+        LIMIT 1
+    </select>
+
+    <select id="findByContractNo" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractPO">
+        SELECT <include refid="columns"/>
+        FROM contract
+        WHERE contract_no = #{contractNo}
+        AND is_deleted = 0
+    </select>
+
+    <select id="findContractNoByFadadaTaskId" resultType="string">
+        SELECT contract_no
+        FROM contract
+        WHERE (fadada_task_id = #{taskId} OR fadada_abolished_task_id = #{taskId})
+          AND is_deleted = 0
+        LIMIT 1
+    </select>
+
+    <select id="findFadadaAbolishedTaskId" resultType="string">
+        SELECT fadada_abolished_task_id
+        FROM contract
+        WHERE id = #{id}
+          AND is_deleted = 0
+        LIMIT 1
+    </select>
+
+    <!-- 合同编号唯一性校验：不带 is_deleted 过滤，因为逻辑删除的行仍占用唯一索引 -->
+    <select id="countByContractNoExcludingId" resultType="int">
+        SELECT COUNT(1)
+        FROM contract
+        WHERE contract_no = #{contractNo}
+          AND id != #{excludeId}
+        LIMIT 1
+    </select>
+
+    <update id="updatePdfUrl">
+        UPDATE contract
+        SET contract_pdf_url = #{pdfUrl},
+            update_time = NOW()
+        WHERE id = #{id}
+          AND is_deleted = 0
+          <choose>
+              <!-- 编辑时只允许创建状态清空旧文件。 -->
+              <when test="pdfUrl == null">
+                  AND status = 1
+                  AND COALESCE(sign_launch_state, '') NOT IN ('QUEUED', 'RUNNING', 'WAIT_CALLBACK', 'UNKNOWN')
+              </when>
+              <!-- 后台签署重新生成的文件允许落库，但不开放签署期间的编辑。 -->
+              <otherwise>
+                  AND ((status = 1 AND COALESCE(sign_launch_state, '') NOT IN ('QUEUED', 'RUNNING', 'WAIT_CALLBACK', 'UNKNOWN'))
+                      OR (status = 2 AND sign_launch_state = 'RUNNING'))
+              </otherwise>
+          </choose>
+    </update>
+
+    <update id="markSigning">
+        UPDATE contract
+        SET sign_launch_state = CASE WHEN sign_launch_state = 'DONE' THEN 'DONE' ELSE 'WAIT_CALLBACK' END, sign_launch_error = NULL,
+            fadada_task_id = #{fadadaTaskId},
+            sign_start_time = NOW(),
+            update_time = NOW()
+        WHERE id = #{id}
+          AND status IN (2, 3)
+          AND (fadada_task_id IS NULL OR fadada_task_id = #{fadadaTaskId})
+          AND is_deleted = 0
+    </update>
+
+    <update id="cancel">
+        UPDATE contract
+        SET status = 5,
+            cancel_reason = #{cancelReason},
+            cancel_time = NOW(),
+            update_time = NOW()
+        WHERE id = #{id}
+          AND status IN (1, 2, 3)
+          AND COALESCE(sign_launch_state, '') NOT IN ('QUEUED', 'RUNNING', 'WAIT_CALLBACK', 'UNKNOWN')
+          AND is_deleted = 0
+    </update>
+
+    <update id="markExecuting">
+        UPDATE contract
+        SET status = 3, sign_launch_state = 'DONE', sign_launch_error = NULL, contract_date = CURDATE(), sign_complete_time = NOW(), update_time = NOW()
+        WHERE id = #{id} AND status = 2 AND is_deleted = 0
+    </update>
+    <!-- 取消前冻结当时的文件。创建态保留未盖章版本；签署/履行态保存法大大原任务文件。 -->
+    <update id="saveCancellationSnapshot">
+        UPDATE contract
+        SET contract_pdf_url = CASE WHEN #{expectedStatus} = 1 THEN #{snapshotUrl} ELSE contract_pdf_url END,
+            signed_pdf_url = CASE WHEN #{expectedStatus} = 1 THEN NULL ELSE #{snapshotUrl} END,
+            update_time = NOW()
+        WHERE id = #{id} AND status = #{expectedStatus} AND status IN (1, 2, 3)
+          AND is_deleted = 0 AND fadada_task_id &lt;=&gt; #{taskId}
+          AND (status != 1 OR contract_pdf_url &lt;=&gt; #{originalPdfUrl})
+          AND (status != 1 OR COALESCE(sign_launch_state, '') NOT IN ('QUEUED', 'RUNNING', 'WAIT_CALLBACK', 'UNKNOWN'))
+    </update>
+
+    <update id="markCompleted">
+        UPDATE contract SET status = 4, complete_time = NOW(), update_time = NOW()
+        WHERE id = #{id} AND status = 3 AND is_deleted = 0
+          AND NULLIF(TRIM(fadada_abolished_task_id), '') IS NULL
+    </update>
+    <select id="selectExecutingContracts" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractPO">
+        SELECT <include refid="columns"/> FROM contract
+        WHERE status = 3 AND is_deleted = 0
+          AND NULLIF(TRIM(fadada_abolished_task_id), '') IS NULL
+        ORDER BY id ASC
+    </select>
+
+
+    <!-- 条件查询 SQL 片段 -->
+    <sql id="whereConditions">
+        <where>
+            is_deleted = 0
+            <if test="req.contractNo != null and req.contractNo != ''">
+                AND contract_no = #{req.contractNo}
+            </if>
+            <if test="req.purchaseOrderNo != null and req.purchaseOrderNo != ''">
+                AND purchase_order_no = #{req.purchaseOrderNo}
+            </if>
+            <if test="req.supplierName != null and req.supplierName != ''">
+                AND supplier_name LIKE CONCAT('%', #{req.supplierName}, '%')
+            </if>
+            <if test="req.status != null">
+                AND status = #{req.status}
+            </if>
+            <!-- 日期范围按「签署时间」过滤：即我方（需方）发起签署并自动盖章的时间 sign_start_time。
+                 它是 DATETIME 而不是 DATE，结束日期必须按「次日 0 点前」比较，否则会漏掉结束当天的全部数据；
+                 未签署（sign_start_time 为 NULL）的合同天然不落在任何签署时间区间内。 -->
+            <if test="req.startDate != null">
+                AND sign_start_time &gt;= #{req.startDate}
+            </if>
+            <if test="req.endDate != null">
+                AND sign_start_time &lt; DATE_ADD(#{req.endDate}, INTERVAL 1 DAY)
+            </if>
+        </where>
+    </sql>
+
+    <!-- 列表排序：按更新时间倒序（最近有动作的合同排最前）；同一毫秒并列时用 id 倒序保证分页稳定 -->
+    <select id="selectByPage" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractPO">
+        SELECT <include refid="columns"/>
+        FROM contract
+        <include refid="whereConditions"/>
+        ORDER BY update_time DESC, id DESC
+        LIMIT #{req.offset}, #{req.pageSize}
+    </select>
+
+    <select id="countByCondition" resultType="long">
+        SELECT COUNT(1)
+        FROM contract
+        <include refid="whereConditions"/>
+    </select>
+
+    <select id="selectById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractPO">
+        SELECT <include refid="columns"/>
+        FROM contract
+        WHERE id = #{id}
+        AND is_deleted = 0
+    </select>
+
+    <update id="updateById">
+        UPDATE contract
+        SET contract_no = #{contractNo},
+            contract_name = #{contractName},
+            contract_type = #{contractType},
+            template_id = #{templateId},
+            buyer_company_id = #{buyerCompanyId},
+            supplier_name = #{supplierName},
+            supplier_phone = #{supplierPhone},
+            supplier_credit_code = #{supplierCreditCode},
+            supplier_account_name = #{supplierAccountName},
+            supplier_bank_name = #{supplierBankName},
+            supplier_bank_account = #{supplierBankAccount},
+            prepay_percent = #{prepayPercent},
+            settlement_method = #{settlementMethod},
+            supplier_address = #{supplierAddress},
+            contact_person = #{contactPerson},
+            buyer_company_name = #{buyerCompanyName},
+            buyer_address = #{buyerAddress},
+            post_code = #{postCode},
+            buyer_phone = #{buyerPhone},
+            fax = #{fax},
+            original_amount = #{originalAmount},
+            discounted_amount = #{discountedAmount},
+            contract_amount = #{contractAmount},
+            contract_date = #{contractDate},
+            delivery_date = #{deliveryDate},
+            update_time = NOW()
+        WHERE id = #{id}
+          AND status = 1
+          AND is_deleted = 0
+    </update>
+
+    <!-- 履行中的作废要走法大大解除协议，状态得等回调才变；用户填的作废原因先在这里落库，
+         否则回调回来后（回调不一定带原因）详情页就看不出为什么作废了。原因是选填，空值不覆盖旧值。 -->
+    <update id="markFadadaAbolishPending">
+        UPDATE contract
+        SET fadada_abolished_task_id = #{abolishedTaskId},
+            cancel_reason = COALESCE(NULLIF(#{cancelReason}, ''), cancel_reason),
+            update_time = NOW()
+        WHERE id = #{id}
+          AND status = 3
+          AND is_deleted = 0
+    </update>
+
+    <!-- 回调没带原因时保留发起作废时记录的原因，不要用空值覆盖掉 -->
+    <update id="markFadadaAbolished">
+        UPDATE contract
+        SET status = 5,
+            cancel_reason = COALESCE(NULLIF(#{cancelReason}, ''), cancel_reason),
+            cancel_time = NOW(),
+            is_fadada_abolished = 1,
+            fadada_abolished_time = NOW(),
+            update_time = NOW()
+        WHERE id = #{id}
+          AND status = 3
+          AND is_deleted = 0
+    </update>
+
+    <update id="updateAmounts">
+        UPDATE contract
+        SET original_amount = #{originalAmount},
+            discounted_amount = #{discountedAmount},
+            contract_amount = #{contractAmount},
+            update_time = NOW()
+        WHERE id = #{id}
+          AND status = 1
+          AND COALESCE(sign_launch_state, '') NOT IN ('QUEUED', 'RUNNING', 'UNKNOWN')
+          AND is_deleted = 0
+    </update>
+</mapper>

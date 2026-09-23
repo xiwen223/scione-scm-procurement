@@ -20,6 +20,18 @@
 
     <dependencies>
 
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
+        <!-- 在 Java 进程内将合同 XHTML 渲染为 PDF。 -->
+        <dependency>
+            <groupId>com.openhtmltopdf</groupId>
+            <artifactId>openhtmltopdf-pdfbox</artifactId>
+            <version>1.0.10</version>
+        </dependency>
+
         <!-- 企业公共基础组件 -->
         <dependency>
             <groupId>com.scione</groupId>
@@ -44,10 +56,23 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
-        <!-- Excel 导入与箱唛文件生成 -->
+        <!-- Excel 导入与箱唛文件生成 / 合同模板填充。
+             注意：poi、poi-ooxml、poi-scratchpad 三者必须同版本 —— 父工程 dependencyManagement
+             把 poi.version 锁在 4.1.2，若只显式升级 poi-ooxml，poi core 会被强制改回 4.1.2，
+             运行期 XSSFWorkbook 会抛 NoSuchMethodError: IOUtils.toByteArray(InputStream,int,int)。 -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi</artifactId>
+            <version>5.3.0</version>
+        </dependency>
         <dependency>
             <groupId>org.apache.poi</groupId>
             <artifactId>poi-ooxml</artifactId>
+            <version>5.3.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-scratchpad</artifactId>
             <version>5.3.0</version>
         </dependency>
 
@@ -109,16 +134,20 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!--xxl-->
-        <dependency>
-            <groupId>com.xuxueli</groupId>
-            <artifactId>xxl-job-core</artifactId>
-        </dependency>
-
         <!-- OpenAPI -->
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>2.32.16</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
     </dependencies>
 
