@@ -26,3 +26,18 @@ lingxing:
     connect-timeout: ${LINGXING_CONNECT_TIMEOUT:10s}
     read-timeout: ${LINGXING_READ_TIMEOUT:30s}
     token-ttl: ${LINGXING_TOKEN_TTL:90m}
+
+fadada:
+  open-api:
+    # 地址需要包含 /api/v5；生产环境请通过 Nacos 或环境变量覆盖。
+    endpoint: ${FADADA_OPEN_API_ENDPOINT:https://uat-api.fadada.com/api/v5}
+    app-id: ${FADADA_APP_ID:}
+    app-secret: ${FADADA_APP_SECRET:}
+    open-corp-id: ${FADADA_OPEN_CORP_ID:}
+    api-sub-version: ${FADADA_API_SUB_VERSION:5.1}
+    connect-timeout: ${FADADA_CONNECT_TIMEOUT:10s}
+    read-timeout: ${FADADA_READ_TIMEOUT:60s}
+    token-ttl: ${FADADA_TOKEN_TTL:7200s}
+    token-refresh-ahead: ${FADADA_TOKEN_REFRESH_AHEAD:60s}
+    max-attempts: ${FADADA_MAX_ATTEMPTS:3}
+    retry-initial-backoff: ${FADADA_RETRY_INITIAL_BACKOFF:2s}

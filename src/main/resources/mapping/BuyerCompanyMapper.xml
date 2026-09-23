@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.BuyerCompanyMapper">
+
+    <sql id="columns">
+        id,
+        company_name,
+        company_short_name,
+        credit_code,
+        legal_person,
+        address,
+        phone,
+        bank_name,
+        bank_account,
+        seal_url,
+        seal_base64,
+        fadada_seal_id,
+        open_corpid,
+        priority,
+        is_active,
+        create_time,
+        update_time
+    </sql>
+
+    <sql id="filters">
+        <if test="keyword != null and keyword != ''">
+            AND (
+                company_name LIKE CONCAT('%', #{keyword}, '%')
+                OR phone LIKE CONCAT('%', #{keyword}, '%')
+                OR credit_code LIKE CONCAT('%', #{keyword}, '%')
+            )
+        </if>
+        <if test="isActive != null">
+            AND is_active = #{isActive}
+        </if>
+        <if test="defaultOnly">
+            AND priority = 1
+        </if>
+    </sql>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO buyer_company (
+            company_name,
+            company_short_name,
+            credit_code,
+            legal_person,
+            address,
+            phone,
+            bank_name,
+            bank_account,
+            seal_url,
+            seal_base64,
+            fadada_seal_id,
+            open_corpid,
+            priority,
+            is_active
+        ) VALUES (
+            #{companyName},
+            #{companyShortName},
+            #{creditCode},
+            #{legalPerson},
+            #{address},
+            #{phone},
+            #{bankName},
+            #{bankAccount},
+            #{sealUrl},
+            #{sealBase64},
+            #{fadadaSealId},
+            #{openCorpId},
+            #{priority},
+            #{isActive}
+        )
+    </insert>
+
+    <update id="update">
+        UPDATE buyer_company
+        SET company_name = #{companyName},
+            company_short_name = #{companyShortName},
+            credit_code = #{creditCode},
+            legal_person = #{legalPerson},
+            address = #{address},
+            phone = #{phone},
+            bank_name = #{bankName},
+            bank_account = #{bankAccount},
+            seal_url = #{sealUrl},
+            seal_base64 = #{sealBase64},
+            fadada_seal_id = #{fadadaSealId},
+            open_corpid = #{openCorpId},
+            priority = #{priority},
+            is_active = #{isActive}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM buyer_company
+        WHERE id = #{id}
+    </delete>
+
+    <select id="findById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.BuyerCompanyPO">
+        SELECT
+            <include refid="columns"/>
+        FROM buyer_company
+        WHERE id = #{id}
+    </select>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(1)
+        FROM buyer_company
+        WHERE 1 = 1
+        <include refid="filters"/>
+    </select>
+
+    <select id="findPage" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.BuyerCompanyPO">
+        SELECT
+            id,
+            company_name,
+            company_short_name,
+            credit_code,
+            address,
+            phone,
+            seal_url,
+            open_corpid,
+            priority,
+            is_active,
+            update_time
+        FROM buyer_company
+        WHERE 1 = 1
+        <include refid="filters"/>
+        ORDER BY priority ASC, id DESC
+        LIMIT #{pageSize} OFFSET #{offset}
+    </select>
+
+    <select id="existsByCreditCode" resultType="boolean">
+        SELECT EXISTS(
+            SELECT 1
+            FROM buyer_company
+            WHERE credit_code = #{creditCode}
+            <if test="excludeId != null">
+                AND id != #{excludeId}
+            </if>
+        )
+    </select>
+
+    <select id="existsByOpenCorpId" resultType="boolean">
+        SELECT EXISTS(
+            SELECT 1
+            FROM buyer_company
+            WHERE open_corpid = #{openCorpId}
+            <if test="excludeId != null">
+                AND id != #{excludeId}
+            </if>
+        )
+    </select>
+
+    <select id="existsDefaultExcept" resultType="boolean">
+        SELECT EXISTS(
+            SELECT 1
+            FROM buyer_company
+            WHERE priority = 1
+              AND id != #{id}
+        )
+    </select>
+
+    <update id="clearDefaultExcept">
+        UPDATE buyer_company
+        SET priority = 0
+        WHERE priority = 1
+          AND id != #{id}
+    </update>
+</mapper>

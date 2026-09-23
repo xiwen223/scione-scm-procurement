@@ -125,6 +125,87 @@ public class LingxingOpenApiClient implements LingxingProductClient {
         }
     }
 
+    /**
+     * 查询领星供应商列表，并按系统供应商 ID 返回匹配的原始 JSON 对象。
+     */
+    public Optional<JsonNode> findSupplierById(long supplierId) {
+        if (supplierId <= 0) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "供应商 ID 必须为正整数");
+        }
+        ensureConfigured();
+
+        final int pageSize = 1_000;
+        int offset = 0;
+        long total;
+        do {
+            Map<String, Object> body = Map.of("offset", offset, "length", pageSize);
+            String timestamp = Long.toString(Instant.now().getEpochSecond());
+            String accessToken = accessToken();
+
+            Map<String, Object> signatureParameters = new HashMap<>();
+            signatureParameters.put("timestamp", timestamp);
+            signatureParameters.put("access_token", accessToken);
+            signatureParameters.put("app_key", properties.getAppId());
+            signatureParameters.putAll(body);
+
+            final String signature;
+            try {
+                signature = signer.sign(signatureParameters, properties.getAppId());
+            } catch (IllegalStateException exception) {
+                log.error("Failed to sign Lingxing supplier request: {}", exception.getMessage());
+                throw lingxingError("请求签名失败");
+            }
+
+            Map<String, String> queryParameters = new LinkedHashMap<>();
+            queryParameters.put("timestamp", timestamp);
+            queryParameters.put("access_token", accessToken);
+            queryParameters.put("app_key", properties.getAppId());
+            queryParameters.put("sign", signature);
+            URI uri = requestUri("/erp/sc/data/local_inventory/supplier", queryParameters);
+            try {
+                JsonNode response = restClient.post()
+                        .uri(uri)
+                        .body(body)
+                        .retrieve()
+                        .body(JsonNode.class);
+                String code = response == null ? "" : response.path("code").asText();
+                String remoteMessage = responseMessage(response);
+                if (!"0".equals(code) && !"200".equals(code)) {
+                    String reason = "业务码 " + (code.isBlank() ? "为空" : code)
+                            + (remoteMessage.isBlank() ? "" : "：" + remoteMessage);
+                    log.warn("Lingxing supplier request was rejected: {}", sanitizeReason(reason));
+                    throw lingxingError(reason);
+                }
+                JsonNode data = response == null ? null : response.get("data");
+                long responseTotal = response == null ? -1 : response.path("total").asLong(-1);
+                if (data == null || !data.isArray() || responseTotal < 0) {
+                    String reason = remoteMessage.isBlank() ? "响应数据格式错误" : remoteMessage;
+                    log.warn("Lingxing supplier response is invalid: code={}, reason={}",
+                            code, sanitizeReason(reason));
+                    throw lingxingError(reason);
+                }
+                for (JsonNode item : data) {
+                    Long remoteSupplierId = longValue(item, "supplier_id");
+                    if (remoteSupplierId != null && remoteSupplierId == supplierId) {
+                        return Optional.of(item);
+                    }
+                }
+                if (data.isEmpty()) {
+                    return Optional.empty();
+                }
+                offset += data.size();
+                total = responseTotal;
+            } catch (BusinessException exception) {
+                throw exception;
+            } catch (RestClientException exception) {
+                String reason = transportFailureReason(exception);
+                log.error("Lingxing supplier request failed: {}", sanitizeReason(reason));
+                throw lingxingError(reason);
+            }
+        } while (offset < total);
+        return Optional.empty();
+    }
+
     private String accessToken() {
         CachedToken current = cachedToken;
         Instant now = Instant.now();
