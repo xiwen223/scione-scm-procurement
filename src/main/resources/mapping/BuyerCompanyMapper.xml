@@ -7,17 +7,21 @@
         company_name,
         company_short_name,
         credit_code,
+        post_code,
+        fax,
         legal_person,
         address,
         phone,
         bank_name,
         bank_account,
+        seal_name,
         seal_url,
         seal_base64,
         fadada_seal_id,
         open_corpid,
         priority,
         is_active,
+        ident_status,
         create_time,
         update_time
     </sql>
@@ -43,32 +47,40 @@
             company_name,
             company_short_name,
             credit_code,
+            post_code,
+            fax,
             legal_person,
             address,
             phone,
             bank_name,
             bank_account,
+            seal_name,
             seal_url,
             seal_base64,
             fadada_seal_id,
             open_corpid,
             priority,
-            is_active
+            is_active,
+            ident_status
         ) VALUES (
             #{companyName},
             #{companyShortName},
             #{creditCode},
+            #{postCode},
+            #{fax},
             #{legalPerson},
             #{address},
             #{phone},
             #{bankName},
             #{bankAccount},
+            #{sealName},
             #{sealUrl},
             #{sealBase64},
             #{fadadaSealId},
             #{openCorpId},
             #{priority},
-            #{isActive}
+            #{isActive},
+            #{identStatus}
         )
     </insert>
 
@@ -77,17 +89,21 @@
         SET company_name = #{companyName},
             company_short_name = #{companyShortName},
             credit_code = #{creditCode},
+            post_code = #{postCode},
+            fax = #{fax},
             legal_person = #{legalPerson},
             address = #{address},
             phone = #{phone},
             bank_name = #{bankName},
             bank_account = #{bankAccount},
+            seal_name = #{sealName},
             seal_url = #{sealUrl},
             seal_base64 = #{sealBase64},
             fadada_seal_id = #{fadadaSealId},
             open_corpid = #{openCorpId},
             priority = #{priority},
-            is_active = #{isActive}
+            is_active = #{isActive},
+            ident_status = #{identStatus}
         WHERE id = #{id}
     </update>
 
@@ -95,6 +111,15 @@
         DELETE FROM buyer_company
         WHERE id = #{id}
     </delete>
+
+    <!-- 签章单独维护：写入新 objectKey + 印章名称时清掉历史 Base64；sealUrl 传 null 即移除签章（seal_name 一并清空） -->
+    <update id="updateSeal">
+        UPDATE buyer_company
+        SET seal_url = #{sealUrl},
+            seal_name = #{sealName},
+            seal_base64 = NULL
+        WHERE id = #{id}
+    </update>
 
     <select id="findById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.BuyerCompanyPO">
         SELECT
@@ -116,12 +141,16 @@
             company_name,
             company_short_name,
             credit_code,
+            post_code,
+            fax,
             address,
             phone,
+            seal_name,
             seal_url,
             open_corpid,
             priority,
             is_active,
+            ident_status,
             update_time
         FROM buyer_company
         WHERE 1 = 1

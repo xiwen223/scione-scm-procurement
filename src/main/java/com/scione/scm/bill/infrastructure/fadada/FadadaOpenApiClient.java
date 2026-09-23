@@ -61,6 +61,7 @@ public class FadadaOpenApiClient {
     private static final String GET_CORP_INFO_PATH = "/corp/get";
     private static final String GET_EDIT_URL_PATH = "/sign-task/get-edit-url";
     private static final String GET_TEMPLATE_DETAIL_PATH = "/sign-template/get-detail";
+    private static final String CREATE_SEAL_BY_IMAGE_PATH = "/seal/create-by-image";
     private static final String SIGN_TYPE = "HMAC-SHA256";
     private static final int MAX_REASON_LENGTH = 500;
 
@@ -308,6 +309,22 @@ public class FadadaOpenApiClient {
                 "ownerId", Map.of("idType", requireText(ownerIdType, "ownerIdType"),
                         "openId", requireText(ownerOpenId, "ownerOpenId")),
                 "signTemplateId", requireText(signTemplateId, "signTemplateId")), true).path("data");
+    }
+
+    /**
+     * 通过印章图片创建企业印章（{@code /seal/create-by-image}）。
+     *
+     * <p>印章图片以 Base64 字符串提交（不含 {@code data:} 前缀），调用方负责读取文件字节并编码。
+     * 返回 data 中的 {@code verifyId} 表示法大大已受理，印章审核为异步流程；创建类接口不做重试，
+     * 避免网络异常时重复建章。</p>
+     */
+    public String createSealByImage(String openCorpId, String sealName, String sealImageBase64) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("openCorpId", requireText(openCorpId, "openCorpId"));
+        body.put("sealName", requireText(sealName, "sealName"));
+        body.put("sealImage", requireText(sealImageBase64, "sealImage"));
+        JsonNode data = businessPost(CREATE_SEAL_BY_IMAGE_PATH, body, false).path("data");
+        return requiredText(data, "verifyId", "创建印章失败");
     }
 
     private SignTask createSignTask(String taskName, String fileId, String businessNo, String notifyUrl,

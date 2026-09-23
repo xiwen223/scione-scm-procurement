@@ -5,6 +5,7 @@ import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.BuyerCompanyApplicationService;
 import com.scione.scm.bill.application.dto.BuyerCompanyDetailResponse;
 import com.scione.scm.bill.application.dto.BuyerCompanyListItemResponse;
+import com.scione.scm.bill.application.dto.BuyerCompanySealRequest;
 import com.scione.scm.bill.application.dto.BuyerCompanyUpsertRequest;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -68,6 +69,14 @@ public class BuyerCompanyController {
             @PathVariable @Min(1) Long id,
             @Valid @RequestBody BuyerCompanyUpsertRequest request) {
         BuyerCompanyDetailResponse result = service.update(id, request);
+        return ApiResponse.success(result);
+    }
+
+    @PutMapping("/{id}/seal")
+    public ApiResponse<BuyerCompanyDetailResponse> updateSeal(
+            @PathVariable @Min(1) Long id,
+            @Valid @RequestBody BuyerCompanySealRequest request) {
+        BuyerCompanyDetailResponse result = service.updateSeal(id, request);
         return ApiResponse.success(result);
     }
 

@@ -14,6 +14,9 @@ public interface BuyerCompanyMapper {
 
     int deleteById(@Param("id") Long id);
 
+    /** 仅更新签章（图片 + 印章名称），避免列表页单独维护签章时覆盖公司其他字段 */
+    int updateSeal(@Param("id") Long id, @Param("sealUrl") String sealUrl, @Param("sealName") String sealName);
+
     Optional<BuyerCompanyPO> findById(@Param("id") Long id);
 
     long count(

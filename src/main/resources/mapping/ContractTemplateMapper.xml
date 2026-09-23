@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractTemplateMapper">
+
+    <sql id="columns">
+        id,
+        template_name,
+        contract_type,
+        object_key,
+        is_default,
+        is_active,
+        create_time,
+        update_time
+    </sql>
+
+    <sql id="filters">
+        <if test="keyword != null and keyword != ''">
+            AND template_name LIKE CONCAT('%', #{keyword}, '%')
+        </if>
+        <if test="contractType != null">
+            AND contract_type = #{contractType}
+        </if>
+        <if test="isActive != null">
+            AND is_active = #{isActive}
+        </if>
+        <if test="defaultOnly">
+            AND is_default = 1
+        </if>
+    </sql>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO contract_template (
+            template_name,
+            contract_type,
+            object_key,
+            is_default,
+            is_active
+        ) VALUES (
+            #{templateName},
+            #{contractType},
+            #{objectKey},
+            #{isDefault},
+            #{isActive}
+        )
+    </insert>
+
+    <update id="update">
+        UPDATE contract_template
+        SET template_name = #{templateName},
+            contract_type = #{contractType},
+            object_key = #{objectKey},
+            is_default = #{isDefault},
+            is_active = #{isActive}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM contract_template
+        WHERE id = #{id}
+    </delete>
+
+    <select id="findById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractTemplatePO">
+        SELECT
+            <include refid="columns"/>
+        FROM contract_template
+        WHERE id = #{id}
+    </select>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(1)
+        FROM contract_template
+        WHERE 1 = 1
+        <include refid="filters"/>
+    </select>
+
+    <select id="findPage" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractTemplatePO">
+        SELECT
+            <include refid="columns"/>
+        FROM contract_template
+        WHERE 1 = 1
+        <include refid="filters"/>
+        ORDER BY contract_type ASC, is_default DESC, id DESC
+        LIMIT #{pageSize} OFFSET #{offset}
+    </select>
+
+    <select id="existsDefaultExcept" resultType="boolean">
+        SELECT EXISTS(
+            SELECT 1
+            FROM contract_template
+            WHERE is_default = 1
+              AND contract_type = #{contractType}
+              AND id != #{id}
+        )
+    </select>
+
+    <update id="clearDefaultExcept">
+        UPDATE contract_template
+        SET is_default = 0
+        WHERE is_default = 1
+          AND contract_type = #{contractType}
+          AND id != #{id}
+    </update>
+</mapper>
