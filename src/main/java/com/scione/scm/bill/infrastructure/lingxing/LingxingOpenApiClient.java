@@ -15,6 +15,11 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
+import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 
 import java.math.BigDecimal;
 import java.net.SocketTimeoutException;
@@ -36,11 +41,18 @@ import java.util.StringJoiner;
  */
 @Slf4j
 @Component
-public class LingxingOpenApiClient implements LingxingProductClient {
+public class LingxingOpenApiClient implements LingxingProductClient ,LingxingPurchaseOrderClient  {
 
     private static final String TOKEN_PATH = "/api/auth-server/oauth/access-token";
     private static final String PRODUCT_DETAIL_PATH =
             "/erp/sc/routing/data/local_inventory/batchGetProductInfo";
+    private static final String PURCHASE_ORDER_LIST_PATH =
+            "/erp/sc/routing/data/local_inventory/purchaseOrderList";
+    private static final int PURCHASE_ORDER_PAGE_SIZE = 500;
+    private static final DateTimeFormatter LINGXING_DATE_TIME =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final DateTimeFormatter LINGXING_DATE =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final Duration TOKEN_REFRESH_AHEAD = Duration.ofMinutes(1);
     private static final int MAX_REASON_LENGTH = 500;
 
@@ -204,6 +216,203 @@ public class LingxingOpenApiClient implements LingxingProductClient {
             }
         } while (offset < total);
         return Optional.empty();
+    }
+
+    @Override
+    public List<PurchaseOrderData> fetchPurchaseOrders(
+            LocalDateTime startTime, LocalDateTime endTime, String searchFieldTime) {
+        ensureConfigured();
+        List<PurchaseOrderData> all = new ArrayList<>();
+        int offset = 0;
+        while (true) {
+            JsonNode response = callPurchaseOrderList(startTime, endTime, searchFieldTime, offset);
+            JsonNode data = response == null ? null : response.get("data");
+            if (data == null || !data.isArray() || data.isEmpty()) {
+                break;                       // 查不到就结束，不抛异常
+            }
+            for (JsonNode order : data) {
+                all.add(toPurchaseOrderData(order));
+            }
+            long total = response.path("total").asLong(all.size());
+            offset += PURCHASE_ORDER_PAGE_SIZE;
+            if (offset >= total) {
+                break;                       // 翻完最后一页
+            }
+        }
+        return all;
+    }
+
+    /** 发一页请求：签名/query 拼接与 findBySku 一致，只是换了 path 和 body。 */
+    private JsonNode callPurchaseOrderList(
+            LocalDateTime startTime, LocalDateTime endTime, String searchFieldTime, int offset) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("start_date", startTime.format(LINGXING_DATE_TIME));
+        body.put("end_date", endTime.format(LINGXING_DATE_TIME));
+        if (searchFieldTime != null && !searchFieldTime.isBlank()) {
+            body.put("search_field_time", searchFieldTime);
+        }
+        body.put("offset", offset);
+        body.put("length", PURCHASE_ORDER_PAGE_SIZE);
+
+        String timestamp = Long.toString(Instant.now().getEpochSecond());
+        String accessToken = accessToken();
+
+        Map<String, Object> signatureParameters = new HashMap<>();
+        signatureParameters.put("timestamp", timestamp);
+        signatureParameters.put("access_token", accessToken);
+        signatureParameters.put("app_key", properties.getAppId());
+        signatureParameters.putAll(body);
+
+        final String signature;
+        try {
+            signature = signer.sign(signatureParameters, properties.getAppId());
+        } catch (IllegalStateException exception) {
+            log.error("Failed to sign Lingxing purchase order request: {}", exception.getMessage());
+            throw lingxingError("请求签名失败");
+        }
+
+        Map<String, String> queryParameters = new LinkedHashMap<>();
+        queryParameters.put("timestamp", timestamp);
+        queryParameters.put("access_token", accessToken);
+        queryParameters.put("app_key", properties.getAppId());
+        queryParameters.put("sign", signature);
+        URI uri = requestUri(PURCHASE_ORDER_LIST_PATH, queryParameters);
+        try {
+            JsonNode response = restClient.post().uri(uri).body(body).retrieve().body(JsonNode.class);
+            String code = response == null ? "" : response.path("code").asText();
+            String remoteMessage = responseMessage(response);
+            if (!code.isBlank() && !"0".equals(code) && !"200".equals(code)) {
+                String reason = "业务码 " + code + (remoteMessage.isBlank() ? "" : "：" + remoteMessage);
+                log.warn("Lingxing purchase order request was rejected: {}", sanitizeReason(reason));
+                throw lingxingError(reason);
+            }
+            return response;
+        } catch (BusinessException exception) {
+            throw exception;
+        } catch (RestClientException exception) {
+            String reason = transportFailureReason(exception);
+            log.error("Lingxing purchase order request failed: {}", sanitizeReason(reason));
+            throw lingxingError(reason);
+        }
+    }
+
+    /** 单头映射：领星字段 → PurchaseOrderData（全部可空，不校验）。 */
+    private PurchaseOrderData toPurchaseOrderData(JsonNode o) {
+        List<PurchaseOrderItemData> items = new ArrayList<>();
+        JsonNode itemList = o.get("item_list");
+        if (itemList != null && itemList.isArray()) {
+            for (JsonNode item : itemList) {
+                items.add(toPurchaseOrderItem(item));
+            }
+        }
+        return new PurchaseOrderData(
+                text(o, "order_sn"),
+                text(o, "custom_order_sn"),
+                longValue(o, "supplier_id"),
+                text(o, "supplier_name"),
+                text(o, "contact_person"),
+                text(o, "contact_number"),
+                intValue(o, "status"),
+                text(o, "status_text"),
+                intValue(o, "status_shipped"),
+                text(o, "status_shipped_text"),
+                decimalText(o, "amount_total"),
+                decimalText(o, "total_price"),
+                intValue(o, "quantity_total"),
+                text(o, "ware_house_name"),
+                text(o, "remark"),
+                dateTime(o, "order_time"),
+                dateTime(o, "create_time"),
+                dateTime(o, "update_time"),
+                List.copyOf(items));
+    }
+
+    /** 明细映射。 */
+    private PurchaseOrderItemData toPurchaseOrderItem(JsonNode item) {
+        return new PurchaseOrderItemData(
+                longValue(item, "id"),
+                text(item, "plan_sn"),
+                longValue(item, "product_id"),
+                text(item, "product_name"),
+                text(item, "sku"),
+                text(item, "fnsku"),
+                text(item, "model"),
+                decimalText(item, "price"),
+                decimalText(item, "amount"),
+                intValue(item, "quantity_plan"),
+                intValue(item, "quantity_real"),
+                intValue(item, "quantity_receive"),
+                text(item, "tax_rate"),
+                text(item, "spu"),
+                text(item, "spu_name"),
+                text(item, "ware_house_name"),
+                date(item, "expect_arrive_time"),
+                text(item, "remark"),
+                attributeJson(item));
+    }
+
+    /** attribute 数组原文转 JSON 字符串存库；失败降级 null。 */
+    private String attributeJson(JsonNode item) {
+        JsonNode attr = item.get("attribute");
+        if (attr == null || attr.isNull()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(attr);
+        } catch (JsonProcessingException exception) {
+            return null;
+        }
+    }
+
+    /** 领星整型（int 字段用，避免 longValue 返回 Long）。 */
+    private static Integer intValue(JsonNode node, String field) {
+        Long value = longValue(node, field);
+        return value == null ? null : value.intValue();
+    }
+
+    /** "yyyy-MM-dd HH:mm:ss" → LocalDateTime，空/非法一律 null（拉取阶段不抛异常）。 */
+    private static LocalDateTime dateTime(JsonNode node, String field) {
+        String s = text(node, field);
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDateTime.parse(s.trim(), LINGXING_DATE_TIME);
+        } catch (DateTimeParseException exception) {
+            return null;
+        }
+    }
+
+    /** "yyyy-MM-dd" → LocalDate，空/非法一律 null。 */
+    private static LocalDate date(JsonNode node, String field) {
+        String s = text(node, field);
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(s.trim(), LINGXING_DATE);
+        } catch (DateTimeParseException exception) {
+            return null;
+        }
+    }
+    /** 金额字段：领星常返回字符串 "660.00"，decimalValue() 对字符串会返回 0，这里兼容数字和字符串。 */
+    private static BigDecimal decimalText(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        if (value.isNumber()) {
+            return value.decimalValue();
+        }
+        String s = value.asText();
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(s.trim());
+        } catch (NumberFormatException exception) {
+            return null;
+        }
     }
 
     private String accessToken() {

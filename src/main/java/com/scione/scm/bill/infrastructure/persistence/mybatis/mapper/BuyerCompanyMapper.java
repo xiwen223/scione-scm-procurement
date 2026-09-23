@@ -39,4 +39,9 @@ public interface BuyerCompanyMapper {
     boolean existsDefaultExcept(@Param("id") Long id);
 
     int clearDefaultExcept(@Param("id") Long id);
+
+    /**
+     * 查询默认需方公司（priority=1 且 is_active=1）。
+     */
+    BuyerCompanyPO selectDefault();
 }

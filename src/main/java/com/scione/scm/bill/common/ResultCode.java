@@ -27,6 +27,7 @@ public enum ResultCode {
     BUYER_COMPANY_DEFAULT_REQUIRED(1012004, "系统必须保留一个启用的默认合同需方"),
     BUYER_COMPANY_DEFAULT_CANNOT_DELETE(1012005, "默认合同需方不可删除"),
     BUYER_COMPANY_IN_USE(1012006, "需方公司已被合同引用，不能删除"),
+    CONTRACT_TEMPLATE_FILL_FAILED(1013001, "合同模板填充失败"),
     SHIPPING_MARK_ALREADY_EXISTS(1010001, "单据编号已存在"),
     SHIPPING_MARK_NOT_FOUND(1010002, "单据不存在"),
     IMPORT_FILE_UNSUPPORTED(1010003, "仅支持 .xlsx / .xls 格式的 Excel 文件"),

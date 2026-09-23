@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractMapper">
+
+    <sql id="columns">
+        id, contract_no, contract_name, contract_type, purchase_order_no, source_type,
+        supplier_id, supplier_name, supplier_phone, supplier_credit_code, supplier_account_name,
+        supplier_bank_name, supplier_bank_account, supplier_address, contact_person,
+        buyer_company_id, buyer_company_name, buyer_company_code, buyer_address,
+        post_code, buyer_phone, fax,
+        original_amount, discounted_amount, contract_amount, contract_date, delivery_date, template_id,
+        status, cancel_reason, cancel_time, fadada_contract_id, fadada_task_id,
+        contract_pdf_url, signed_pdf_url, sign_start_time, sign_complete_time, complete_time,
+        error_message, creator_id, creator_name, create_type, create_time, update_time, is_deleted
+    </sql>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO contract
+        (contract_no, contract_name, contract_type, purchase_order_no, source_type,
+        supplier_id, supplier_name, supplier_phone, supplier_address, contact_person,
+        buyer_company_id, buyer_company_name, buyer_company_code, buyer_address,
+        post_code, buyer_phone, fax,
+        original_amount, discounted_amount, contract_amount, contract_date, delivery_date,
+        status, creator_id, creator_name, create_type)
+        VALUES
+        (#{contractNo}, #{contractName}, #{contractType}, #{purchaseOrderNo}, #{sourceType},
+        #{supplierId}, #{supplierName}, #{supplierPhone}, #{supplierAddress}, #{contactPerson},
+        #{buyerCompanyId}, #{buyerCompanyName}, #{buyerCompanyCode}, #{buyerAddress},
+        #{postCode}, #{buyerPhone}, #{fax},
+        #{originalAmount}, #{discountedAmount}, #{contractAmount}, #{contractDate}, #{deliveryDate},
+        #{status}, #{creatorId}, #{creatorName}, #{createType})
+    </insert>
+
+    <select id="existsActiveByPurchaseOrderNo" resultType="int">
+        SELECT COUNT(1)
+        FROM contract
+        WHERE purchase_order_no = #{purchaseOrderNo}
+        AND status != 5
+        AND is_deleted = 0
+        LIMIT 1
+    </select>
+
+    <select id="findByContractNo" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractPO">
+        SELECT <include refid="columns"/>
+        FROM contract
+        WHERE contract_no = #{contractNo}
+        AND is_deleted = 0
+    </select>
+
+    <update id="updatePdfUrl">
+        UPDATE contract
+        SET contract_pdf_url = #{pdfUrl},
+            update_time = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <!-- 条件查询 SQL 片段 -->
+    <sql id="whereConditions">
+        <where>
+            is_deleted = 0
+            <if test="req.contractNo != null and req.contractNo != ''">
+                AND contract_no = #{req.contractNo}
+            </if>
+            <if test="req.purchaseOrderNo != null and req.purchaseOrderNo != ''">
+                AND purchase_order_no = #{req.purchaseOrderNo}
+            </if>
+            <if test="req.supplierName != null and req.supplierName != ''">
+                AND supplier_name LIKE CONCAT('%', #{req.supplierName}, '%')
+            </if>
+            <if test="req.status != null">
+                AND status = #{req.status}
+            </if>
+            <if test="req.startDate != null">
+                AND contract_date &gt;= #{req.startDate}
+            </if>
+            <if test="req.endDate != null">
+                AND contract_date &lt;= #{req.endDate}
+            </if>
+        </where>
+    </sql>
+
+    <select id="selectByPage" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractPO">
+        SELECT <include refid="columns"/>
+        FROM contract
+        <include refid="whereConditions"/>
+        ORDER BY create_time DESC
+        LIMIT #{req.offset}, #{req.pageSize}
+    </select>
+
+    <select id="countByCondition" resultType="long">
+        SELECT COUNT(1)
+        FROM contract
+        <include refid="whereConditions"/>
+    </select>
+
+    <select id="selectById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractPO">
+        SELECT <include refid="columns"/>
+        FROM contract
+        WHERE id = #{id}
+        AND is_deleted = 0
+    </select>
+</mapper>

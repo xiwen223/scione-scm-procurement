@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractItemMapper">
+
+    <insert id="batchInsert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO contract_item
+        (contract_id, contract_no, sku, product_id, product_name, specification,
+        quantity, unit, unit_price, amount, delivery_date, warehouse_name, remark,
+        cases_num, quantity_per_case, pic_url)
+        VALUES
+        <foreach collection="items" item="it" separator=",">
+            (#{it.contractId}, #{it.contractNo}, #{it.sku}, #{it.productId}, #{it.productName},
+            #{it.specification}, #{it.quantity}, #{it.unit}, #{it.unitPrice}, #{it.amount},
+            #{it.deliveryDate}, #{it.warehouseName}, #{it.remark},
+            #{it.casesNum}, #{it.quantityPerCase}, #{it.picUrl})
+        </foreach>
+    </insert>
+
+    <select id="selectByContractId" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractItemPO">
+        SELECT id, contract_id, contract_no, sku, product_id, product_name, specification,
+        quantity, unit, unit_price, amount, delivery_date, warehouse_name, remark,
+        cases_num, quantity_per_case, pic_url, create_time
+        FROM contract_item
+        WHERE contract_id = #{contractId}
+        ORDER BY id
+    </select>
+</mapper>
