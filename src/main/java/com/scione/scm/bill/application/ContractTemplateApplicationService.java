@@ -77,6 +77,10 @@ public class ContractTemplateApplicationService {
         return toDetail(requireTemplate(id));
     }
 
+    /**
+     * 删除模板：只做逻辑删除（contract_template.is_deleted 置 1），数据仍保留在库中，
+     * 之后所有查询都不再返回该模板；默认模板不允许删除。
+     */
     @Transactional
     public void delete(Long id) {
         ContractTemplatePO template = requireTemplate(id);

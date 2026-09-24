@@ -12,6 +12,7 @@ public interface ContractTemplateMapper {
 
     int update(ContractTemplatePO template);
 
+    /** 逻辑删除：把 is_deleted 置 1，不做物理删除；已删除模板不再被任何查询命中。 */
     int deleteById(@Param("id") Long id);
 
     Optional<ContractTemplatePO> findById(@Param("id") Long id);

@@ -18,15 +18,20 @@
         seal_url,
         seal_base64,
         fadada_seal_id,
+        seal_flow_status,
+        seal_failed_reason,
         open_corpid,
         priority,
         is_active,
         ident_status,
+        is_deleted,
         create_time,
         update_time
     </sql>
 
     <sql id="filters">
+        <!-- 逻辑删除：所有读取路径只认 is_deleted = 0 的记录 -->
+        AND is_deleted = 0
         <if test="keyword != null and keyword != ''">
             AND (
                 company_name LIKE CONCAT('%', #{keyword}, '%')
@@ -58,6 +63,8 @@
             seal_url,
             seal_base64,
             fadada_seal_id,
+            seal_flow_status,
+            seal_failed_reason,
             open_corpid,
             priority,
             is_active,
@@ -77,6 +84,8 @@
             #{sealUrl},
             #{sealBase64},
             #{fadadaSealId},
+            #{sealFlowStatus,jdbcType=TINYINT},
+            #{sealFailedReason,jdbcType=VARCHAR},
             #{openCorpId},
             #{priority},
             #{isActive},
@@ -105,20 +114,88 @@
             is_active = #{isActive},
             ident_status = #{identStatus}
         WHERE id = #{id}
+          AND is_deleted = 0
     </update>
 
-    <delete id="deleteById">
-        DELETE FROM buyer_company
+    <!-- 逻辑删除：只把 is_deleted 置 1，不物理删除数据 -->
+    <update id="deleteById">
+        UPDATE buyer_company
+        SET is_deleted = 1
         WHERE id = #{id}
-    </delete>
+          AND is_deleted = 0
+    </update>
 
-    <!-- 签章单独维护：写入新 objectKey + 印章名称时清掉历史 Base64；sealUrl 传 null 即移除签章（seal_name 一并清空） -->
+    <!--
+      签章单独维护：写入新 objectKey + 印章名称时清掉历史 Base64；
+      sealUrl 传 null 即移除签章（seal_name 一并清空）。
+      印章审核状态由法大大审核流程决定，这里只做「新章回到审核中 / 移除后清空」的初始化：
+      设置签章 → seal_flow_status = 0（审核中）、清空失败原因；移除签章 → 两者一并清空。
+    -->
     <update id="updateSeal">
         UPDATE buyer_company
         SET seal_url = #{sealUrl},
             seal_name = #{sealName},
-            seal_base64 = NULL
+            seal_base64 = NULL,
+        <choose>
+            <when test="sealUrl == null">
+                seal_flow_status = NULL,
+                seal_failed_reason = NULL
+            </when>
+            <otherwise>
+                seal_flow_status = 0,
+                seal_failed_reason = NULL
+            </otherwise>
+        </choose>
         WHERE id = #{id}
+          AND is_deleted = 0
+    </update>
+
+    <!--
+      移除签章：把签章相关的字段一并清空。
+      seal_flow_status / seal_failed_reason / fadada_seal_id 由法大大侧维护，不走全量 update，避免编辑公司时被冲掉，
+      因此这里单独提供清空语句。审核状态与失败原因必须同步清掉，否则移除后会残留上一次的审核结果。
+    -->
+    <update id="clearSeal">
+        UPDATE buyer_company
+        SET seal_name = NULL,
+            seal_url = NULL,
+            seal_base64 = NULL,
+            fadada_seal_id = NULL,
+            seal_flow_status = NULL,
+            seal_failed_reason = NULL
+        WHERE id = #{id}
+          AND is_deleted = 0
+    </update>
+
+    <!--
+      法大大印章审核通过回调（X-FASC-Event = seal-verify-successed）：
+      按 open_corpid 定位公司（该列有唯一索引 uk_open_corpid），写入法大大印章 ID，并把审核状态置为 1（审核成功）、清空失败原因。
+      过滤条件只有 is_deleted = 0（2026-09-24 起，守卫已移除）：回调被视为审核结果的权威来源，
+      不再校验 seal_url 与当前审核状态 —— 签章已被移除的公司、或审核结果已写入过的公司仍会被覆盖。
+      该语句幂等：法大大重复回调得到相同结果，update_time 由列上的 ON UPDATE CURRENT_TIMESTAMP 自动维护。
+    -->
+    <update id="updateSealVerified">
+        UPDATE buyer_company
+        SET fadada_seal_id = #{sealId},
+            seal_flow_status = 1,
+            seal_failed_reason = NULL
+        WHERE open_corpid = #{openCorpId}
+          AND is_deleted = 0
+    </update>
+
+    <!--
+      法大大印章审核不通过回调（X-FASC-Event = seal-verify-failed）：
+      按 open_corpid 定位公司，把审核状态置为 2（审核失败），并记录回调给出的不通过原因。
+      reason 由服务层做过去空白与超长截断，可为 NULL（此时只更新状态、失败原因留空）。
+      与 updateSealVerified 保持同一过滤口径：只排除已逻辑删除的公司；语句幂等，重复回调结果一致，
+      update_time 由列上的 ON UPDATE CURRENT_TIMESTAMP 自动维护。
+    -->
+    <update id="updateSealVerifyFailed">
+        UPDATE buyer_company
+        SET seal_flow_status = 2,
+            seal_failed_reason = #{reason}
+        WHERE open_corpid = #{openCorpId}
+          AND is_deleted = 0
     </update>
 
     <select id="findById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.BuyerCompanyPO">
@@ -126,6 +203,7 @@
             <include refid="columns"/>
         FROM buyer_company
         WHERE id = #{id}
+          AND is_deleted = 0
     </select>
 
     <select id="count" resultType="long">
@@ -164,6 +242,7 @@
             SELECT 1
             FROM buyer_company
             WHERE credit_code = #{creditCode}
+              AND is_deleted = 0
             <if test="excludeId != null">
                 AND id != #{excludeId}
             </if>
@@ -175,6 +254,7 @@
             SELECT 1
             FROM buyer_company
             WHERE open_corpid = #{openCorpId}
+              AND is_deleted = 0
             <if test="excludeId != null">
                 AND id != #{excludeId}
             </if>
@@ -186,6 +266,7 @@
             SELECT 1
             FROM buyer_company
             WHERE priority = 1
+              AND is_deleted = 0
               AND id != #{id}
         )
     </select>
@@ -194,6 +275,7 @@
         UPDATE buyer_company
         SET priority = 0
         WHERE priority = 1
+          AND is_deleted = 0
           AND id != #{id}
     </update>
 
@@ -203,6 +285,7 @@
         FROM buyer_company
         WHERE priority = 1
           AND is_active = 1
+          AND is_deleted = 0
         LIMIT 1
     </select>
 </mapper>

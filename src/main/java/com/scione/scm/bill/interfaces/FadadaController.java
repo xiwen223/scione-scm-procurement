@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.BuyerCompanyApplicationService;
 import com.scione.scm.bill.application.FileApplicationService;
+import com.scione.scm.bill.application.dto.BuyerCompanyDetailResponse;
 import com.scione.scm.bill.application.dto.BuyerCompanySealUploadResponse;
 import com.scione.scm.bill.application.dto.FadadaCorpAuthStatusResponse;
 import com.scione.scm.bill.application.dto.FileUrlRequest;
@@ -38,13 +39,14 @@ import java.util.Optional;
  *   <li>印章上传：把需方公司的印章图片提交给法大大创建企业印章
  *       （{@code /seal/create-by-image}），成功后把图片存到对象存储并写回公司档案；</li>
  *   <li>印章图片访问地址：按 objectKey 换取对象存储的临时访问地址（预签名 URL），
- *       供「我司信息」详情页预览与下载签章图片。</li>
+ *       供「我司信息」详情页预览与下载签章图片；</li>
+ *   <li>印章移除：按公司的印章审核状态决定是否先清理法大大侧印章，再删除对象存储图片并清空公司签章字段。</li>
  * </ul>
  */
 @RestController
 @Validated
 @RequestMapping("/api/v1/fadada")
-@Tag(name = "法大大", description = "法大大企业授权状态查询、印章上传与签章图片访问地址")
+@Tag(name = "法大大", description = "法大大企业授权状态查询、印章上传 / 移除与签章图片访问地址")
 public class FadadaController {
 
     @Autowired
@@ -87,5 +89,21 @@ public class FadadaController {
     @Operation(summary = "根据 objectKey 获取签章图片访问地址")
     public ApiResponse<String> sealFileUrl(@Valid @RequestBody FileUrlRequest request) {
         return ApiResponse.success(fileApplicationService.presignedUrl(request.objectKey(), request.minutes()));
+    }
+
+    /**
+     * 移除签章：按公司的印章审核状态决定是否清理法大大侧印章，
+     * 之后删除对象存储中的签章图片并清空买家公司的签章字段。
+     *
+     * <ul>
+     *   <li>印章审核中（{@code seal_flow_status = 0}）→ 409，不允许删除；</li>
+     *   <li>审核成功（{@code 1}）→ 先调用法大大 {@code /seal/set-status} 停用，再调 {@code /seal/delete} 删除；</li>
+     *   <li>审核失败（{@code 2}）→ 跳过法大大，直接清理。</li>
+     * </ul>
+     */
+    @PostMapping("/seal/remove")
+    @Operation(summary = "移除印章：同步清理法大大印章、对象存储图片与公司签章字段")
+    public ApiResponse<BuyerCompanyDetailResponse> removeSeal(@RequestParam("id") @Min(1) Long id) {
+        return ApiResponse.success(buyerCompanyApplicationService.removeSeal(id));
     }
 }

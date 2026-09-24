@@ -70,6 +70,20 @@ public class FileApplicationService {
     }
 
     /**
+     * 按 objectKey 删除对象存储中的文件。
+     *
+     * <p>objectKey 为空时视为无需删除，直接返回（幂等）：调用方清空签章等场景下，
+     * 历史数据可能只有 Base64 而没有对象键。</p>
+     */
+    public void delete(String objectKey) {
+        String key = blankToNull(objectKey);
+        if (key == null) {
+            return;
+        }
+        callStorage(() -> s3Client.delete(key), "删除文件");
+    }
+
+    /**
      * 归一化对象存储目录：去掉首尾斜杠（避免 objectKey 出现重复分隔符），
      * 为空时使用默认目录，含非法字符时拒绝，防止拼出越界的对象键。
      */

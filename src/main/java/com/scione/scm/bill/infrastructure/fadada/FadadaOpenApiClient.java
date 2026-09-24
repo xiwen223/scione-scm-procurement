@@ -62,6 +62,10 @@ public class FadadaOpenApiClient {
     private static final String GET_EDIT_URL_PATH = "/sign-task/get-edit-url";
     private static final String GET_TEMPLATE_DETAIL_PATH = "/sign-template/get-detail";
     private static final String CREATE_SEAL_BY_IMAGE_PATH = "/seal/create-by-image";
+    private static final String SET_SEAL_STATUS_PATH = "/seal/set-status";
+    private static final String DELETE_SEAL_PATH = "/seal/delete";
+    /** 印章停用状态值，删除印章前先停用。 */
+    public static final String SEAL_STATUS_DISABLE = "disable";
     private static final String SIGN_TYPE = "HMAC-SHA256";
     private static final int MAX_REASON_LENGTH = 500;
 
@@ -325,6 +329,31 @@ public class FadadaOpenApiClient {
         body.put("sealImage", requireText(sealImageBase64, "sealImage"));
         JsonNode data = businessPost(CREATE_SEAL_BY_IMAGE_PATH, body, false).path("data");
         return requiredText(data, "verifyId", "创建印章失败");
+    }
+
+    /**
+     * 设置企业印章状态（{@code /seal/set-status}）。
+     *
+     * <p>{@code sealStatus} 取 {@link #SEAL_STATUS_DISABLE}（停用）等法大大约定值；删除印章前
+     * 需要先停用。状态变更类接口不重试，避免网络异常时重复变更。</p>
+     */
+    public void setSealStatus(String openCorpId, String sealId, String sealStatus) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("openCorpId", requireText(openCorpId, "openCorpId"));
+        body.put("sealId", requireText(sealId, "sealId"));
+        body.put("sealStatus", requireText(sealStatus, "sealStatus"));
+        businessPost(SET_SEAL_STATUS_PATH, body, false);
+    }
+
+    /**
+     * 删除企业印章（{@code /seal/delete}）。调用前应先通过 {@link #setSealStatus} 停用印章。
+     * 删除类接口不重试，避免网络异常时重复删除。
+     */
+    public void deleteSeal(String openCorpId, String sealId) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("openCorpId", requireText(openCorpId, "openCorpId"));
+        body.put("sealId", requireText(sealId, "sealId"));
+        businessPost(DELETE_SEAL_PATH, body, false);
     }
 
     private SignTask createSignTask(String taskName, String fileId, String businessNo, String notifyUrl,

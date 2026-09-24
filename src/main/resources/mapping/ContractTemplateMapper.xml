@@ -9,11 +9,14 @@
         object_key,
         is_default,
         is_active,
+        is_deleted,
         create_time,
         update_time
     </sql>
 
     <sql id="filters">
+        <!-- 逻辑删除：所有读取路径只认 is_deleted = 0 的记录 -->
+        AND is_deleted = 0
         <if test="keyword != null and keyword != ''">
             AND template_name LIKE CONCAT('%', #{keyword}, '%')
         </if>
@@ -52,18 +55,23 @@
             is_default = #{isDefault},
             is_active = #{isActive}
         WHERE id = #{id}
+          AND is_deleted = 0
     </update>
 
-    <delete id="deleteById">
-        DELETE FROM contract_template
+    <!-- 逻辑删除：只把 is_deleted 置 1，不物理删除数据 -->
+    <update id="deleteById">
+        UPDATE contract_template
+        SET is_deleted = 1
         WHERE id = #{id}
-    </delete>
+          AND is_deleted = 0
+    </update>
 
     <select id="findById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractTemplatePO">
         SELECT
             <include refid="columns"/>
         FROM contract_template
         WHERE id = #{id}
+          AND is_deleted = 0
     </select>
 
     <select id="count" resultType="long">
@@ -89,6 +97,7 @@
             FROM contract_template
             WHERE is_default = 1
               AND contract_type = #{contractType}
+              AND is_deleted = 0
               AND id != #{id}
         )
     </select>
@@ -98,6 +107,7 @@
         SET is_default = 0
         WHERE is_default = 1
           AND contract_type = #{contractType}
+          AND is_deleted = 0
           AND id != #{id}
     </update>
 </mapper>
