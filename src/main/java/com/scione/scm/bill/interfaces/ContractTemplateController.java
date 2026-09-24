@@ -3,6 +3,7 @@ package com.scione.scm.bill.interfaces;
 import com.scione.common.model.PageResult;
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.ContractTemplateApplicationService;
+import com.scione.scm.bill.application.ProcurementOperationLogRecorder;
 import com.scione.scm.bill.application.dto.ContractTemplateDetailResponse;
 import com.scione.scm.bill.application.dto.ContractTemplateIdRequest;
 import com.scione.scm.bill.application.dto.ContractTemplateListItemResponse;
@@ -17,8 +18,18 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.Map;
+
+import static com.scione.scm.bill.application.ProcurementOperationLogRecorder.OPERATOR_HEADER;
+import static com.scione.scm.bill.application.ProcurementOperationLogRecorder.details;
+import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementBusinessType.CONTRACT_TEMPLATE;
+import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.CREATE;
+import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.DELETE;
+import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.UPDATE;
 
 @RestController
 @Validated
@@ -31,6 +42,7 @@ public class ContractTemplateController {
     private static final int DEFAULT_PAGE_SIZE = 10;
 
     private final ContractTemplateApplicationService service;
+    private final ProcurementOperationLogRecorder operationLog;
 
     @PostMapping("/page")
     public ApiResponse<PageResult<ContractTemplateListItemResponse>> page(
@@ -54,22 +66,43 @@ public class ContractTemplateController {
 
     @PostMapping("/create")
     public ResponseEntity<ApiResponse<ContractTemplateDetailResponse>> create(
+            @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail,
             @Valid @RequestBody ContractTemplateUpsertRequest request) {
         ContractTemplateDetailResponse result = service.create(request);
+        operationLog.record(CONTRACT_TEMPLATE, Long.valueOf(result.id()), result.templateName(), CREATE,
+                operatorEmail, templateDetails(result));
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success(result));
     }
 
     @PostMapping("/update")
     public ApiResponse<ContractTemplateDetailResponse> update(
+            @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail,
             @Valid @RequestBody ContractTemplateUpdateRequest request) {
         ContractTemplateDetailResponse result = service.update(request.id(), request.toUpsertRequest());
+        operationLog.record(CONTRACT_TEMPLATE, request.id(), result.templateName(), UPDATE,
+                operatorEmail, templateDetails(result));
         return ApiResponse.success(result);
     }
 
     @PostMapping("/delete")
-    public ApiResponse<Void> delete(@Valid @RequestBody ContractTemplateIdRequest request) {
+    public ApiResponse<Void> delete(
+            @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail,
+            @Valid @RequestBody ContractTemplateIdRequest request) {
+        // 逻辑删除不会清掉名称，但日志要留名称快照，所以在删除前先读取一次
+        String templateName = service.getById(request.id()).templateName();
         service.delete(request.id());
+        operationLog.record(CONTRACT_TEMPLATE, request.id(), templateName, DELETE, operatorEmail);
         return ApiResponse.success(null);
+    }
+
+    /** 模板变更（新增 / 编辑）记录的业务关键字段。 */
+    private static Map<String, Object> templateDetails(ContractTemplateDetailResponse template) {
+        return details(
+                "templateName", template.templateName(),
+                "contractType", template.contractType(),
+                "objectKey", template.objectKey(),
+                "isDefault", template.isDefault(),
+                "isActive", template.isActive());
     }
 }

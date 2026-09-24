@@ -40,6 +40,30 @@
         </if>
     </sql>
 
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO procurement_operation_log (
+            business_type,
+            data_id,
+            data_name,
+            operator_id,
+            operator_name,
+            operation_type,
+            operation_desc,
+            operation_details,
+            ip_address
+        ) VALUES (
+            #{businessType},
+            #{dataId},
+            #{dataName},
+            #{operatorId},
+            #{operatorName},
+            #{operationType},
+            #{operationDesc},
+            #{operationDetails},
+            #{ipAddress}
+        )
+    </insert>
+
     <select id="count" resultType="long">
         SELECT COUNT(1)
         FROM procurement_operation_log

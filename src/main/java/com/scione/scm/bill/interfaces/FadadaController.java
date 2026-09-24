@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.BuyerCompanyApplicationService;
 import com.scione.scm.bill.application.FileApplicationService;
+import com.scione.scm.bill.application.ProcurementOperationLogRecorder;
 import com.scione.scm.bill.application.dto.BuyerCompanyDetailResponse;
 import com.scione.scm.bill.application.dto.BuyerCompanySealUploadResponse;
 import com.scione.scm.bill.application.dto.FadadaCorpAuthStatusResponse;
@@ -21,6 +22,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
@@ -28,6 +30,12 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Optional;
+
+import static com.scione.scm.bill.application.ProcurementOperationLogRecorder.OPERATOR_HEADER;
+import static com.scione.scm.bill.application.ProcurementOperationLogRecorder.details;
+import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementBusinessType.BUYER_COMPANY;
+import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.REMOVE_SEAL;
+import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.UPLOAD_SEAL;
 
 /**
  * 法大大开放平台相关接口。
@@ -58,6 +66,9 @@ public class FadadaController {
     @Autowired
     private FileApplicationService fileApplicationService;
 
+    @Autowired
+    private ProcurementOperationLogRecorder operationLog;
+
     @GetMapping("/corp/auth-status")
     @Operation(summary = "根据 corpIdentNo 查询企业授权状态")
     public ApiResponse<FadadaCorpAuthStatusResponse> corpAuthStatus(
@@ -68,16 +79,21 @@ public class FadadaController {
 
     /**
      * 上传印章图片：公司必须已通过法大大实名认证（buyer_company.ident_status = 1）。
-     * 服务端先用图片调法大大创建企业印章，受理成功后把图片上传到对象存储（目录 company-seal），
-     * 并把 objectKey 与印章名称分别写入 seal_url / seal_name，印章图片的 Base64 不落库。
+     * 服务端先把图片上传到对象存储（目录 company-seal）并写入库内签章字段，再调法大大创建企业印章；
+     * 这个顺序不能颠倒，原因见 {@link BuyerCompanyApplicationService#uploadSeal} 的时序说明。
+     * 法大大受理后立即返回受理号 verifyId，印章审核结果由回调异步回写。
      */
     @PostMapping(value = "/seal/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "上传印章图片并创建法大大企业印章")
     public ApiResponse<BuyerCompanySealUploadResponse> uploadSeal(
             @RequestParam("id") @Min(1) Long id,
             @RequestPart("file") MultipartFile file,
-            @RequestParam("sealName") @NotBlank @Size(max = 50) String sealName) {
-        return ApiResponse.success(buyerCompanyApplicationService.uploadSeal(id, file, sealName));
+            @RequestParam("sealName") @NotBlank @Size(max = 50) String sealName,
+            @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail) {
+        BuyerCompanySealUploadResponse result = buyerCompanyApplicationService.uploadSeal(id, file, sealName);
+        operationLog.record(BUYER_COMPANY, id, result.company().companyName(), UPLOAD_SEAL, operatorEmail,
+                details("sealName", result.company().sealName(), "verifyId", result.verifyId()));
+        return ApiResponse.success(result);
     }
 
     /**
@@ -103,7 +119,11 @@ public class FadadaController {
      */
     @PostMapping("/seal/remove")
     @Operation(summary = "移除印章：同步清理法大大印章、对象存储图片与公司签章字段")
-    public ApiResponse<BuyerCompanyDetailResponse> removeSeal(@RequestParam("id") @Min(1) Long id) {
-        return ApiResponse.success(buyerCompanyApplicationService.removeSeal(id));
+    public ApiResponse<BuyerCompanyDetailResponse> removeSeal(
+            @RequestParam("id") @Min(1) Long id,
+            @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail) {
+        BuyerCompanyDetailResponse result = buyerCompanyApplicationService.removeSeal(id);
+        operationLog.record(BUYER_COMPANY, id, result.companyName(), REMOVE_SEAL, operatorEmail);
+        return ApiResponse.success(result);
     }
 }
