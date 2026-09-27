@@ -10,8 +10,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 供应链操作日志（procurement_operation_log）的统一写入入口。
@@ -24,6 +27,10 @@ import java.util.Map;
  *
  * <p>按当前约定，{@code operator_id} 与 {@code ip_address} 不采集，落库为 NULL；
  * 操作人只记 {@code operator_name}（取自 {@value #OPERATOR_HEADER} 请求头）。</p>
+ *
+ * <p><b>操作详情只对「修改」记录</b>（{@link ProcurementOperationType#isDetailSupported()}）：
+ * 新增 / 删除 / 签章类操作即使传了详情也不会落库，避免日志里堆积没有检索价值的字段快照。
+ * 修改操作的详情由 {@link #changes(FieldChange...)} 构造，只包含真正发生变化的字段。</p>
  */
 @Service
 @Slf4j
@@ -66,7 +73,7 @@ public class ProcurementOperationLogRecorder {
      * @param dataName     业务数据名称快照，写入 data_name（超长自动截断）
      * @param operationType 操作类型
      * @param operatorName 操作人（邮箱），写入 operator_name；为空则记 NULL
-     * @param details      操作详情，序列化为 JSON 写入 operation_details，可为 null
+     * @param details      操作详情（仅「修改」类操作会落库），可为 null
      */
     public void record(
             ProcurementBusinessType businessType,
@@ -89,7 +96,8 @@ public class ProcurementOperationLogRecorder {
         logPO.setOperationType(operationType.getCode());
         logPO.setOperationDesc(truncate(operationType.getLabel() + "：" + logPO.getDataName(),
                 MAX_OPERATION_DESC_LENGTH));
-        logPO.setOperationDetails(toJson(details));
+        // 只有「修改」记录操作详情；其余类型即使调用方传了详情也不落库
+        logPO.setOperationDetails(operationType.isDetailSupported() ? toJson(details) : null);
 
         try {
             mapper.insert(logPO);
@@ -100,27 +108,40 @@ public class ProcurementOperationLogRecorder {
     }
 
     /**
-     * 便捷构造操作详情：按 {@code key, value, key, value...} 成对传入，
-     * 值为 null 的条目自动跳过（{@link Map#of} 不接受 null，业务字段又常为空）。
+     * 构造「修改」操作的操作详情：{@code {"changes":[{"field":..,"before":..,"after":..}]}}。
      *
-     * @return 详情 Map；无任何有效条目时返回 null（不写 operation_details）
+     * <p>修改前后值相同的字段自动跳过，因此调用方可以把该类目下的字段全部传入；
+     * 没有任何有效变更时返回 null，调用方无需自己判空。</p>
+     *
+     * @return 详情 Map；无任何有效变更时返回 null（不写 operation_details）
      */
-    public static Map<String, Object> details(Object... keysAndValues) {
-        if (keysAndValues == null || keysAndValues.length == 0) {
+    public static Map<String, Object> changes(FieldChange... changes) {
+        if (changes == null || changes.length == 0) {
             return null;
         }
-        if (keysAndValues.length % 2 != 0) {
-            throw new IllegalArgumentException("操作详情必须按 key/value 成对传入");
-        }
 
-        Map<String, Object> details = new LinkedHashMap<>();
-        for (int i = 0; i < keysAndValues.length; i += 2) {
-            Object value = keysAndValues[i + 1];
-            if (value != null) {
-                details.put(String.valueOf(keysAndValues[i]), value);
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (FieldChange change : changes) {
+            if (change == null || Objects.equals(change.before(), change.after())) {
+                continue;
             }
+            // 用 LinkedHashMap 而不是 Map.of：before / after 允许为 null（新增或清空字段）
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("field", change.field());
+            item.put("before", change.before());
+            item.put("after", change.after());
+            items.add(item);
         }
-        return details.isEmpty() ? null : details;
+        return items.isEmpty() ? null : Map.of("changes", items);
+    }
+
+    /** 单个字段的变更：字段名 + 修改前值 + 修改后值。 */
+    public record FieldChange(String field, Object before, Object after) {
+
+        /** 便捷构造，配合 {@link #changes(FieldChange...)} 使用。 */
+        public static FieldChange of(String field, Object before, Object after) {
+            return new FieldChange(field, before, after);
+        }
     }
 
     private String toJson(Map<String, Object> details) {

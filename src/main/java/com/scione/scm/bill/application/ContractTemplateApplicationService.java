@@ -100,8 +100,24 @@ public class ContractTemplateApplicationService {
     private ContractTemplatePO toUpdatedPO(ContractTemplatePO current, ContractTemplateUpsertRequest request) {
         ContractTemplatePO template = new ContractTemplatePO();
         template.setId(current.getId());
-        apply(template, request);
+        apply(template, mergeForUpdate(current, request));
         return template;
+    }
+
+    /**
+     * 编辑接口是差量提交语义：请求里为 {@code null} 的字段表示「本次未提交该字段」，
+     * 沿用库中现值；空串仍然表示清空（{@code objectKey} 空串即移除模板文件，由 {@link #apply} 处理）。
+     *
+     * <p>这样前端只需提交变化字段，编辑时也不会因为漏传某个字段而把库里的值清掉。</p>
+     */
+    private static ContractTemplateUpsertRequest mergeForUpdate(ContractTemplatePO current,
+                                                               ContractTemplateUpsertRequest request) {
+        return new ContractTemplateUpsertRequest(
+                request.templateName() == null ? current.getTemplateName() : request.templateName(),
+                request.contractType() == null ? current.getContractType() : request.contractType(),
+                request.objectKey() == null ? current.getObjectKey() : request.objectKey(),
+                request.isDefault() == null ? Boolean.valueOf(isDefault(current)) : request.isDefault(),
+                request.isActive() == null ? Boolean.valueOf(isActive(current)) : request.isActive());
     }
 
     private void apply(ContractTemplatePO template, ContractTemplateUpsertRequest request) {

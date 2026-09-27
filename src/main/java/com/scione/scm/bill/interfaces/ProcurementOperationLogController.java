@@ -5,6 +5,7 @@ import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.ProcurementOperationLogApplicationService;
 import com.scione.scm.bill.application.dto.ProcurementBusinessTypeResponse;
 import com.scione.scm.bill.application.dto.ProcurementOperationLogListItemResponse;
+import com.scione.scm.bill.application.dto.ProcurementOperationTypeResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -52,5 +53,11 @@ public class ProcurementOperationLogController {
     @GetMapping("/business-types")
     public ApiResponse<List<ProcurementBusinessTypeResponse>> businessTypes() {
         return ApiResponse.success(service.businessTypes());
+    }
+
+    /** 操作类型下拉选项：供列表筛选下拉与「操作类型」列的中文名使用。 */
+    @GetMapping("/operation-types")
+    public ApiResponse<List<ProcurementOperationTypeResponse>> operationTypes() {
+        return ApiResponse.success(service.operationTypes());
     }
 }

@@ -8,16 +8,30 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public enum ProcurementOperationType {
 
-    CREATE("CREATE", "新增"),
-    UPDATE("UPDATE", "修改"),
-    DELETE("DELETE", "删除"),
-    UPDATE_SEAL("UPDATE_SEAL", "修改签章"),
-    UPLOAD_SEAL("UPLOAD_SEAL", "上传印章"),
-    REMOVE_SEAL("REMOVE_SEAL", "移除印章");
+    CREATE("CREATE", "新增", false),
+    UPDATE("UPDATE", "修改", true),
+    DELETE("DELETE", "删除", false),
+    UPDATE_SEAL("UPDATE_SEAL", "修改签章", false),
+    UPLOAD_SEAL("UPLOAD_SEAL", "上传印章", false),
+    REMOVE_SEAL("REMOVE_SEAL", "移除印章", false),
+
+    // 以下三种由合同模块写入 procurement_operation_log（business_type=1），本模块不产出，
+    // 只在此登记，供日志页把 operation_type 显示成中文并可筛选（对应 ContractOperationLog 里的常量）。
+    // MODIFY 字面也是「修改」，为避免与 UPDATE 的「修改」在筛选下拉里重名，中文名加了来源前缀。
+    MODIFY("MODIFY", "合同修改", false),
+    SKIP_CREATE("SKIP_CREATE", "跳过创建", false),
+    START_SIGN("START_SIGN", "发起签署", false);
 
     /** 落库值，写入 procurement_operation_log.operation_type（varchar(50)）。 */
     private final String code;
 
     /** 中文名，用于拼装 operation_desc。 */
     private final String label;
+
+    /**
+     * 是否记录操作详情（procurement_operation_log.operation_details）。
+     * 只有「修改」记录逐字段的「字段名 / 修改前 / 修改后」，其余操作类型一律不写详情，
+     * 避免日志里堆积没有检索价值的字段快照。
+     */
+    private final boolean detailSupported;
 }

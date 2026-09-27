@@ -87,7 +87,7 @@
         FROM contract_template
         WHERE 1 = 1
         <include refid="filters"/>
-        ORDER BY contract_type ASC, is_default DESC, id DESC
+        ORDER BY update_time DESC, id DESC
         LIMIT #{pageSize} OFFSET #{offset}
     </select>
 

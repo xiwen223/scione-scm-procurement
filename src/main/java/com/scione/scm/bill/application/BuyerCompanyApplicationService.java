@@ -366,19 +366,6 @@ public class BuyerCompanyApplicationService {
         return SEAL_IMAGE_EXTENSIONS.contains(fileName.substring(dot + 1).toLowerCase(Locale.ROOT));
     }
 
-    /**
-     * 删除公司：只做逻辑删除（buyer_company.is_deleted 置 1），数据仍保留在库中，
-     * 之后所有查询都不再返回该记录；默认合同需方不允许删除。
-     */
-    @Transactional
-    public void delete(Long id) {
-        BuyerCompanyPO company = requireCompany(id);
-        if (company.getPriority() != null && company.getPriority() == 1) {
-            throw new BusinessException(ResultCode.BUYER_COMPANY_DEFAULT_CANNOT_DELETE);
-        }
-        mapper.deleteById(id);
-    }
-
     private BuyerCompanyPO toNewPO(BuyerCompanyUpsertRequest request) {
         BuyerCompanyPO company = new BuyerCompanyPO();
         apply(company, request);
@@ -388,8 +375,50 @@ public class BuyerCompanyApplicationService {
     private BuyerCompanyPO toUpdatedPO(BuyerCompanyPO current, BuyerCompanyUpsertRequest request) {
         BuyerCompanyPO company = new BuyerCompanyPO();
         company.setId(current.getId());
-        apply(company, request);
+        apply(company, mergeForUpdate(current, request));
         return company;
+    }
+
+    /**
+     * 编辑接口是差量提交语义：请求里为 {@code null} 的字段表示「本次未提交该字段」，
+     * 沿用库中现值；空串仍然表示清空（由 {@link #apply} / {@code blankToNull} 处理）。
+     *
+     * <p>这样前端只需提交变化字段，编辑时也不会因为漏传某个字段而把库里的值清掉。</p>
+     */
+    private static BuyerCompanyUpsertRequest mergeForUpdate(BuyerCompanyPO current, BuyerCompanyUpsertRequest request) {
+        return new BuyerCompanyUpsertRequest(
+                request.companyName() == null ? current.getCompanyName() : request.companyName(),
+                request.companyShortName() == null ? current.getCompanyShortName() : request.companyShortName(),
+                request.creditCode() == null ? current.getCreditCode() : request.creditCode(),
+                request.postCode() == null ? current.getPostCode() : request.postCode(),
+                request.fax() == null ? current.getFax() : request.fax(),
+                request.legalPerson() == null ? current.getLegalPerson() : request.legalPerson(),
+                request.address() == null ? current.getAddress() : request.address(),
+                request.phone() == null ? current.getPhone() : request.phone(),
+                request.bankName() == null ? current.getBankName() : request.bankName(),
+                request.bankAccount() == null ? current.getBankAccount() : request.bankAccount(),
+                request.sealUrl() == null ? current.getSealUrl() : request.sealUrl(),
+                request.sealName() == null ? current.getSealName() : request.sealName(),
+                request.sealBase64() == null ? current.getSealBase64() : request.sealBase64(),
+                request.fadadaSealId() == null ? current.getFadadaSealId() : request.fadadaSealId(),
+                request.openCorpId() == null ? current.getOpenCorpId() : request.openCorpId(),
+                request.identStatus() == null ? identStatusText(current.getIdentStatus()) : request.identStatus(),
+                request.priority() == null ? current.getPriority() : request.priority(),
+                request.isDefault() == null ? Boolean.valueOf(isDefaultCompany(current)) : request.isDefault(),
+                request.isActive() == null ? Boolean.valueOf(isActiveCompany(current)) : request.isActive());
+    }
+
+    /** 库中的 ident_status 数值回推成法大大原值，供差量合并时复用（未点「检测」时前端提交该原值）。 */
+    private static String identStatusText(Integer identStatus) {
+        return identStatus != null && identStatus == 1 ? "identified" : "unidentified";
+    }
+
+    private static boolean isDefaultCompany(BuyerCompanyPO company) {
+        return company.getPriority() != null && company.getPriority() == 1;
+    }
+
+    private static boolean isActiveCompany(BuyerCompanyPO company) {
+        return company.getIsActive() != null && company.getIsActive() == 1;
     }
 
     private void apply(BuyerCompanyPO company, BuyerCompanyUpsertRequest request) {

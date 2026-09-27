@@ -6,12 +6,11 @@ import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
 import com.scione.scm.bill.infrastructure.lingxing.LingxingOpenApiClient;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.validation.constraints.NotBlank;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -29,11 +28,18 @@ import java.util.Optional;
 public class PermissionController {
 
     /**
-     * 角色清单，逗号分隔。application-dev.yml 提供默认值，Nacos 中的同名配置优先级更高。
+     * 我方公司按钮操作权限名单，逗号分隔。application-dev.yml 提供默认值，Nacos 中的同名配置优先级更高。
      * 冒号后的空串是兜底默认值：其他 profile 未配置时解析为空列表而不是启动失败。
      */
-    @Value("${permission.roleList:}")
-    private List<String> roleList;
+    @Value("${permission.buyerCompanyList:}")
+    private List<String> buyerCompanyList;
+
+    /**
+     * 合同模板查看菜单权限名单，逗号分隔。application-dev.yml 提供默认值，Nacos 中的同名配置优先级更高。
+     * 冒号后的空串是兜底默认值：其他 profile 未配置时解析为空列表而不是启动失败。
+     */
+    @Value("${permission.contractTemplateList:}")
+    private List<String> contractTemplateList;
 
     @Autowired
     private LingxingOpenApiClient lingxingOpenApiClient;
@@ -41,10 +47,16 @@ public class PermissionController {
     @Autowired
     private FadadaOpenApiClient fadadaOpenApiClient;
 
-    @GetMapping("/check")
-    @Operation(summary = "查询角色是否在 roleList 中")
-    public ApiResponse<Boolean> check(@RequestParam("role") String role) {
-        return ApiResponse.success(roleList.contains(role.trim()));
+    @GetMapping("/checkBuyerCompanyList")
+    @Operation(summary = "查询当前用户是否有我方公司按钮操作权限")
+    public ApiResponse<Boolean> checkBuyerCompanyList(@RequestHeader("X-User-Email") String userEmail) {
+        return ApiResponse.success(buyerCompanyList.contains(userEmail.trim()));
+    }
+
+    @GetMapping("/checkContractTemplate")
+    @Operation(summary = "查询当前用户是否有合同模板查看菜单权限")
+    public ApiResponse<Boolean> checkContractTemplateList(@RequestHeader("X-User-Email") String userEmail) {
+        return ApiResponse.success(contractTemplateList.contains(userEmail.trim()));
     }
 
     @GetMapping("/api/test")

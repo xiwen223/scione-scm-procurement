@@ -3,9 +3,11 @@ package com.scione.scm.bill.application;
 import com.scione.common.model.PageResult;
 import com.scione.scm.bill.application.dto.ProcurementBusinessTypeResponse;
 import com.scione.scm.bill.application.dto.ProcurementOperationLogListItemResponse;
+import com.scione.scm.bill.application.dto.ProcurementOperationTypeResponse;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.domain.procurementlog.enums.ProcurementBusinessType;
+import com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ProcurementOperationLogMapper;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.ProcurementOperationLogPO;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +27,13 @@ public class ProcurementOperationLogApplicationService {
     public List<ProcurementBusinessTypeResponse> businessTypes() {
         return Arrays.stream(ProcurementBusinessType.values())
                 .map(type -> new ProcurementBusinessTypeResponse(type.getCode(), type.getName()))
+                .toList();
+    }
+
+    /** 操作类型下拉选项：前端筛选下拉与列表「操作类型」列的展示共用这一份数据。 */
+    public List<ProcurementOperationTypeResponse> operationTypes() {
+        return Arrays.stream(ProcurementOperationType.values())
+                .map(type -> new ProcurementOperationTypeResponse(type.getCode(), type.getLabel()))
                 .toList();
     }
 

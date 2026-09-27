@@ -34,7 +34,6 @@ import org.springframework.web.multipart.MultipartFile;
 import java.util.Optional;
 
 import static com.scione.scm.bill.application.ProcurementOperationLogRecorder.OPERATOR_HEADER;
-import static com.scione.scm.bill.application.ProcurementOperationLogRecorder.details;
 import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementBusinessType.BUYER_COMPANY;
 import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.REMOVE_SEAL;
 import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.UPLOAD_SEAL;
@@ -93,8 +92,7 @@ public class FadadaController {
             @RequestParam("sealName") @NotBlank @Size(max = 50) String sealName,
             @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail) {
         BuyerCompanySealUploadResponse result = buyerCompanyApplicationService.uploadSeal(id, file, sealName);
-        operationLog.record(BUYER_COMPANY, id, result.company().companyName(), UPLOAD_SEAL, operatorEmail,
-                details("sealName", result.company().sealName(), "verifyId", result.verifyId()));
+        operationLog.record(BUYER_COMPANY, id, result.company().companyName(), UPLOAD_SEAL, operatorEmail);
         return ApiResponse.success(result);
     }
 

@@ -24,8 +24,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+import static com.scione.scm.bill.application.ProcurementOperationLogRecorder.FieldChange.of;
 import static com.scione.scm.bill.application.ProcurementOperationLogRecorder.OPERATOR_HEADER;
-import static com.scione.scm.bill.application.ProcurementOperationLogRecorder.details;
+import static com.scione.scm.bill.application.ProcurementOperationLogRecorder.changes;
 import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementBusinessType.CONTRACT_TEMPLATE;
 import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.CREATE;
 import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.DELETE;
@@ -70,7 +71,7 @@ public class ContractTemplateController {
             @Valid @RequestBody ContractTemplateUpsertRequest request) {
         ContractTemplateDetailResponse result = service.create(request);
         operationLog.record(CONTRACT_TEMPLATE, Long.valueOf(result.id()), result.templateName(), CREATE,
-                operatorEmail, templateDetails(result));
+                operatorEmail);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success(result));
     }
@@ -79,9 +80,11 @@ public class ContractTemplateController {
     public ApiResponse<ContractTemplateDetailResponse> update(
             @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail,
             @Valid @RequestBody ContractTemplateUpdateRequest request) {
+        // 变更前快照：日志只记录本次真正变化的字段，需要拿到修改前的值（与公司编辑、模板删除一致）
+        ContractTemplateDetailResponse before = service.getById(request.id());
         ContractTemplateDetailResponse result = service.update(request.id(), request.toUpsertRequest());
         operationLog.record(CONTRACT_TEMPLATE, request.id(), result.templateName(), UPDATE,
-                operatorEmail, templateDetails(result));
+                operatorEmail, templateChanges(before, result));
         return ApiResponse.success(result);
     }
 
@@ -96,13 +99,14 @@ public class ContractTemplateController {
         return ApiResponse.success(null);
     }
 
-    /** 模板变更（新增 / 编辑）记录的业务关键字段。 */
-    private static Map<String, Object> templateDetails(ContractTemplateDetailResponse template) {
-        return details(
-                "templateName", template.templateName(),
-                "contractType", template.contractType(),
-                "objectKey", template.objectKey(),
-                "isDefault", template.isDefault(),
-                "isActive", template.isActive());
+    /** 编辑模板的变更详情：只记录本次真正变化的字段及其修改前后值。 */
+    private static Map<String, Object> templateChanges(ContractTemplateDetailResponse before,
+                                                       ContractTemplateDetailResponse after) {
+        return changes(
+                of("templateName", before.templateName(), after.templateName()),
+                of("contractType", before.contractType(), after.contractType()),
+                of("objectKey", before.objectKey(), after.objectKey()),
+                of("isDefault", before.isDefault(), after.isDefault()),
+                of("isActive", before.isActive(), after.isActive()));
     }
 }
