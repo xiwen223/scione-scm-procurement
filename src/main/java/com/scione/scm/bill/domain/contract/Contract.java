@@ -21,6 +21,7 @@ public class Contract {
     public static final int TYPE_PURCHASE = 1;
     public static final int SOURCE_LINGXING = 1;
     public static final int CREATE_TYPE_AUTO = 1;
+    public static final int CREATE_TYPE_MANUAL = 2;
     public static final String SYSTEM_OPERATOR = "system";
 
     @Setter
@@ -33,6 +34,12 @@ public class Contract {
     private Long supplierId;
     private String supplierName;
     private String supplierPhone;
+    private String supplierCreditCode;
+    private String supplierAccountName;
+    private String supplierBankName;
+    private String supplierBankAccount;
+    private String prepayPercent;
+    private String settlementMethod;
     private String supplierAddress;
     private String contactPerson;
     private Long buyerCompanyId;
@@ -47,6 +54,8 @@ public class Contract {
     private BigDecimal contractAmount;
     private LocalDate contractDate;
     private LocalDate deliveryDate;       // 交货日期
+    /** 实际使用的合同模板 ID，关联 contract_template.id。 */
+    private Long templateId;
     private ContractStatus status;
     private String creatorId;
     private String creatorName;
@@ -54,6 +63,7 @@ public class Contract {
     private final List<ContractItem> items = new ArrayList<>();
     private String contractPdfUrl;    // 原始合同 PDF URL
     private String signedPdfUrl;      // 已签署合同 PDF URL
+    private String fadadaTaskId;
 
     private Contract() {
     }
@@ -113,14 +123,15 @@ public class Contract {
      */
     public static Contract rehydrate(Long id, String contractNo, String contractName, Integer contractType,
                                      String purchaseOrderNo, Integer sourceType, Long supplierId, String supplierName,
-                                     String supplierPhone, String supplierAddress, String contactPerson,
+                                     String supplierPhone, String supplierCreditCode, String supplierAccountName,
+                                     String supplierBankName, String supplierBankAccount, String prepayPercent, String settlementMethod, String supplierAddress, String contactPerson,
                                      Long buyerCompanyId, String buyerCompanyName,
                                      String buyerCompanyCode, String buyerAddress, String postCode,
                                      String buyerPhone, String fax,
                                      BigDecimal originalAmount, BigDecimal discountedAmount,
                                      BigDecimal contractAmount, LocalDate contractDate, LocalDate deliveryDate, Integer status,
                                      String creatorId, String creatorName, Integer createType,
-                                     String contractPdfUrl, String signedPdfUrl,
+                                     String contractPdfUrl, String signedPdfUrl, String fadadaTaskId,
                                      List<ContractItem> items) {
         Contract c = new Contract();
         c.id = id;
@@ -132,6 +143,12 @@ public class Contract {
         c.supplierId = supplierId;
         c.supplierName = supplierName;
         c.supplierPhone = supplierPhone;
+        c.supplierCreditCode = supplierCreditCode;
+        c.supplierAccountName = supplierAccountName;
+        c.supplierBankName = supplierBankName;
+        c.supplierBankAccount = supplierBankAccount;
+        c.prepayPercent = prepayPercent;
+        c.settlementMethod = settlementMethod;
         c.supplierAddress = supplierAddress;
         c.contactPerson = contactPerson;
         c.buyerCompanyId = buyerCompanyId;
@@ -152,6 +169,7 @@ public class Contract {
         c.createType = createType;
         c.contractPdfUrl = contractPdfUrl;
         c.signedPdfUrl = signedPdfUrl;
+        c.fadadaTaskId = fadadaTaskId;
         if (items != null) {
             c.items.addAll(items);
         }

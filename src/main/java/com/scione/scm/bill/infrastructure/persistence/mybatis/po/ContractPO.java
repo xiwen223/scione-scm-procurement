@@ -24,6 +24,8 @@ public class ContractPO {
     private String supplierAccountName;
     private String supplierBankName;
     private String supplierBankAccount;
+    private String prepayPercent;
+    private String settlementMethod;
     private String supplierAddress;
     private String contactPerson;
     private Long buyerCompanyId;

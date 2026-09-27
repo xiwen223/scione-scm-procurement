@@ -3,10 +3,16 @@ package com.scione.scm.bill.application;
 import com.scione.scm.bill.application.dto.ContractCreateRequest;
 import com.scione.scm.bill.application.dto.ContractCreateResponse;
 import com.scione.scm.bill.application.port.ContractFileStore;
+import com.scione.scm.bill.application.port.ContractPdfConverter;
 import com.scione.scm.bill.application.port.ContractTemplateService;
+import com.scione.scm.bill.application.port.LingxingProductClient;
+import com.scione.scm.bill.application.port.LingxingSupplierClient;
+import com.scione.scm.bill.config.ContractSupplierWhitelistProperties;
 import com.scione.scm.bill.domain.company.BuyerCompany;
 import com.scione.scm.bill.domain.company.BuyerCompanyRepository;
 import com.scione.scm.bill.domain.contract.Contract;
+import com.scione.scm.bill.domain.contract.ContractItem;
+import com.scione.scm.bill.domain.contract.ContractOperationLog;
 import com.scione.scm.bill.domain.contract.ContractRepository;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
 import com.scione.scm.bill.domain.posync.PoSyncRepository;
@@ -35,6 +41,11 @@ public class ContractAutoCreateService {
     private final ContractRepository contractRepository;
     private final ContractTemplateService contractTemplateService;
     private final ContractFileStore contractFileStore;
+    private final ContractPdfConverter contractPdfConverter;
+    private final LingxingProductClient lingxingProductClient;
+    private final ContractSupplierWhitelistProperties supplierWhitelist;
+    private final ContractCreationValidator contractCreationValidator;
+    private final LingxingSupplierClient lingxingSupplierClient;
 
     /**
      * 自动创建合同（为指定 PO 列表创建合同）。
@@ -97,11 +108,27 @@ public class ContractAutoCreateService {
     protected boolean processOnePo(PoSyncRecord po, BuyerCompany buyer) {
         String poNo = po.getPurchaseOrderNo();
 
+        if (!supplierWhitelist.contains(po.getSupplierName())) {
+            String reason = "PO=" + poNo + "，供应商=" + po.getSupplierName() + "，跳过原因：供应商不在采购合同签约白名单";
+            contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
+            log.info("跳过建合同：{}", reason);
+            return false;
+        }
+
+        List<String> missingFields = contractCreationValidator.validate(po, buyer);
+        if (!missingFields.isEmpty()) {
+            String reason = "PO=" + poNo + "，缺失/不满足字段：" + String.join("、", missingFields);
+            contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
+            log.warn("跳过建合同：{}", reason);
+            return false;
+        }
+
         // 校验 1：supplier_name 必填
         if (!StringUtils.hasText(po.getSupplierName())) {
             log.warn("跳过建合同（supplier_name 为空）：poNo={}", poNo);
             return false;
         }
+
 
         // 校验 2：supplier_phone 必填（签署必需）
         if (!StringUtils.hasText(po.getSupplierPhone())) {
@@ -138,6 +165,11 @@ public class ContractAutoCreateService {
 
         // 创建合同聚合
         Contract contract = Contract.createFromPo(po, buyer, contractNo);
+        contract.setTemplateId(contractTemplateService.resolveDefaultTemplateId(contract.getContractType()));
+        enrichSupplierAddress(contract);
+
+        // 从领星API获取并填充商品图片URL
+        enrichContractItemsWithImages(contract);
 
         // 原子保存：合同主表 + 明细 + CREATE 日志
         long contractId = contractRepository.create(contract);
@@ -151,11 +183,11 @@ public class ContractAutoCreateService {
         try {
             log.info("开始生成合同文件：contractNo={}", contractNo);
 
-            // 1. 填充模板，生成 Excel 字节流
-            byte[] fileBytes = contractTemplateService.fillTemplate(contract);
+            // 1. 直接根据合同数据生成 PDF，运行环境不依赖 Office/LibreOffice。
+            byte[] pdfBytes = contractPdfConverter.convert(contractTemplateService.fillTemplate(contract), contractNo);
 
             // 2. 上传到 S3，返回访问 URL
-            String fileUrl = contractFileStore.store(contractNo, fileBytes, "xlsx");
+            String fileUrl = contractFileStore.store(contractNo, pdfBytes, "pdf");
 
             // 3. 更新合同表的 contract_pdf_url 字段
             contractRepository.updatePdfUrl(contractId, fileUrl);
@@ -192,15 +224,11 @@ public class ContractAutoCreateService {
      * @param request 创建合同请求，包含采购单号
      * @return 创建结果（包含合同ID、合同编号、文件URL） 响应对象
      */
-    public ContractCreateResponse createContract(ContractCreateRequest request) {
+    public ContractCreateResponse createContract(ContractCreateRequest request, String creatorEmail) {
         String purchaseOrderNo = request.getPurchaseOrderNo();
         log.info("手动创建合同开始：purchaseOrderNo={}", purchaseOrderNo);
-        // 1. 查询默认需方公司
-        Optional<BuyerCompany> buyerOpt = buyerCompanyRepository.findDefault();
-        if (buyerOpt.isEmpty()) {
-            throw new RuntimeException("无默认需方公司（priority=1 且 is_active=1）");
-        }
-        BuyerCompany buyer = buyerOpt.get();
+        // 1. 不传需方公司时使用 priority=1；传入时使用页面下拉框选中的公司。
+        BuyerCompany buyer = resolveManualBuyerCompany(request.getBuyerCompanyId());
 
         // 2. 查询指定的 PO（带明细）
         Optional<PoSyncRecord> poOpt = poSyncRepository.findByPurchaseOrderNo(purchaseOrderNo);
@@ -214,55 +242,48 @@ public class ContractAutoCreateService {
             throw new RuntimeException("采购单状态不是待下单（po_status != 1）：purchaseOrderNo=" + purchaseOrderNo);
         }
 
-        // 4. 校验必填字段
-        if (!StringUtils.hasText(po.getSupplierName())) {
-            throw new RuntimeException("供应商名称为空");
-        }
-        if (!StringUtils.hasText(po.getSupplierPhone())) {
-            throw new RuntimeException("供应商电话为空（签署必需）");
-        }
-        if (!StringUtils.hasText(po.getContactPerson())) {
-            throw new RuntimeException("联系人为空");
-        }
-        if (po.getItems() == null || po.getItems().isEmpty()) {
-            throw new RuntimeException("采购单无明细");
-        }
-        if (!StringUtils.hasText(buyer.getAddress())) {
-            throw new RuntimeException("需方公司地址为空");
-        }
-
-        // 5. 唯一性检查
+        // 4. 唯一性检查。手动字段将在合同组装后统一校验，允许补齐领星缺失数据。
         if (contractRepository.existsActiveByPurchaseOrderNo(purchaseOrderNo)) {
             throw new RuntimeException("该采购单已存在合同（非取消状态）");
         }
 
-        // 6. 生成合同编号
+        // 5. 生成合同编号
         String contractNo = generateContractNo();
 
-        // 7. 创建合同聚合
+        // 6. 创建合同聚合
         Contract contract = Contract.createFromPo(po, buyer, contractNo);
+        contract.setTemplateId(contractTemplateService.resolveDefaultTemplateId(contract.getContractType()));
+        contract.setCreatorId(creatorEmail);
+        contract.setCreatorName(creatorEmail);
+        contract.setCreateType(Contract.CREATE_TYPE_MANUAL);
 
-        // 8. 手动补充字段（覆盖领星和默认数据）
+        // 7. 手动补充字段（覆盖领星和默认数据）
         applyManualOverrides(contract, request);
 
-        // 8. 原子保存：合同主表 + 明细 + CREATE 日志
+        // 8. 从领星API获取并填充商品图片URL
+        enrichContractItemsWithImages(contract);
+
+        // 9. 以最终合同数据做统一必填校验；签署时间允许为空。
+        validateManualRequiredFields(contract);
+
+        // 10. 原子保存：合同主表 + 明细 + CREATE 日志
         long contractId = contractRepository.create(contract);
 
-        // 9. 回写 PO 标记
+        // 11. 回写 PO 标记
         poSyncRepository.markContractCreated(purchaseOrderNo, contractId);
 
         log.info("合同创建成功：poNo={}, contractNo={}, contractId={}", purchaseOrderNo, contractNo, contractId);
 
-        // 10. 填充 Excel 模板并上传到 S3
+        // 12. 填充 Excel 模板并上传到 S3
         String fileUrl = null;
         try {
             log.info("开始生成合同文件：contractNo={}", contractNo);
 
-            // 填充模板，生成 Excel 字节流
-            byte[] fileBytes = contractTemplateService.fillTemplate(contract);
+            // 直接根据合同数据生成 PDF，运行环境不依赖 Office/LibreOffice。
+            byte[] pdfBytes = contractPdfConverter.convert(contractTemplateService.fillTemplate(contract), contractNo);
 
             // 上传到 S3，返回访问 URL
-            fileUrl = contractFileStore.store(contractNo, fileBytes, "xlsx");
+            fileUrl = contractFileStore.store(contractNo, pdfBytes, "pdf");
 
             // 更新合同表的 contract_pdf_url 字段
             contractRepository.updatePdfUrl(contractId, fileUrl);
@@ -290,6 +311,12 @@ public class ContractAutoCreateService {
      * 应用手动补充的字段（覆盖领星和默认数据）。
      */
     private void applyManualOverrides(Contract contract, ContractCreateRequest request) {
+        if (request.getPrepaymentRatio() != null) {
+            contract.setPrepayPercent(request.getPrepaymentRatio().stripTrailingZeros().toPlainString());
+        }
+        if (StringUtils.hasText(request.getPaymentMethod())) {
+            contract.setSettlementMethod(request.getPaymentMethod());
+        }
         // 供方信息覆盖
         if (StringUtils.hasText(request.getSupplierName())) {
             contract.setSupplierName(request.getSupplierName());
@@ -307,27 +334,17 @@ public class ContractAutoCreateService {
             contract.setSupplierPhone(request.getSupplierPhone());
             log.info("手动覆盖供方电话：{}", request.getSupplierPhone());
         }
-
-        // 需方信息覆盖
-        if (StringUtils.hasText(request.getBuyerCompanyName())) {
-            contract.setBuyerCompanyName(request.getBuyerCompanyName());
-            log.info("手动覆盖需方名称：{}", request.getBuyerCompanyName());
+        if (StringUtils.hasText(request.getSupplierCreditCode())) {
+            contract.setSupplierCreditCode(request.getSupplierCreditCode());
+            log.info("手动填写供方统一社会信用代码：contractNo={}", contract.getContractNo());
         }
-        if (StringUtils.hasText(request.getBuyerAddress())) {
-            contract.setBuyerAddress(request.getBuyerAddress());
-            log.info("手动覆盖需方地址：{}", request.getBuyerAddress());
+        if (StringUtils.hasText(request.getSupplierBankAccount())) {
+            contract.setSupplierBankAccount(request.getSupplierBankAccount());
+            log.info("手动覆盖供方银行账号：contractNo={}", contract.getContractNo());
         }
-        if (StringUtils.hasText(request.getPostCode())) {
-            contract.setPostCode(request.getPostCode());
-            log.info("手动覆盖邮编：{}", request.getPostCode());
-        }
-        if (StringUtils.hasText(request.getBuyerPhone())) {
-            contract.setBuyerPhone(request.getBuyerPhone());
-            log.info("手动覆盖需方电话：{}", request.getBuyerPhone());
-        }
-        if (StringUtils.hasText(request.getFax())) {
-            contract.setFax(request.getFax());
-            log.info("手动覆盖传真：{}", request.getFax());
+        if (StringUtils.hasText(request.getSupplierBankName())) {
+            contract.setSupplierBankName(request.getSupplierBankName());
+            log.info("手动覆盖供方开户行：contractNo={}", contract.getContractNo());
         }
 
         // 合同金额覆盖
@@ -357,6 +374,150 @@ public class ContractAutoCreateService {
             } catch (Exception ex) {
                 log.warn("交货日期格式错误，忽略：{}", request.getDeliveryDate());
             }
+        }
+    }
+
+    private void validateManualRequiredFields(Contract contract) {
+        List<String> missing = new java.util.ArrayList<>();
+        if (!StringUtils.hasText(contract.getContractNo())) missing.add("合同编号");
+        if (!StringUtils.hasText(contract.getContractName())) missing.add("合同名称");
+        if (contract.getContractType() == null) missing.add("合同类型");
+        if (contract.getStatus() == null) missing.add("合同状态");
+        if (!StringUtils.hasText(contract.getSupplierName())) missing.add("供方");
+        if (!StringUtils.hasText(contract.getSupplierAddress())) missing.add("供方地址");
+        if (!StringUtils.hasText(contract.getContactPerson())) missing.add("供方联系人");
+        if (!StringUtils.hasText(contract.getSupplierPhone())) missing.add("供方电话");
+        if (!StringUtils.hasText(contract.getBuyerCompanyName())) missing.add("需方");
+        if (!StringUtils.hasText(contract.getBuyerAddress())) missing.add("签订地点");
+        if (!StringUtils.hasText(contract.getSupplierBankAccount())) missing.add("供方银行账户");
+        if (!StringUtils.hasText(contract.getSupplierBankName())) missing.add("供方开户行");
+        if (!StringUtils.hasText(contract.getPrepayPercent())) missing.add("预付款");
+        if (!StringUtils.hasText(contract.getSettlementMethod())) missing.add("结算方式");
+        if (contract.getDeliveryDate() == null) missing.add("交付日期");
+        if (contract.getContractAmount() == null) missing.add("合同金额");
+        if (contract.getItems() == null || contract.getItems().isEmpty()) {
+            missing.add("采购商品明细");
+        } else {
+            for (ContractItem item : contract.getItems()) {
+                String label = StringUtils.hasText(item.getSku()) ? "SKU=" + item.getSku() : "采购商品";
+                if (!StringUtils.hasText(item.getSku())) missing.add(label + " SKU");
+                if (!StringUtils.hasText(item.getPicUrl())) missing.add(label + " 图片");
+                if (!StringUtils.hasText(item.getProductName())) missing.add(label + " 品名及规格");
+                if (item.getQuantity() == null || item.getQuantity() <= 0) missing.add(label + " 数量");
+                if (item.getUnitPrice() == null) missing.add(label + " 不含税单价");
+            }
+        }
+        if (!missing.isEmpty()) {
+            throw new com.scione.scm.bill.common.BusinessException(
+                    com.scione.scm.bill.common.ResultCode.PARAM_ERROR,
+                    "无法创建合同，以下字段不能为空：" + String.join("、", missing));
+        }
+    }
+
+    private BuyerCompany resolveManualBuyerCompany(Long buyerCompanyId) {
+        Optional<BuyerCompany> buyerOpt = buyerCompanyId == null
+                ? buyerCompanyRepository.findDefault()
+                : buyerCompanyRepository.findById(buyerCompanyId);
+        BuyerCompany buyer = buyerOpt.orElseThrow(() -> new com.scione.scm.bill.common.BusinessException(
+                com.scione.scm.bill.common.ResultCode.PARAM_ERROR,
+                buyerCompanyId == null ? "无默认需方公司（priority=1 且 is_active=1）" : "选择的需方公司不存在"));
+        if (!Integer.valueOf(1).equals(buyer.getIsActive())) {
+            throw new com.scione.scm.bill.common.BusinessException(
+                    com.scione.scm.bill.common.ResultCode.PARAM_ERROR, "选择的需方公司未启用");
+        }
+        return buyer;
+    }
+
+    /**
+     * 从领星API获取商品图片并填充到合同明细中
+     *
+     * @param contract 合同聚合根
+     */
+    private void enrichContractItemsWithImages(Contract contract) {
+        String poNo = contract.getPurchaseOrderNo();
+        log.info("开始从领星API获取商品图片：contractNo={}, poNo={}", contract.getContractNo(), poNo);
+
+        try {
+            List<ContractItem> contractItems = contract.getItems();
+            if (contractItems == null || contractItems.isEmpty()) {
+                log.warn("合同无明细，跳过图片获取：contractNo={}", contract.getContractNo());
+                return;
+            }
+
+            int imageFoundCount = 0;
+            int imageNotFoundCount = 0;
+            int imageErrorCount = 0;
+
+            // 为每个合同明细获取图片URL
+            for (ContractItem contractItem : contractItems) {
+                String sku = contractItem.getSku();
+
+                if (sku == null || sku.isBlank()) {
+                    log.warn("合同明细SKU为空，跳过图片获取：contractNo={}", contract.getContractNo());
+                    imageNotFoundCount++;
+                    continue;
+                }
+
+                try {
+                    log.debug("查询商品详情：sku={}", sku);
+
+                    // 调用领星API查询产品详情
+                    Optional<LingxingProductClient.ProductDetail> productOpt =
+                            lingxingProductClient.findBySku(sku);
+
+                    if (productOpt.isPresent()) {
+                        LingxingProductClient.ProductDetail product = productOpt.get();
+                        String picUrl = product.picUrl();
+
+                        if (picUrl != null && !picUrl.isBlank()) {
+                            contractItem.setPicUrl(picUrl);
+                            imageFoundCount++;
+                            log.info("获取商品图片成功：sku={}, picUrl={}", sku, picUrl);
+                        } else {
+                            log.warn("商品无图片URL：sku={}", sku);
+                            imageNotFoundCount++;
+                        }
+                    } else {
+                        log.warn("领星API未找到商品：sku={}", sku);
+                        imageNotFoundCount++;
+                    }
+
+                } catch (Exception ex) {
+                    // 单个商品图片获取失败不影响整体
+                    log.error("获取商品图片失败（继续处理其他明细）：sku={}, poNo={}", sku, poNo, ex);
+                    imageErrorCount++;
+                }
+            }
+
+            log.info("领星图片获取完成：contractNo={}, 成功={}, 未找到={}, 失败={}",
+                    contract.getContractNo(), imageFoundCount, imageNotFoundCount, imageErrorCount);
+
+        } catch (Exception ex) {
+            // 整体失败也不影响合同创建
+            log.error("从领星获取商品图片失败（合同创建继续）：contractNo={}, poNo={}",
+                    contract.getContractNo(), poNo, ex);
+        }
+    }
+
+    private void enrichSupplierAddress(Contract contract) {
+        if (contract.getSupplierId() == null) {
+            return;
+        }
+        try {
+            lingxingSupplierClient.findSupplierProfile(contract.getSupplierId()).ifPresent(profile -> {
+                if (StringUtils.hasText(profile.address())) contract.setSupplierAddress(profile.address());
+                if (StringUtils.hasText(profile.creditCode())) contract.setSupplierCreditCode(profile.creditCode());
+                if (StringUtils.hasText(profile.prepayPercent())) contract.setPrepayPercent(profile.prepayPercent());
+                if (StringUtils.hasText(profile.settlementMethod())) contract.setSettlementMethod(profile.settlementMethod());
+                profile.defaultPaymentAccount().ifPresent(account -> {
+                    contract.setSupplierAccountName(account.accountName());
+                    contract.setSupplierBankAccount(account.accountId());
+                    contract.setSupplierBankName(account.bankName());
+                });
+            });
+        } catch (RuntimeException ex) {
+            // 创建前已做必填校验；此处仅防御性保护，避免远端短暂波动覆盖已校验的数据。
+            log.warn("回填供方地址失败：supplierId={}", contract.getSupplierId());
         }
     }
 

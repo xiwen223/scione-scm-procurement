@@ -5,9 +5,9 @@
     <insert id="insert">
         INSERT INTO contract_operation_log
         (contract_id, contract_no, operator_id, operator_name, operation_type,
-        operation_desc, operation_details, ip_address)
+        operation_desc, operation_details, ip_address, create_time)
         VALUES
         (#{contractId}, #{contractNo}, #{operatorId}, #{operatorName}, #{operationType},
-        #{operationDesc}, #{operationDetails}, #{ipAddress})
+        #{operationDesc}, #{operationDetails}, #{ipAddress}, NOW(0))
     </insert>
 </mapper>

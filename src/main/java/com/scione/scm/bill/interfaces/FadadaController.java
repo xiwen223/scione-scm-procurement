@@ -8,6 +8,7 @@ import com.scione.scm.bill.application.ProcurementOperationLogRecorder;
 import com.scione.scm.bill.application.dto.BuyerCompanyDetailResponse;
 import com.scione.scm.bill.application.dto.BuyerCompanySealUploadResponse;
 import com.scione.scm.bill.application.dto.FadadaCorpAuthStatusResponse;
+import com.scione.scm.bill.application.dto.FadadaSealFreeSignUrlResponse;
 import com.scione.scm.bill.application.dto.FileUrlRequest;
 import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
 import io.swagger.v3.oas.annotations.Operation;
@@ -26,6 +27,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -94,6 +96,18 @@ public class FadadaController {
         operationLog.record(BUYER_COMPANY, id, result.company().companyName(), UPLOAD_SEAL, operatorEmail,
                 details("sealName", result.company().sealName(), "verifyId", result.verifyId()));
         return ApiResponse.success(result);
+    }
+
+    /**
+     * 生成当前需方公司印章绑定免验证签场景码的法大大授权链接。
+     * 只返回链接，不会直接授权；打开链接后须由企业超管确认。
+     */
+    @PostMapping("/seal/free-sign-url")
+    @Operation(summary = "获取印章场景码免验证签授权链接")
+    public ApiResponse<FadadaSealFreeSignUrlResponse> sealFreeSignUrl(
+            @RequestParam("id") @Min(1) Long id,
+            @RequestHeader(value = "X-User-Email", required = false) String userEmail) {
+        return ApiResponse.success(buyerCompanyApplicationService.getSealFreeSignAuthorizationUrl(id, userEmail));
     }
 
     /**

@@ -40,6 +40,16 @@ public interface ContractMapper {
      */
     int updatePdfUrl(@Param("id") Long id, @Param("pdfUrl") String pdfUrl);
 
+    int markSigning(@Param("id") Long id, @Param("fadadaTaskId") String fadadaTaskId);
+
+    int cancel(@Param("id") Long id, @Param("cancelReason") String cancelReason);
+
+    int markExecuting(@Param("id") Long id);
+    int markCompleted(@Param("id") Long id);
+    List<ContractPO> selectExecutingContracts();
+
+    int updateSignedPdfUrl(@Param("id") Long id, @Param("signedPdfUrl") String signedPdfUrl);
+
     /**
      * 分页查询合同列表（不含明细）。
      *
@@ -63,4 +73,12 @@ public interface ContractMapper {
      * @return 合同 PO
      */
     ContractPO selectById(@Param("id") Long id);
+
+    /**
+     * 按 ID 更新合同。
+     *
+     * @param contract 合同 PO
+     * @return 影响行数
+     */
+    int updateById(ContractPO contract);
 }

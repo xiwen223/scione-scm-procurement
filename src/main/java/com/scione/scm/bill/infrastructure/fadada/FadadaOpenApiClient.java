@@ -54,6 +54,8 @@ public class FadadaOpenApiClient {
     private static final String CREATE_SIGN_TASK_PATH = "/sign-task/create";
     private static final String START_SIGN_TASK_PATH = "/sign-task/start";
     private static final String GET_ACTOR_URL_PATH = "/sign-task/actor/get-url";
+    private static final String URGE_SIGN_TASK_PATH = "/sign-task/urge";
+    private static final String CANCEL_SIGN_TASK_PATH = "/sign-task/cancel";
     /** 该查询路径来自本地 Python 示例，供应商标注为旧版；上线前请以租户 V5 文档核验。 */
     private static final String GET_SIGN_TASK_DETAIL_PATH = "/sign-task/app/get-detail";
     private static final String GET_DOWNLOAD_URL_PATH = "/sign-task/owner/get-download-url";
@@ -62,6 +64,7 @@ public class FadadaOpenApiClient {
     private static final String GET_EDIT_URL_PATH = "/sign-task/get-edit-url";
     private static final String GET_TEMPLATE_DETAIL_PATH = "/sign-template/get-detail";
     private static final String CREATE_SEAL_BY_IMAGE_PATH = "/seal/create-by-image";
+    private static final String GET_SEAL_FREE_SIGN_URL_PATH = "/seal/free-sign/get-url";
     private static final String SET_SEAL_STATUS_PATH = "/seal/set-status";
     private static final String DELETE_SEAL_PATH = "/seal/delete";
     /** 印章停用状态值，删除印章前先停用。 */
@@ -219,9 +222,102 @@ public class FadadaOpenApiClient {
         return createSignTask(request.taskName(), request.fileId(), request.businessNo(), request.notifyUrl(), actor);
     }
 
+    /** 创建采购合同双企业签署任务：我方免验证自动盖章后，再短信通知供应商签署。 */
+    public SignTask createPurchaseContractTask(PurchaseContractTaskRequest request) {
+        Objects.requireNonNull(request, "request");
+        Map<String, Object> buyerActor = new LinkedHashMap<>();
+        buyerActor.put("actorId", "BUYER_" + request.businessNo());
+        buyerActor.put("actorType", "corp");
+        buyerActor.put("actorName", requireText(request.buyerName(), "buyerName"));
+        buyerActor.put("orgCode", requireText(request.buyerCreditCode(), "buyerCreditCode"));
+        // 指定企业印章时，法大大要求参与方同时指定该企业的 actorOpenId/actorFDDId。
+        // 当前需方为本集成应用所属企业，复用应用配置的 openCorpId。
+        buyerActor.put("actorOpenId", requireText(request.buyerOpenCorpId(), "buyerOpenCorpId"));
+        buyerActor.put("permissions", List.of("sign"));
+        buyerActor.put("sendNotification", false);
+
+        Map<String, Object> supplierActor = new LinkedHashMap<>();
+        supplierActor.put("actorId", "SUPPLIER_" + request.businessNo());
+        supplierActor.put("actorType", "corp");
+        supplierActor.put("actorName", requireText(request.supplierName(), "supplierName"));
+        supplierActor.put("orgCode", requireText(request.supplierCreditCode(), "supplierCreditCode"));
+        // 企业参与方的短信/邮件通知地址使用 notifyAddress；accountName 仅对个人参与方有效。
+        supplierActor.put("notifyAddress", requireText(request.supplierPhone(), "supplierPhone"));
+        supplierActor.put("permissions", List.of("sign"));
+        supplierActor.put("sendNotification", true);
+        supplierActor.put("notifyType", List.of("start"));
+
+        log.info("法大大采购合同签署任务参数：businessNo={}, buyerOpenCorpId={}, buyerSealId={}, buyerFreeSignEnabled=true, freeSignBusinessId={}, supplierName={}, supplierNotifyEnabled=true, supplierNotifyType=start, supplierNotifyAddress={}",
+                request.businessNo(), mask(request.buyerOpenCorpId()), mask(request.buyerSealId()),
+                mask(request.freeSignBusinessId()), request.supplierName(), mask(request.supplierPhone()));
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("signTaskSubject", requireText(request.taskName(), "taskName"));
+        body.put("signDocType", "contract");
+        body.put("initiator", Map.of("idType", "corp", "openId", configuredOpenCorpId()));
+        body.put("businessNo", requireText(request.businessNo(), "businessNo"));
+        body.put("transReferenceId", requireText(request.businessNo(), "businessNo"));
+        body.put("businessId", requireText(request.freeSignBusinessId(), "freeSignBusinessId"));
+        body.put("freeSignType", "business");
+        body.put("autoStart", true);
+        body.put("autoFillFinalize", true);
+        body.put("signInOrder", true);
+        body.put("docs", List.of(Map.of(
+                "docId", "contract-doc",
+                "docName", requireText(request.taskName(), "taskName"),
+                "docFileId", requireText(request.fileId(), "fileId"),
+                "docFields", List.of(
+                        sealField("buyer-seal", "需方\n单位（盖章）"),
+                        sealField("supplier-seal", "供方\n单位（盖章）")))));
+        body.put("actors", List.of(
+                Map.of("actor", buyerActor,
+                        "signFields", List.of(signField("buyer-seal", request.buyerSealId())),
+                        // 免验证签必须在参与方签署配置中显式开启；任务顶层 businessId 提供场景码。
+                        "signConfigInfo", Map.of("orderNo", 1, "resizeSeal", true, "requestVerifyFree", true)),
+                Map.of("actor", supplierActor,
+                        "signFields", List.of(signField("supplier-seal", null)),
+                        "signConfigInfo", Map.of("orderNo", 2, "resizeSeal", true))));
+        putIfNotBlank(body, "notifyUrl", request.notifyUrl());
+        log.info("调用法大大创建签署任务：businessNo={}, autoStart=true, signInOrder=true, buyerOrder=1, supplierOrder=2, buyerFieldType=corp_seal, supplierFieldType=corp_seal, notifyUrlPresent={}",
+                request.businessNo(), !isBlank(request.notifyUrl()));
+        JsonNode data = businessPost(CREATE_SIGN_TASK_PATH, body, false).path("data");
+        String signTaskId = requiredText(data, "signTaskId", "创建签署任务失败");
+        log.info("法大大签署任务创建响应成功：businessNo={}, signTaskId={}", request.businessNo(), signTaskId);
+        return new SignTask(signTaskId);
+    }
+
+    private Map<String, Object> sealField(String fieldId, String keyword) {
+        // FASC V5 企业签章控件枚举值为 corp_seal；seal 不是有效的 fieldType。
+        return Map.of("fieldId", fieldId, "fieldName", fieldId, "fieldType", "corp_seal",
+                "moveable", false,
+                "position", Map.of("positionMode", "keyword", "positionKeyword", keyword,
+                        "keywordOffsetX", 0, "keywordOffsetY", 0));
+    }
+
+    private Map<String, Object> signField(String fieldId, String sealId) {
+        Map<String, Object> field = new LinkedHashMap<>();
+        field.put("fieldDocId", "contract-doc");
+        field.put("fieldId", fieldId);
+        if (!isBlank(sealId)) field.put("sealId", sealId);
+        return field;
+    }
+
     /** 对 autoStart=false 的未来场景手动提交签署任务；当前创建任务固定 autoStart=true，通常无需调用。 */
     public void startSignTask(String signTaskId) {
         businessPost(START_SIGN_TASK_PATH, Map.of("signTaskId", requireText(signTaskId, "signTaskId")), false);
+    }
+
+    /** 催办待签署参与方；频率限制由法大大平台执行。 */
+    public void urgeSignTask(String signTaskId) {
+        businessPost(URGE_SIGN_TASK_PATH, Map.of("signTaskId", requireText(signTaskId, "signTaskId")), false);
+    }
+
+    /** 撤销尚未结束的签署任务。 */
+    public void cancelSignTask(String signTaskId, String terminationNote) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("signTaskId", requireText(signTaskId, "signTaskId"));
+        putIfNotBlank(body, "terminationNote", terminationNote);
+        businessPost(CANCEL_SIGN_TASK_PATH, body, false);
     }
 
     /** 获取参与方签署入口。返回 URL 为短期敏感凭据，调用方不得持久化或写日志。 */
@@ -332,6 +428,25 @@ public class FadadaOpenApiClient {
     }
 
     /**
+     * 获取企业印章绑定免验证签场景码的授权页面。
+     *
+     * <p>该接口只生成短期授权链接，不会直接改变印章授权状态；必须由企业超管在法大大页面中确认。
+     * 链接属于敏感短期凭据，调用方不得记录或持久化。</p>
+     */
+    public SealFreeSignUrl getSealFreeSignUrl(SealFreeSignUrlRequest request) {
+        Objects.requireNonNull(request, "request");
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("openCorpId", requireText(request.openCorpId(), "openCorpId"));
+        body.put("sealIds", List.of(requireText(request.sealId(), "sealId")));
+        body.put("businessId", requireText(request.businessId(), "businessId"));
+        putIfNotBlank(body, "clientUserId", request.clientUserId());
+        putIfNotBlank(body, "redirectUrl", request.redirectUrl());
+        JsonNode data = businessPost(GET_SEAL_FREE_SIGN_URL_PATH, body, true).path("data");
+        String freeSignUrl = requiredText(data, "freeSignUrl", "获取印章免验证签授权链接失败");
+        return new SealFreeSignUrl(freeSignUrl, text(data, "freeSignShortUrl"));
+    }
+
+    /**
      * 设置企业印章状态（{@code /seal/set-status}）。
      *
      * <p>{@code sealStatus} 取 {@link #SEAL_STATUS_DISABLE}（停用）等法大大约定值；删除印章前
@@ -388,6 +503,7 @@ public class FadadaOpenApiClient {
     private JsonNode signedPost(String path, Map<String, Object> body, String accessToken, boolean retryable) {
         ensureConfigured();
         final String bizContent = serialize(body);
+        log.info("法大大接口调用开始：path={}, retryable={}, bizContentLength={}", path, retryable, bizContent.length());
         String timestamp = Long.toString(Instant.now().toEpochMilli());
         String nonce = Long.toString(System.currentTimeMillis() * 1_000L + (System.nanoTime() % 1_000L));
         Map<String, String> signParameters = new LinkedHashMap<>();
@@ -440,10 +556,13 @@ public class FadadaOpenApiClient {
                         .retrieve()
                         .body(JsonNode.class);
                 validateResponse(response);
+                log.info("法大大接口调用成功：path={}, attempt={}, code={}", path, attempt, response.path("code").asText());
                 return response;
             } catch (BusinessException exception) {
+                log.warn("法大大接口业务失败：path={}, attempt={}, reason={}", path, attempt, sanitizeReason(exception.getMessage()));
                 throw exception;
             } catch (RestClientException exception) {
+                log.warn("法大大接口网络失败：path={}, attempt={}, exception={}", path, attempt, exception.getClass().getSimpleName());
                 if (attempt == attempts) {
                     throw fadadaError(transportFailureReason(exception));
                 }
@@ -597,6 +716,13 @@ public class FadadaOpenApiClient {
         return value == null || value.isBlank();
     }
 
+    private static String mask(String value) {
+        if (isBlank(value)) {
+            return "<empty>";
+        }
+        return value.length() <= 4 ? "****" : "****" + value.substring(value.length() - 4);
+    }
+
 
 
     public record UploadUrl(String uploadUrl, String fddFileUrl) {
@@ -618,6 +744,12 @@ public class FadadaOpenApiClient {
             String notifyPhone, String businessNo, String notifyUrl, boolean sendNotification) {
     }
 
+    public record PurchaseContractTaskRequest(
+            String taskName, String fileId, String businessNo, String notifyUrl,
+            String buyerName, String buyerCreditCode, String buyerOpenCorpId, String buyerSealId, String freeSignBusinessId,
+            String supplierName, String supplierCreditCode, String supplierPhone) {
+    }
+
     public record ActorSignUrl(
             String actorSignTaskUrl, String actorSignTaskEmbedUrl) {
     }
@@ -634,6 +766,13 @@ public class FadadaOpenApiClient {
     public record EditUrlRequest(
             String signTaskId, String initiatorIdType, String initiatorOpenId,
             String redirectUrl, boolean editAfterStart) {
+    }
+
+    public record SealFreeSignUrlRequest(
+            String openCorpId, String sealId, String businessId, String clientUserId, String redirectUrl) {
+    }
+
+    public record SealFreeSignUrl(String freeSignUrl, String freeSignShortUrl) {
     }
 
     private record CachedToken(String value, Instant expiresAt) {

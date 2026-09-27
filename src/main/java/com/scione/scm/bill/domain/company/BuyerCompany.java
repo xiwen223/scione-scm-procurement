@@ -22,6 +22,10 @@ public class BuyerCompany {
     private String bankAccount;
     private String sealUrl;
     private String fadadaSealId;
+    private String fadadaFreeSignBusinessId;
+    private LocalDateTime fadadaFreeSignExpireTime;
+    /** 法大大企业 OpenCorpId，指定企业印章签署时作为 actorOpenId。 */
+    private String openCorpId;
     private Integer priority;
     private Integer isActive;
     private LocalDateTime createTime;

@@ -20,6 +20,12 @@ shipping-mark:
 delivery-alert:
   start-date: ${DELIVERY_ALERT_START_DATE:2026-08-01}
 
+contract:
+  auto-create:
+    enabled: ${CONTRACT_AUTO_CREATE_ENABLED:true}
+    # Spring cron：默认每 5 分钟同步领星 PO 后自动创建合同。
+    cron: ${CONTRACT_AUTO_CREATE_CRON:0 0/5 * * * ?}
+
 purchase-delivery-analysis:
   start-date: ${PURCHASE_DELIVERY_ANALYSIS_START_DATE:2026-01-01}
 
@@ -39,6 +45,7 @@ fadada:
     app-id: ${FADADA_APP_ID:}
     app-secret: ${FADADA_APP_SECRET:}
     open-corp-id: ${FADADA_OPEN_CORP_ID:}
+    notify-url: ${FADADA_NOTIFY_URL:}
     api-sub-version: ${FADADA_API_SUB_VERSION:5.1}
     connect-timeout: ${FADADA_CONNECT_TIMEOUT:10s}
     read-timeout: ${FADADA_READ_TIMEOUT:60s}

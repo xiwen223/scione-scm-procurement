@@ -2,6 +2,15 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ProcurementOperationLogMapper">
 
+    <insert id="insert">
+        INSERT INTO procurement_operation_log
+        (business_type, data_id, data_name, operator_id, operator_name, operation_type,
+         operation_desc, operation_details, ip_address, create_time)
+        VALUES
+        (#{businessType}, #{dataId}, #{dataName}, #{operatorId}, #{operatorName}, #{operationType},
+         #{operationDesc}, #{operationDetails}, #{ipAddress}, NOW(0))
+    </insert>
+
     <sql id="columns">
         id,
         business_type,

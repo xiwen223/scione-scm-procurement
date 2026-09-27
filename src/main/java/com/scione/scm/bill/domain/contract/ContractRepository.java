@@ -1,6 +1,7 @@
 package com.scione.scm.bill.domain.contract;
 
 import java.util.Optional;
+import java.util.List;
 
 /**
  * 合同仓储接口（端口）。
@@ -36,6 +37,16 @@ public interface ContractRepository {
      */
     void updatePdfUrl(long contractId, String pdfUrl);
 
+    void markSigning(long contractId, String fadadaTaskId);
+
+    void cancel(long contractId, String cancelReason);
+
+    void markExecuting(long contractId);
+    void markCompleted(long contractId);
+    List<Contract> findExecutingContracts();
+
+    void updateSignedPdfUrl(long contractId, String signedPdfUrl);
+
     /**
      * 分页查询合同列表。
      *
@@ -51,4 +62,18 @@ public interface ContractRepository {
      * @return 合同聚合
      */
     Optional<Contract> findById(Long contractId);
+
+    /**
+     * 更新合同（合同主表 + 明细）。
+     *
+     * @param contract 待更新的合同聚合（含明细）
+     */
+    void update(Contract contract);
+
+    /**
+     * 保存操作日志。
+     *
+     * @param log 操作日志
+     */
+    void saveOperationLog(ContractOperationLog log);
 }

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scione.scm.bill.application.BuyerCompanyApplicationService;
+import com.scione.scm.bill.application.FadadaContractCallbackService;
 import com.scione.scm.bill.config.FadadaOpenApiProperties;
 import com.scione.scm.bill.infrastructure.fadada.FadadaRequestSigner;
 import io.swagger.v3.oas.annotations.Operation;
@@ -66,6 +67,7 @@ public class FadadaCallBackController {
     private final FadadaRequestSigner fadadaRequestSigner;
     private final FadadaOpenApiProperties fadadaOpenApiProperties;
     private final BuyerCompanyApplicationService buyerCompanyApplicationService;
+    private final FadadaContractCallbackService fadadaContractCallbackService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -78,17 +80,21 @@ public class FadadaCallBackController {
     @PostMapping("/callback")
     @Operation(summary = "法大大事件回调",
             description = "接收法大大事件通知并按 X-FASC-Event 分发；验签不通过亦返回 success 以中断重试")
-    public String callback(@RequestHeader HttpHeaders headers, @RequestParam("bizContent") String bizContent) throws InterruptedException {
+    public String callback(@RequestHeader HttpHeaders headers, @RequestParam("bizContent") String bizContent) throws Exception {
         log.info("回调开始！");
         String event = headers.getFirst("X-FASC-Event");
 
         if (!verifySignature(headers, bizContent)) {
             return CALLBACK_SUCCESS;
         }
+        log.info("法大大回调验签通过：event={}, bizContentLength={}", event, bizContent.length());
 
         switch (event == null ? "" : event) {
             case EVENT_SEAL_VERIFY_SUCCESS -> handleSealVerifySuccess(bizContent);
             case EVENT_SEAL_VERIFY_FAILED -> handleSealVerifyFailed(bizContent);
+            case "sign-task-signed", "sign-task-finished", "sign-task-sign-failed", "sign-task-sign-rejected",
+                    "sign-task-canceled", "sign-task-expire", "sign-task-abolish" ->
+                    fadadaContractCallbackService.handleVerifiedEvent(event, bizContent);
             default -> log.info("收到法大大未处理事件：event={}", event);
         }
         return CALLBACK_SUCCESS;

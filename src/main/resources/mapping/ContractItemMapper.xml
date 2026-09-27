@@ -24,4 +24,14 @@
         WHERE contract_id = #{contractId}
         ORDER BY id
     </select>
+
+    <update id="updateById">
+        UPDATE contract_item
+        SET quantity = #{quantity},
+            unit_price = #{unitPrice},
+            amount = #{amount},
+            delivery_date = #{deliveryDate},
+            remark = #{remark}
+        WHERE id = #{id}
+    </update>
 </mapper>

@@ -26,6 +26,8 @@ public class BuyerCompanyPO {
     private Integer sealFlowStatus;
     /** 印章审核不通过的原因，仅 sealFlowStatus = 2 时有值（由法大大回调写入），为空表示无失败原因 */
     private String sealFailedReason;
+    private String fadadaFreeSignBusinessId;
+    private LocalDateTime fadadaFreeSignExpireTime;
     private String openCorpId;
     private Integer priority;
     private Integer isActive;

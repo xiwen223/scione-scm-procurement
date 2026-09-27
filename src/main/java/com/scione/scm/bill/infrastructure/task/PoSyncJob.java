@@ -16,7 +16,8 @@ public class PoSyncJob {
 
     private final PoSyncAppService poSyncAppService;
 
-    @XxlJob("poSyncJob")
+    // 已迁移到 NativeProcurementSchedule；保留 XXL Job 方法以便需要时回切。
+    // @XxlJob("poSyncJob")
     public void execute() {
         XxlJobHelper.log("采购单同步 Job 开始");
         SyncResult result = poSyncAppService.pullAndSync();

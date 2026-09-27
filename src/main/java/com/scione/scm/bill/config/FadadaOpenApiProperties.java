@@ -20,6 +20,8 @@ public class FadadaOpenApiProperties {
     private String appId;
     private String appSecret;
     private String openCorpId;
+    /** 法大大签署完成回调地址；域名未就绪时可留空。 */
+    private String notifyUrl;
     private String apiSubVersion = "5.1";
     private Duration connectTimeout = Duration.ofSeconds(10);
     private Duration readTimeout = Duration.ofSeconds(60);

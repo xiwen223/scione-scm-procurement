@@ -7,6 +7,8 @@ import java.util.Optional;
  */
 public interface BuyerCompanyRepository {
 
+    Optional<BuyerCompany> findById(Long id);
+
     /**
      * 查询默认需方公司（is_active=1 按 priority 升序取第一条）。
      *

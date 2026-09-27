@@ -19,6 +19,11 @@ public class MybatisBuyerCompanyRepository implements BuyerCompanyRepository {
     private final BuyerCompanyMapper mapper;
 
     @Override
+    public Optional<BuyerCompany> findById(Long id) {
+        return mapper.findById(id).map(this::toDomain);
+    }
+
+    @Override
     public Optional<BuyerCompany> findDefault() {
         BuyerCompanyPO po = mapper.selectDefault();
         if (po == null) {
@@ -33,6 +38,8 @@ public class MybatisBuyerCompanyRepository implements BuyerCompanyRepository {
         domain.setCompanyName(po.getCompanyName());
         domain.setCompanyShortName(po.getCompanyShortName());
         domain.setCreditCode(po.getCreditCode());
+        domain.setPostCode(po.getPostCode());
+        domain.setFax(po.getFax());
         domain.setLegalPerson(po.getLegalPerson());
         domain.setAddress(po.getAddress());
         domain.setPhone(po.getPhone());
@@ -40,6 +47,9 @@ public class MybatisBuyerCompanyRepository implements BuyerCompanyRepository {
         domain.setBankAccount(po.getBankAccount());
         domain.setSealUrl(po.getSealUrl());
         domain.setFadadaSealId(po.getFadadaSealId());
+        domain.setFadadaFreeSignBusinessId(po.getFadadaFreeSignBusinessId());
+        domain.setFadadaFreeSignExpireTime(po.getFadadaFreeSignExpireTime());
+        domain.setOpenCorpId(po.getOpenCorpId());
         domain.setPriority(po.getPriority());
         domain.setIsActive(po.getIsActive());
         domain.setCreateTime(po.getCreateTime());

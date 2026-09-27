@@ -5,7 +5,7 @@
     <sql id="columns">
         id, contract_no, contract_name, contract_type, purchase_order_no, source_type,
         supplier_id, supplier_name, supplier_phone, supplier_credit_code, supplier_account_name,
-        supplier_bank_name, supplier_bank_account, supplier_address, contact_person,
+        supplier_bank_name, supplier_bank_account, prepay_percent, settlement_method, supplier_address, contact_person,
         buyer_company_id, buyer_company_name, buyer_company_code, buyer_address,
         post_code, buyer_phone, fax,
         original_amount, discounted_amount, contract_amount, contract_date, delivery_date, template_id,
@@ -17,17 +17,19 @@
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO contract
         (contract_no, contract_name, contract_type, purchase_order_no, source_type,
-        supplier_id, supplier_name, supplier_phone, supplier_address, contact_person,
+        supplier_id, supplier_name, supplier_phone, supplier_credit_code, supplier_account_name,
+        supplier_bank_name, supplier_bank_account, prepay_percent, settlement_method, supplier_address, contact_person,
         buyer_company_id, buyer_company_name, buyer_company_code, buyer_address,
         post_code, buyer_phone, fax,
-        original_amount, discounted_amount, contract_amount, contract_date, delivery_date,
+        original_amount, discounted_amount, contract_amount, contract_date, delivery_date, template_id,
         status, creator_id, creator_name, create_type)
         VALUES
         (#{contractNo}, #{contractName}, #{contractType}, #{purchaseOrderNo}, #{sourceType},
-        #{supplierId}, #{supplierName}, #{supplierPhone}, #{supplierAddress}, #{contactPerson},
+        #{supplierId}, #{supplierName}, #{supplierPhone}, #{supplierCreditCode}, #{supplierAccountName},
+        #{supplierBankName}, #{supplierBankAccount}, #{prepayPercent}, #{settlementMethod}, #{supplierAddress}, #{contactPerson},
         #{buyerCompanyId}, #{buyerCompanyName}, #{buyerCompanyCode}, #{buyerAddress},
         #{postCode}, #{buyerPhone}, #{fax},
-        #{originalAmount}, #{discountedAmount}, #{contractAmount}, #{contractDate}, #{deliveryDate},
+        #{originalAmount}, #{discountedAmount}, #{contractAmount}, #{contractDate}, #{deliveryDate}, #{templateId},
         #{status}, #{creatorId}, #{creatorName}, #{createType})
     </insert>
 
@@ -52,6 +54,46 @@
         SET contract_pdf_url = #{pdfUrl},
             update_time = NOW()
         WHERE id = #{id}
+    </update>
+
+    <update id="markSigning">
+        UPDATE contract
+        SET status = 2,
+            fadada_task_id = #{fadadaTaskId},
+            sign_start_time = NOW(),
+            update_time = NOW()
+        WHERE id = #{id}
+          AND status = 1
+          AND is_deleted = 0
+    </update>
+
+    <update id="cancel">
+        UPDATE contract
+        SET status = 5,
+            cancel_reason = #{cancelReason},
+            cancel_time = NOW(),
+            update_time = NOW()
+        WHERE id = #{id}
+          AND status IN (1, 2)
+          AND is_deleted = 0
+    </update>
+
+    <update id="markExecuting">
+        UPDATE contract
+        SET status = 3, sign_complete_time = NOW(), update_time = NOW()
+        WHERE id = #{id} AND status = 2 AND is_deleted = 0
+    </update>
+    <update id="markCompleted">
+        UPDATE contract SET status = 4, complete_time = NOW(), update_time = NOW()
+        WHERE id = #{id} AND status = 3 AND is_deleted = 0
+    </update>
+    <select id="selectExecutingContracts" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractPO">
+        SELECT <include refid="columns"/> FROM contract
+        WHERE status = 3 AND is_deleted = 0 ORDER BY id ASC
+    </select>
+
+    <update id="updateSignedPdfUrl">
+        UPDATE contract SET signed_pdf_url = #{signedPdfUrl}, update_time = NOW() WHERE id = #{id}
     </update>
 
     <!-- 条件查询 SQL 片段 -->
@@ -99,4 +141,25 @@
         WHERE id = #{id}
         AND is_deleted = 0
     </select>
+
+    <update id="updateById">
+        UPDATE contract
+        SET contract_name = #{contractName},
+            supplier_name = #{supplierName},
+            supplier_phone = #{supplierPhone},
+            supplier_address = #{supplierAddress},
+            contact_person = #{contactPerson},
+            buyer_company_name = #{buyerCompanyName},
+            buyer_address = #{buyerAddress},
+            post_code = #{postCode},
+            buyer_phone = #{buyerPhone},
+            fax = #{fax},
+            original_amount = #{originalAmount},
+            discounted_amount = #{discountedAmount},
+            contract_amount = #{contractAmount},
+            contract_date = #{contractDate},
+            delivery_date = #{deliveryDate},
+            update_time = NOW()
+        WHERE id = #{id}
+    </update>
 </mapper>

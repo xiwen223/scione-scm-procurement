@@ -11,6 +11,10 @@ import org.springframework.stereotype.Component;
 @Component
 @ConfigurationProperties(prefix = "xxl.job")
 public class XxlJobProperties {
+    /**
+     * 已迁移到 Spring 原生调度；如需回切 XXL-Job 才显式设为 true。
+     */
+    private boolean enabled = false;
 
     /** 通信 token，需与调度中心一致。 */
     private String accessToken = "";

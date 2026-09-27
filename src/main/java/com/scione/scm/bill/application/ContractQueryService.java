@@ -2,9 +2,12 @@ package com.scione.scm.bill.application;
 
 import com.scione.scm.bill.application.dto.*;
 import com.scione.scm.bill.application.port.ContractFileStore;
+import com.scione.scm.bill.config.FadadaOpenApiProperties;
 import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractPage;
 import com.scione.scm.bill.domain.contract.ContractRepository;
+import com.scione.scm.bill.domain.contract.ContractStatus;
+import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -32,6 +35,8 @@ public class ContractQueryService {
 
     private final ContractRepository contractRepository;
     private final ContractFileStore contractFileStore;
+    private final FadadaOpenApiClient fadadaOpenApiClient;
+    private final FadadaOpenApiProperties fadadaOpenApiProperties;
 
     /**
      * 分页查询合同列表。
@@ -131,6 +136,28 @@ public class ContractQueryService {
     /**
      * 分页结果封装。
      */
+    /** 获取法大大已签署合同的短期下载地址；该 URL 不落库。 */
+    public String getFadadaSignedDownloadUrl(Long contractId) {
+        Contract contract = contractRepository.findById(contractId)
+                .orElseThrow(() -> new RuntimeException("合同不存在：contractId=" + contractId));
+        if (contract.getStatus() != ContractStatus.EXECUTING && contract.getStatus() != ContractStatus.COMPLETED) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "合同尚未签署完成，无法下载已签署合同");
+        }
+        if (contract.getFadadaTaskId() == null || contract.getFadadaTaskId().isBlank()) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "合同未关联法大大签署任务");
+        }
+        String ownerOpenCorpId = fadadaOpenApiProperties.getOpenCorpId();
+        if (ownerOpenCorpId == null || ownerOpenCorpId.isBlank()) {
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "法大大发起企业 openCorpId 未配置");
+        }
+        String downloadUrl = fadadaOpenApiClient.getSignTaskDownloadUrl(
+                new FadadaOpenApiClient.DownloadUrlRequest("corp", ownerOpenCorpId, contract.getFadadaTaskId(),
+                        contract.getContractNo() + "-已签署合同.pdf", false, "download"));
+        log.info("已获取法大大已签署合同下载地址：contractId={}, contractNo={}, signTaskId={}",
+                contractId, contract.getContractNo(), contract.getFadadaTaskId());
+        return downloadUrl;
+    }
+
     public record PageResult<T>(long total, List<T> records) {
     }
 

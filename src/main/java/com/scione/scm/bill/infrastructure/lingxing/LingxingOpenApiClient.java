@@ -16,6 +16,7 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
+import com.scione.scm.bill.application.port.LingxingSupplierClient;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -41,7 +42,7 @@ import java.util.StringJoiner;
  */
 @Slf4j
 @Component
-public class LingxingOpenApiClient implements LingxingProductClient ,LingxingPurchaseOrderClient  {
+public class LingxingOpenApiClient implements LingxingProductClient, LingxingPurchaseOrderClient, LingxingSupplierClient {
 
     private static final String TOKEN_PATH = "/api/auth-server/oauth/access-token";
     private static final String PRODUCT_DETAIL_PATH =
@@ -216,6 +217,51 @@ public class LingxingOpenApiClient implements LingxingProductClient ,LingxingPur
             }
         } while (offset < total);
         return Optional.empty();
+    }
+
+    /**
+     * 从供应商资料的 payment_account_group 中选择默认收款账号。
+     * 收款账号可能不存在，不影响合同生成；模板会保留原结算说明。
+     */
+    @Override
+    public Optional<SupplierPaymentAccount> findDefaultPaymentAccount(long supplierId) {
+        return findSupplierProfile(supplierId).flatMap(SupplierProfile::defaultPaymentAccount);
+    }
+
+    @Override
+    public Optional<SupplierProfile> findSupplierProfile(long supplierId) {
+        return findSupplierById(supplierId).map(supplier -> new SupplierProfile(
+                text(supplier, "address_full"),
+                text(supplier, "credit_code"),
+                text(supplier, "prepay_percent"),
+                text(supplier, "settlement_method_text"),
+                defaultPaymentAccount(supplier)));
+    }
+
+    private Optional<SupplierPaymentAccount> defaultPaymentAccount(JsonNode supplier) {
+            JsonNode accounts = supplier.path("payment_account_group");
+            if (!accounts.isArray()) {
+                return Optional.empty();
+            }
+            for (JsonNode account : accounts) {
+                if (!isDefaultPaymentAccount(account)) {
+                    continue;
+                }
+                String accountName = text(account, "account_name");
+                String accountId = text(account, "account_id");
+                String bankName = text(account, "bank_name");
+                if (isBlank(accountName) || isBlank(accountId) || isBlank(bankName)) {
+                    log.warn("领星供应商默认收款账号字段不完整");
+                    return Optional.empty();
+                }
+                return Optional.of(new SupplierPaymentAccount(accountName, accountId, bankName));
+            }
+            return Optional.empty();
+    }
+
+    private static boolean isDefaultPaymentAccount(JsonNode account) {
+        JsonNode defaultFlag = account.get("is_default");
+        return defaultFlag != null && (defaultFlag.asInt() == 1 || defaultFlag.asBoolean(false));
     }
 
     @Override

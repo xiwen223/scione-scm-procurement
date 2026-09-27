@@ -7,6 +7,7 @@ import com.scione.scm.bill.application.dto.BuyerCompanySealRequest;
 import com.scione.scm.bill.application.dto.BuyerCompanySealUploadResponse;
 import com.scione.scm.bill.application.dto.BuyerCompanyUpsertRequest;
 import com.scione.scm.bill.application.dto.FileUploadResponse;
+import com.scione.scm.bill.application.dto.FadadaSealFreeSignUrlResponse;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
@@ -79,6 +80,23 @@ public class BuyerCompanyApplicationService {
     public BuyerCompanyDetailResponse getById(Long id) {
         BuyerCompanyPO company = requireCompany(id);
         return toDetail(company);
+    }
+
+    /**
+     * 为公司当前法大大印章和已配置场景码生成免验证签授权页。
+     * 该方法不直接授予权限，企业超管仍需在法大大页面确认。
+     */
+    public FadadaSealFreeSignUrlResponse getSealFreeSignAuthorizationUrl(Long id, String clientUserId) {
+        BuyerCompanyPO company = requireCompany(id);
+        String openCorpId = requireText(company.getOpenCorpId(), "法大大 openCorpId 为空，请先完成企业授权");
+        String sealId = requireText(company.getFadadaSealId(), "法大大印章 ID 为空，请先完成印章审核");
+        String businessId = requireText(company.getFadadaFreeSignBusinessId(), "免验证签场景码为空，请先配置场景码");
+        FadadaOpenApiClient.SealFreeSignUrl result = fadadaOpenApiClient.getSealFreeSignUrl(
+                new FadadaOpenApiClient.SealFreeSignUrlRequest(openCorpId, sealId, businessId,
+                        blankToNull(clientUserId), null));
+        log.info("已生成法大大印章免验证签授权链接：companyId={}, openCorpIdPresent=true, sealIdPresent=true, businessIdPresent=true",
+                id);
+        return new FadadaSealFreeSignUrlResponse(result.freeSignUrl(), result.freeSignShortUrl());
     }
 
     @Transactional

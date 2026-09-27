@@ -29,21 +29,33 @@ public class ContractCreateRequest {
     @Schema(description = "供方电话（可选，不传则使用领星数据）", example = "13800138000")
     private String supplierPhone;
 
-    // ========== 需方信息（可选，覆盖默认需方公司数据） ==========
+    @Schema(description = "供方统一社会信用代码（手动合同发起法大大企业签署必填）", example = "913100001234567890")
+    private String supplierCreditCode;
 
-    @Schema(description = "需方名称（可选，不传则使用默认需方公司）", example = "上海宋艳科技有限公司")
+    @Schema(description = "供方银行账号", example = "6222021000000000000")
+    private String supplierBankAccount;
+
+    @Schema(description = "供方开户行", example = "中国工商银行")
+    private String supplierBankName;
+
+    // ========== 需方信息（从需方公司配置读取） ==========
+
+    @Schema(description = "需方公司ID（可选；不传时使用 priority=1 的默认需方公司）", example = "1")
+    private Long buyerCompanyId;
+
+    @Schema(description = "需方名称（展示字段，创建时忽略，始终取选中需方公司配置）")
     private String buyerCompanyName;
 
-    @Schema(description = "需方地址（可选）", example = "上海市浦东新区XX路XX号")
+    @Schema(description = "需方地址（展示字段，创建时忽略，始终取选中需方公司配置）")
     private String buyerAddress;
 
-    @Schema(description = "需方邮编（可选）", example = "200000")
+    @Schema(description = "需方邮编（展示字段，创建时忽略，始终取选中需方公司配置）")
     private String postCode;
 
-    @Schema(description = "需方电话（可选）", example = "021-12345678")
+    @Schema(description = "需方电话（展示字段，创建时忽略，始终取选中需方公司配置）")
     private String buyerPhone;
 
-    @Schema(description = "需方传真（可选）", example = "021-87654321")
+    @Schema(description = "需方传真（展示字段，创建时忽略，始终取选中需方公司配置）")
     private String fax;
 
     // ========== 合同金额信息（可选，覆盖领星数据） ==========

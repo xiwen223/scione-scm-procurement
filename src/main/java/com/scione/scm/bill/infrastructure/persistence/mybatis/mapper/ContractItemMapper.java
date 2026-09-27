@@ -19,4 +19,12 @@ public interface ContractItemMapper {
      * 按合同 ID 查询明细列表。
      */
     List<ContractItemPO> selectByContractId(@Param("contractId") Long contractId);
+
+    /**
+     * 按 ID 更新明细。
+     *
+     * @param item 明细 PO
+     * @return 影响行数
+     */
+    int updateById(ContractItemPO item);
 }
