@@ -326,6 +326,18 @@ public class PoiContractTemplateService implements ContractTemplateService {
 
             log.info("合同明细填充完成：明细数={}, 实际占用行数={}, 偏移量={}", itemCount, actualDetailRows, rowOffset);
 
+            // 结算条款：自动合同写入领星默认收款账户的账户名称、账号和开户行。
+            int settlementRow = 29 + rowOffset;
+            String settlementText = settlementText(contract);
+            setCellValue(sheet, settlementRow, 1, settlementText);
+            // 条款较长时换行展示，避免遮挡下一行内容。
+            setWrappedCellStyle(sheet, settlementRow, 1, 32F);
+            log.info("填充结算条款：contractNo={}, row={}, defaultAccountNamePresent={}, bankAccountPresent={}, bankNamePresent={}",
+                    contract.getContractNo(), settlementRow + 1,
+                    org.springframework.util.StringUtils.hasText(contract.getSupplierAccountName()),
+                    org.springframework.util.StringUtils.hasText(contract.getSupplierBankAccount()),
+                    org.springframework.util.StringUtils.hasText(contract.getSupplierBankName()));
+
             workbook.write(outputStream);
             byte[] result = outputStream.toByteArray();
 
@@ -352,7 +364,8 @@ public class PoiContractTemplateService implements ContractTemplateService {
     }
 
     private String settlementText(Contract contract) {
-        String baseText = "到货质检无误清点数量后凭本合同7天后付清";
+        // 固定条款来自合同模板；这里只补充默认收款账户信息，不能擅自改写付款期限。
+        String baseText = "到货质检无误入库后，次月月底前支付货款。";
         if (org.springframework.util.StringUtils.hasText(contract.getSupplierAccountName())
                 && org.springframework.util.StringUtils.hasText(contract.getSupplierBankAccount())
                 && org.springframework.util.StringUtils.hasText(contract.getSupplierBankName())) {

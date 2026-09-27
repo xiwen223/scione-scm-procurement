@@ -108,8 +108,32 @@ public class ContractAutoCreateService {
     protected boolean processOnePo(PoSyncRecord po, BuyerCompany buyer) {
         String poNo = po.getPurchaseOrderNo();
 
-        if (!supplierWhitelist.contains(po.getSupplierName())) {
-            String reason = "PO=" + poNo + "，供应商=" + po.getSupplierName() + "，跳过原因：供应商不在采购合同签约白名单";
+        String defaultAccountName;
+        try {
+            defaultAccountName = po.getSupplierId() == null ? null
+                    : lingxingSupplierClient.findSupplierProfile(po.getSupplierId())
+                    .flatMap(LingxingSupplierClient.SupplierProfile::defaultPaymentAccount)
+                    .map(LingxingSupplierClient.SupplierPaymentAccount::accountName)
+                    .orElse(null);
+        } catch (RuntimeException ex) {
+            String reason = "PO=" + poNo + "，供应商=" + po.getSupplierName()
+                    + "，跳过原因：查询领星默认收款账户失败，无法进行账户名称白名单核验";
+            contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
+            log.warn("跳过建合同：{}", reason, ex);
+            return false;
+        }
+
+        if (!StringUtils.hasText(defaultAccountName)) {
+            String reason = "PO=" + poNo + "，供应商=" + po.getSupplierName()
+                    + "，跳过原因：领星未维护默认收款账户名称，无法进行白名单核验";
+            contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
+            log.info("跳过建合同：{}", reason);
+            return false;
+        }
+
+        if (!supplierWhitelist.contains(defaultAccountName)) {
+            String reason = "PO=" + poNo + "，供应商=" + po.getSupplierName() + "，默认收款账户名称="
+                    + defaultAccountName + "，跳过原因：默认收款账户名称不在采购合同签约白名单";
             contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
             log.info("跳过建合同：{}", reason);
             return false;
