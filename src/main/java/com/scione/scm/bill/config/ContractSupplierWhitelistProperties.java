@@ -33,11 +33,12 @@ public class ContractSupplierWhitelistProperties {
         this.names = names == null ? new LinkedHashSet<>() : new LinkedHashSet<>(names);
     }
 
-    public boolean contains(String supplierName) {
-        if (supplierName == null || supplierName.isBlank()) {
+    /** 白名单匹配的是领星供应商默认收款账户的 account_name，不是 supplier_name。 */
+    public boolean contains(String accountName) {
+        if (accountName == null || accountName.isBlank()) {
             return false;
         }
         return names.stream().filter(name -> name != null)
-                .anyMatch(name -> name.trim().equals(supplierName.trim()));
+                .anyMatch(name -> name.trim().equals(accountName.trim()));
     }
 }
