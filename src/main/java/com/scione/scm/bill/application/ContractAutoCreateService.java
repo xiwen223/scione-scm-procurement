@@ -387,6 +387,7 @@ public class ContractAutoCreateService {
         if (!StringUtils.hasText(contract.getSupplierAddress())) missing.add("供方地址");
         if (!StringUtils.hasText(contract.getContactPerson())) missing.add("供方联系人");
         if (!StringUtils.hasText(contract.getSupplierPhone())) missing.add("供方电话");
+        if (!StringUtils.hasText(contract.getSupplierCreditCode())) missing.add("供方统一社会信用代码");
         if (!StringUtils.hasText(contract.getBuyerCompanyName())) missing.add("需方");
         if (!StringUtils.hasText(contract.getBuyerAddress())) missing.add("签订地点");
         if (!StringUtils.hasText(contract.getSupplierBankAccount())) missing.add("供方银行账户");
