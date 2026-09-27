@@ -74,4 +74,7 @@ public class ContractCreateRequest {
 
     @Schema(description = "合同总金额（可选，不传则使用领星采购单金额）", example = "10500.00")
     private BigDecimal contractAmount;
+
+    @Schema(description = "折扣金额；实际合同金额自动按原价减折扣计算", example = "500.00")
+    private BigDecimal discountedAmount;
 }

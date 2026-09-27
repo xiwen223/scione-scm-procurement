@@ -374,6 +374,13 @@ public class ContractUpdateService {
                 ? BigDecimal.ZERO
                 : contract.getDiscountedAmount();
 
+        if (discountedAmount.compareTo(BigDecimal.ZERO) < 0) {
+            throw new IllegalArgumentException("折扣金额不能小于0");
+        }
+        if (discountedAmount.compareTo(originalAmount) > 0) {
+            throw new IllegalArgumentException("折扣金额不能大于原价合计");
+        }
+
         // 模板“整”后的金额为实际合同金额：原价合计 − 折扣。
         BigDecimal newContractAmount = originalAmount.subtract(discountedAmount);
 

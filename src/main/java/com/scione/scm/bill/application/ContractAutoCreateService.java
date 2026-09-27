@@ -353,6 +353,11 @@ public class ContractAutoCreateService {
             contract.setOriginalAmount(request.getContractAmount());
             log.info("手动覆盖合同金额：{}", request.getContractAmount());
         }
+        if (request.getDiscountedAmount() != null) {
+            applyDiscount(contract, request.getDiscountedAmount());
+            log.info("手动填写合同折扣：contractNo={}, discount={}, finalAmount={}",
+                    contract.getContractNo(), request.getDiscountedAmount(), contract.getContractAmount());
+        }
 
         // 合同日期覆盖
         if (StringUtils.hasText(request.getContractDate())) {
@@ -413,6 +418,22 @@ public class ContractAutoCreateService {
                     com.scione.scm.bill.common.ResultCode.PARAM_ERROR,
                     "无法创建合同，以下字段不能为空：" + String.join("、", missing));
         }
+    }
+
+    /** 模板金额区：原价固定取 originalAmount，实际金额始终为原价减折扣。 */
+    private void applyDiscount(Contract contract, java.math.BigDecimal discount) {
+        java.math.BigDecimal original = contract.getOriginalAmount() == null
+                ? java.math.BigDecimal.ZERO : contract.getOriginalAmount();
+        if (discount.compareTo(java.math.BigDecimal.ZERO) < 0) {
+            throw new com.scione.scm.bill.common.BusinessException(
+                    com.scione.scm.bill.common.ResultCode.PARAM_ERROR, "折扣金额不能小于0");
+        }
+        if (discount.compareTo(original) > 0) {
+            throw new com.scione.scm.bill.common.BusinessException(
+                    com.scione.scm.bill.common.ResultCode.PARAM_ERROR, "折扣金额不能大于原价");
+        }
+        contract.setDiscountedAmount(discount);
+        contract.setContractAmount(original.subtract(discount));
     }
 
     private BuyerCompany resolveManualBuyerCompany(Long buyerCompanyId) {
