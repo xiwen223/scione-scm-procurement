@@ -40,11 +40,11 @@ public class DeliveryAlertController {
     @GetMapping
     public ApiResponse<PageResult<DeliveryAlertListItemDTO>> list(
             @RequestParam(value = "keyword", required = false) String keyword,
-            @RequestParam(value = "type", required = false) String type,
-            @RequestParam(value = "supplier", required = false) String supplier,
-            @RequestParam(value = "buyer", required = false) String buyer,
-            @RequestParam(value = "warehouse", required = false) String warehouse,
-            @RequestParam(value = "riskLevel", required = false) String riskLevel,
+            @RequestParam(value = "types", required = false) List<String> types,
+            @RequestParam(value = "suppliers", required = false) List<String> suppliers,
+            @RequestParam(value = "buyers", required = false) List<String> buyers,
+            @RequestParam(value = "warehouses", required = false) List<String> warehouses,
+            @RequestParam(value = "riskLevels", required = false) List<String> riskLevels,
             @RequestParam(value = "view", required = false) String view,
             @RequestParam(value = "createDateFrom", required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createDateFrom,
@@ -54,8 +54,8 @@ public class DeliveryAlertController {
             @RequestParam(defaultValue = "6") @Min(value = 1, message = "每页条数必须大于 0")
             @Max(value = 100, message = "每页条数不能超过 100") int pageSize) {
         DeliveryAlertQuery query = new DeliveryAlertQuery(
-                null, blankToNull(keyword), blankToNull(type), blankToNull(supplier),
-                blankToNull(buyer), blankToNull(warehouse), blankToNull(riskLevel), blankToNull(view),
+                null, blankToNull(keyword), blankToNull(types), blankToNull(suppliers),
+                blankToNull(buyers), blankToNull(warehouses), blankToNull(riskLevels), blankToNull(view),
                 createDateFrom, createDateTo, pageNum, pageSize);
         return ApiResponse.success(deliveryAlertAppService.findPage(query));
     }
@@ -63,18 +63,18 @@ public class DeliveryAlertController {
     @GetMapping("/summary")
     public ApiResponse<DeliveryAlertSummaryDTO> summary(
             @RequestParam(value = "keyword", required = false) String keyword,
-            @RequestParam(value = "type", required = false) String type,
-            @RequestParam(value = "supplier", required = false) String supplier,
-            @RequestParam(value = "buyer", required = false) String buyer,
-            @RequestParam(value = "warehouse", required = false) String warehouse,
-            @RequestParam(value = "riskLevel", required = false) String riskLevel,
+            @RequestParam(value = "types", required = false) List<String> types,
+            @RequestParam(value = "suppliers", required = false) List<String> suppliers,
+            @RequestParam(value = "buyers", required = false) List<String> buyers,
+            @RequestParam(value = "warehouses", required = false) List<String> warehouses,
+            @RequestParam(value = "riskLevels", required = false) List<String> riskLevels,
             @RequestParam(value = "createDateFrom", required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createDateFrom,
             @RequestParam(value = "createDateTo", required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createDateTo) {
         DeliveryAlertQuery query = new DeliveryAlertQuery(
-                null, blankToNull(keyword), blankToNull(type), blankToNull(supplier),
-                blankToNull(buyer), blankToNull(warehouse), blankToNull(riskLevel), null,
+                null, blankToNull(keyword), blankToNull(types), blankToNull(suppliers),
+                blankToNull(buyers), blankToNull(warehouses), blankToNull(riskLevels), null,
                 createDateFrom, createDateTo, 1, 1);
         return ApiResponse.success(deliveryAlertAppService.summary(query));
     }
@@ -111,5 +111,18 @@ public class DeliveryAlertController {
 
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /** 供应商多选：空集合 / 全空白项归一为 null，避免拼出多余的 IN 条件。 */
+    private static List<String> blankToNull(List<String> values) {
+        if (values == null) {
+            return null;
+        }
+        List<String> trimmed = values.stream()
+                .filter(v -> v != null && !v.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }

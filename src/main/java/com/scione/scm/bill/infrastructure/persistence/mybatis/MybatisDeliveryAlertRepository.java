@@ -34,11 +34,11 @@ public class MybatisDeliveryAlertRepository implements DeliveryAlertRepository {
 
     @Override
     public DeliveryAlertPage findPage(DeliveryAlertQuery query) {
-        long total = deliveryAlertMapper.count(query.startDate(), query.keyword(), query.supplier(),
-                query.buyer(), query.warehouse(), query.type(), query.riskLevel(), query.view(),
+        long total = deliveryAlertMapper.count(query.startDate(), query.keyword(), query.types(),
+                query.suppliers(), query.buyers(), query.warehouses(), query.riskLevels(), query.view(),
                 query.createDateFrom(), query.createDateTo());
-        List<DeliveryAlert> records = deliveryAlertMapper.findPage(query.startDate(), query.keyword(), query.supplier(),
-                        query.buyer(), query.warehouse(), query.type(), query.riskLevel(), query.view(),
+        List<DeliveryAlert> records = deliveryAlertMapper.findPage(query.startDate(), query.keyword(), query.types(),
+                        query.suppliers(), query.buyers(), query.warehouses(), query.riskLevels(), query.view(),
                         query.createDateFrom(), query.createDateTo(), query.offset(), query.pageSize())
                 .stream()
                 .map(this::toDomain)
@@ -49,7 +49,7 @@ public class MybatisDeliveryAlertRepository implements DeliveryAlertRepository {
     @Override
     public DeliveryAlertSummary summary(DeliveryAlertQuery query) {
         DeliveryAlertSummaryPO po = deliveryAlertMapper.summary(query.startDate(), query.keyword(),
-                query.supplier(), query.buyer(), query.warehouse(), query.type(), query.riskLevel(),
+                query.types(), query.suppliers(), query.buyers(), query.warehouses(), query.riskLevels(),
                 query.createDateFrom(), query.createDateTo());
         return new DeliveryAlertSummary(po.getTotalCount(), po.getDoneCount(), po.getNormalCount(),
                 po.getDueSoonCount(), po.getOverdueCount(), po.getManualCount(), po.getKitCount());

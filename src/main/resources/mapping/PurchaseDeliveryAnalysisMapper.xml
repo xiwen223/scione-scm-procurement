@@ -573,17 +573,29 @@
                   OR pof.inbound_sns LIKE CONCAT('%', #{query.keyword}, '%')
               )
             </if>
-            <if test="query.buyer != null and query.buyer != ''">
-              AND pof.buyer = #{query.buyer}
+            <if test="query.buyers != null and query.buyers.size() > 0">
+              AND pof.buyer IN
+              <foreach collection="query.buyers" item="b" open="(" separator="," close=")">
+                #{b}
+              </foreach>
             </if>
-            <if test="query.supplier != null and query.supplier != ''">
-              AND pof.supplier = #{query.supplier}
+            <if test="query.suppliers != null and query.suppliers.size() > 0">
+              AND pof.supplier IN
+              <foreach collection="query.suppliers" item="s" open="(" separator="," close=")">
+                #{s}
+              </foreach>
             </if>
-            <if test="query.warehouse != null and query.warehouse != ''">
-              AND pof.warehouse = #{query.warehouse}
+            <if test="query.warehouses != null and query.warehouses.size() > 0">
+              AND pof.warehouse IN
+              <foreach collection="query.warehouses" item="w" open="(" separator="," close=")">
+                #{w}
+              </foreach>
             </if>
-            <if test="query.deliveryStatus != null and query.deliveryStatus != ''">
-              AND pof.delivery_status = #{query.deliveryStatus}
+            <if test="query.deliveryStatuses != null and query.deliveryStatuses.size() > 0">
+              AND pof.delivery_status IN
+              <foreach collection="query.deliveryStatuses" item="d" open="(" separator="," close=")">
+                #{d}
+              </foreach>
             </if>
         )
     </sql>
@@ -974,26 +986,26 @@
                 )
             )
         </if>
-        <if test="query.deliveryStatus != null and query.deliveryStatus != ''">
+        <if test="query.deliveryStatuses != null and query.deliveryStatuses.size() > 0">
             AND EXISTS (
                 SELECT 1
                 FROM filtered_relation_orders f_rel
                 WHERE f_rel.plan_sn = pf.plan_sn
             )
         </if>
-        <if test="query.buyer != null and query.buyer != ''">
+        <if test="query.buyers != null and query.buyers.size() > 0">
             AND EXISTS (
                 SELECT 1 FROM filtered_relation_orders f_rel
                 WHERE f_rel.plan_sn = pf.plan_sn
             )
         </if>
-        <if test="query.supplier != null and query.supplier != ''">
+        <if test="query.suppliers != null and query.suppliers.size() > 0">
             AND EXISTS (
                 SELECT 1 FROM filtered_relation_orders f_rel
                 WHERE f_rel.plan_sn = pf.plan_sn
             )
         </if>
-        <if test="query.warehouse != null and query.warehouse != ''">
+        <if test="query.warehouses != null and query.warehouses.size() > 0">
             AND EXISTS (
                 SELECT 1 FROM filtered_relation_orders f_rel
                 WHERE f_rel.plan_sn = pf.plan_sn
@@ -1327,17 +1339,29 @@
                 OR pof.inbound_sns LIKE CONCAT('%', #{query.keyword}, '%')
             )
         </if>
-        <if test="query.buyer != null and query.buyer != ''">
-            AND pof.buyer = #{query.buyer}
+        <if test="query.buyers != null and query.buyers.size() > 0">
+            AND pof.buyer IN
+            <foreach collection="query.buyers" item="b" open="(" separator="," close=")">
+                #{b}
+            </foreach>
         </if>
-        <if test="query.supplier != null and query.supplier != ''">
-            AND pof.supplier = #{query.supplier}
+        <if test="query.suppliers != null and query.suppliers.size() > 0">
+            AND pof.supplier IN
+            <foreach collection="query.suppliers" item="s" open="(" separator="," close=")">
+                #{s}
+            </foreach>
         </if>
-        <if test="query.warehouse != null and query.warehouse != ''">
-            AND pof.warehouse = #{query.warehouse}
+        <if test="query.warehouses != null and query.warehouses.size() > 0">
+            AND pof.warehouse IN
+            <foreach collection="query.warehouses" item="w" open="(" separator="," close=")">
+                #{w}
+            </foreach>
         </if>
-        <if test="query.deliveryStatus != null and query.deliveryStatus != ''">
-            AND pof.delivery_status = #{query.deliveryStatus}
+        <if test="query.deliveryStatuses != null and query.deliveryStatuses.size() > 0">
+            AND pof.delivery_status IN
+            <foreach collection="query.deliveryStatuses" item="d" open="(" separator="," close=")">
+                #{d}
+            </foreach>
         </if>
     </sql>
 
