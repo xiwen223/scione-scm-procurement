@@ -41,15 +41,16 @@ import com.scione.scm.bill.application.dto.ContractBatchDownloadRequest;
 public class ContractController {
     private final ContractQueryService contractQueryService;
     private final ContractAutoCreateService contractAutoCreateService;
+    private final com.scione.scm.bill.application.PoSyncAppService poSyncAppService;
     private final com.scione.scm.bill.application.ContractUpdateService contractUpdateService;
     private final com.scione.scm.bill.application.ContractSignAppService contractSignAppService;
 
     @PostMapping("/auto-create/trigger")
     @Operation(summary = "手动触发合同自动创建",
             description = "扫描 po_status=1 且 has_contract=0 的 PO，自动生成合同")
-    public ApiResponse<AutoCreateResult> triggerAutoCreate() {
-        AutoCreateResult result = contractAutoCreateService.autoCreate(null);  // null = 全表扫描
-        return ApiResponse.success(result);
+    public ApiResponse<com.scione.scm.bill.application.PoSyncAppService.SyncResult> triggerAutoCreate() {
+        // 与 5 分钟原生调度使用同一条链路：先从领星拉取，再仅处理本次状态=1 的 PO。
+        return ApiResponse.success(poSyncAppService.pullAndSync());
     }
 
     @PostMapping("/create")

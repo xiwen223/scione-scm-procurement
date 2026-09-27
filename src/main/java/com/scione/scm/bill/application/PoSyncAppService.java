@@ -6,6 +6,8 @@ import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient.Purchase
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
 import com.scione.scm.bill.domain.posync.PoSyncRecordItem;
 import com.scione.scm.bill.domain.posync.PoSyncRepository;
+import com.scione.scm.bill.domain.contract.ContractOperationLog;
+import com.scione.scm.bill.domain.contract.ContractRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -32,6 +34,7 @@ public class PoSyncAppService {
     private final LingxingPurchaseOrderClient purchaseOrderClient;
     private final PoSyncRepository poSyncRepository;
     private final ContractAutoCreateService contractAutoCreateService;
+    private final ContractRepository contractRepository;
 
     /**
      * 拉取最近窗口内变动的采购单并落库。
@@ -57,7 +60,7 @@ public class PoSyncAppService {
         } catch (RuntimeException ex) {
             // 拉取本身失败（网络/签名/限流等）：整批放弃，记错误日志，不抛给调度器让它反复报警
             log.error("采购单拉取失败，窗口 [{} ~ {}]", startTime, endTime, ex);
-            return new SyncResult(0, 0, 0);
+            return new SyncResult(0, 0, 0, new ContractAutoCreateService.AutoCreateResult(0, 0, 0, 0));
         }
 
         int success = 0;
@@ -75,21 +78,31 @@ public class PoSyncAppService {
             try {
                 poSyncRepository.save(toRecord(order, syncTime));
                 success++;
-                successOrderNos.add(orderSn);  // ← 新增这一行
+                // 只有领星状态=1（待下单）的 PO 才会进入自动创建；其他状态留痕后跳过。
+                if (Integer.valueOf(1).equals(order.status())) {
+                    successOrderNos.add(orderSn);
+                } else {
+                    String reason = "PO=" + orderSn + "，领星采购单状态="
+                            + String.valueOf(order.status()) + "（" + String.valueOf(order.statusText())
+                            + "），跳过原因：采购单状态不是待下单（1）";
+                    contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(orderSn, reason));
+                    log.info("同步 PO 后跳过自动创建：{}", reason);
+                }
             } catch (RuntimeException ex) {
                 failed++;
                 log.error("采购单落库失败，orderSn={}", orderSn, ex);
             }
         }
 
-        SyncResult result = new SyncResult(orders.size(), success, failed);
+        ContractAutoCreateService.AutoCreateResult contractResult =
+                new ContractAutoCreateService.AutoCreateResult(0, 0, 0, 0);
+        SyncResult result = new SyncResult(orders.size(), success, failed, contractResult);
         log.info("采购单同步结束：拉取 {}，成功 {}，失败 {}", result.total(), result.success(), result.failed());
 
         if (!successOrderNos.isEmpty()) {
             try {
                 log.info("采购单同步成功 {} 条，开始为这些 PO 自动创建合同", successOrderNos.size());
-                ContractAutoCreateService.AutoCreateResult contractResult =
-                        contractAutoCreateService.autoCreate(successOrderNos);
+                contractResult = contractAutoCreateService.autoCreate(successOrderNos);
                 log.info("合同自动创建完成：拉取 {}，创建 {}，跳过 {}，失败 {}",
                         contractResult.total(),
                         contractResult.created(),
@@ -100,7 +113,7 @@ public class PoSyncAppService {
             }
         }
 
-        return result;
+        return new SyncResult(result.total(), result.success(), result.failed(), contractResult);
     }
 
     private PoSyncRecord toRecord(PurchaseOrderData order, LocalDateTime syncTime) {
@@ -164,6 +177,7 @@ public class PoSyncAppService {
     }
 
     /** 单次同步汇总。 */
-    public record SyncResult(int total, int success, int failed) {
+    public record SyncResult(int total, int success, int failed,
+                             ContractAutoCreateService.AutoCreateResult contractCreate) {
     }
 }
