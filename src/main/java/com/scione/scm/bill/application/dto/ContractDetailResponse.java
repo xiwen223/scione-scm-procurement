@@ -27,11 +27,25 @@ public class ContractDetailResponse {
     private Long supplierId;
     private String supplierName;
     private String supplierPhone;
+    private String supplierAddress;
+    private String contactPerson;
+    private String supplierCreditCode;
+    private String supplierBankAccount;
+    private String supplierBankName;
 
     // 需方公司信息
     private Long buyerCompanyId;
     private String buyerCompanyName;
     private String buyerCompanyCode;
+    private String buyerAddress;
+    private String postCode;
+    private String buyerPhone;
+    private String fax;
+
+    // 结算约定
+    /** 预付款比例，与 ContractCreateRequest.prepaymentRatio 同源，如 "0.3" 表示 30% */
+    private String prepayPercent;
+    private String settlementMethod;
 
     // 金额信息
     private BigDecimal originalAmount;
@@ -40,6 +54,10 @@ public class ContractDetailResponse {
 
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate contractDate;
+
+    /** 交货日期（合同级，由单据明细中最早的交货日汇总而来） */
+    @JsonFormat(pattern = "yyyy-MM-dd")
+    private LocalDate deliveryDate;
 
     // 状态信息
     private Integer status;
@@ -85,10 +103,23 @@ public class ContractDetailResponse {
         dto.setSupplierId(contract.getSupplierId());
         dto.setSupplierName(contract.getSupplierName());
         dto.setSupplierPhone(contract.getSupplierPhone());
+        dto.setSupplierAddress(contract.getSupplierAddress());
+        dto.setContactPerson(contract.getContactPerson());
+        dto.setSupplierCreditCode(contract.getSupplierCreditCode());
+        dto.setSupplierBankAccount(contract.getSupplierBankAccount());
+        dto.setSupplierBankName(contract.getSupplierBankName());
 
         dto.setBuyerCompanyId(contract.getBuyerCompanyId());
         dto.setBuyerCompanyName(contract.getBuyerCompanyName());
         dto.setBuyerCompanyCode(contract.getBuyerCompanyCode());
+        dto.setBuyerAddress(contract.getBuyerAddress());
+        dto.setPostCode(contract.getPostCode());
+        dto.setBuyerPhone(contract.getBuyerPhone());
+        dto.setFax(contract.getFax());
+
+        dto.setPrepayPercent(contract.getPrepayPercent());
+        dto.setSettlementMethod(contract.getSettlementMethod());
+        dto.setDeliveryDate(contract.getDeliveryDate());
 
         dto.setOriginalAmount(contract.getOriginalAmount());
         dto.setDiscountedAmount(contract.getDiscountedAmount());
@@ -98,10 +129,17 @@ public class ContractDetailResponse {
         dto.setStatus(contract.getStatus().getCode());
         dto.setStatusText(contract.getStatus().getDesc());
 
+        // 签署信息
+        dto.setFadadaTaskId(contract.getFadadaTaskId());
+        dto.setSignStartTime(contract.getSignStartTime());
+        dto.setSignCompleteTime(contract.getSignCompleteTime());
+
         dto.setCreatorId(contract.getCreatorId());
         dto.setCreatorName(contract.getCreatorName());
         dto.setCreateType(contract.getCreateType());
         dto.setCreateTypeText(contract.getCreateType() == 1 ? "自动创建" : "手动创建");
+        dto.setCreateTime(contract.getCreateTime());
+        dto.setUpdateTime(contract.getUpdateTime());
 
         // 文件 URL 映射
         dto.setContractPdfUrl(contract.getContractPdfUrl());

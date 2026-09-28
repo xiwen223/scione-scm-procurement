@@ -101,6 +101,7 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getContractAmount(), po.getContractDate(), po.getDeliveryDate(), po.getStatus(),
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
+                po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
                 items
         ));
     }
@@ -320,6 +321,7 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getContractAmount(), po.getContractDate(), po.getDeliveryDate(), po.getStatus(),
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
+                po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
                 items
         ));
     }
@@ -341,6 +343,7 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getContractAmount(), po.getContractDate(), po.getDeliveryDate(), po.getStatus(),
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
+                po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
                 null  // items=null
         );
     }

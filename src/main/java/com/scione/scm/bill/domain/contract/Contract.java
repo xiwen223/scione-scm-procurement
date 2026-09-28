@@ -8,6 +8,7 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -64,6 +65,11 @@ public class Contract {
     private String contractPdfUrl;    // 原始合同 PDF URL
     private String signedPdfUrl;      // 已签署合同 PDF URL
     private String fadadaTaskId;
+    private LocalDateTime signStartTime;
+    private LocalDateTime signCompleteTime;
+    /** 落库时间，只读（库中 DEFAULT CURRENT_TIMESTAMP），由持久化适配器回填。 */
+    private LocalDateTime createTime;
+    private LocalDateTime updateTime;
 
     private Contract() {
     }
@@ -132,6 +138,8 @@ public class Contract {
                                      BigDecimal contractAmount, LocalDate contractDate, LocalDate deliveryDate, Integer status,
                                      String creatorId, String creatorName, Integer createType,
                                      String contractPdfUrl, String signedPdfUrl, String fadadaTaskId,
+                                     LocalDateTime signStartTime, LocalDateTime signCompleteTime,
+                                     LocalDateTime createTime, LocalDateTime updateTime,
                                      List<ContractItem> items) {
         Contract c = new Contract();
         c.id = id;
@@ -170,6 +178,10 @@ public class Contract {
         c.contractPdfUrl = contractPdfUrl;
         c.signedPdfUrl = signedPdfUrl;
         c.fadadaTaskId = fadadaTaskId;
+        c.signStartTime = signStartTime;
+        c.signCompleteTime = signCompleteTime;
+        c.createTime = createTime;
+        c.updateTime = updateTime;
         if (items != null) {
             c.items.addAll(items);
         }

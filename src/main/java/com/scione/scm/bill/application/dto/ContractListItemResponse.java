@@ -34,6 +34,9 @@ public class ContractListItemResponse {
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime createTime;
 
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private LocalDateTime updateTime;
+
     public static ContractListItemResponse from(Contract contract) {
         ContractListItemResponse dto = new ContractListItemResponse();
         dto.setId(contract.getId());
@@ -48,7 +51,8 @@ public class ContractListItemResponse {
         dto.setStatusText(contract.getStatus().getDesc());
         dto.setCreateType(contract.getCreateType());
         dto.setCreateTypeText(contract.getCreateType() == 1 ? "自动创建" : "手动创建");
-        // createTime 需要从 PO 获取，暂时留空，后续在查询时补充
+        dto.setCreateTime(contract.getCreateTime());
+        dto.setUpdateTime(contract.getUpdateTime());
         return dto;
     }
 }

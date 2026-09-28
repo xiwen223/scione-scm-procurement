@@ -121,11 +121,12 @@
         </where>
     </sql>
 
+    <!-- 列表排序：按更新时间倒序（最近有动作的合同排最前）；同一毫秒并列时用 id 倒序保证分页稳定 -->
     <select id="selectByPage" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractPO">
         SELECT <include refid="columns"/>
         FROM contract
         <include refid="whereConditions"/>
-        ORDER BY create_time DESC
+        ORDER BY update_time DESC, id DESC
         LIMIT #{req.offset}, #{req.pageSize}
     </select>
 
