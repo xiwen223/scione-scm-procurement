@@ -409,7 +409,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
                 text(item, "product_name"),
                 text(item, "sku"),
                 text(item, "fnsku"),
-                text(item, "model"),
+                specification(item),
                 decimalText(item, "price"),
                 decimalText(item, "amount"),
                 intValue(item, "quantity_plan"),
@@ -436,6 +436,27 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         } catch (JsonProcessingException exception) {
             return null;
         }
+    }
+
+    /**
+     * 采购单接口的 model 经常为空，实际商品规格通常放在 attribute 数组中。
+     * 规格以“型号；属性名：属性值”落库，确保后续创建合同无需再次请求领星。
+     */
+    private static String specification(JsonNode item) {
+        List<String> parts = new ArrayList<>();
+        String model = text(item, "model");
+        if (!isBlank(model)) parts.add(model.trim());
+        JsonNode attributes = item.get("attribute");
+        if (attributes != null && attributes.isArray()) {
+            for (JsonNode attribute : attributes) {
+                String name = text(attribute, "attr_name");
+                String value = text(attribute, "attr_value");
+                if (isBlank(value)) continue;
+                parts.add(isBlank(name) ? value.trim() : name.trim() + "：" + value.trim());
+            }
+        }
+        String result = parts.stream().distinct().collect(java.util.stream.Collectors.joining("；"));
+        return result.length() <= 255 ? result : result.substring(0, 255);
     }
 
     /** 领星整型（int 字段用，避免 longValue 返回 Long）。 */

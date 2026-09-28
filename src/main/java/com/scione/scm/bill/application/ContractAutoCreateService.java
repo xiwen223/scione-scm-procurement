@@ -226,6 +226,8 @@ public class ContractAutoCreateService {
             // 不抛异常，允许继续处理下一条 PO
         }
 
+        // 首次创建完成即保存 PDF；后续未编辑时签署可直接复用，避免再次拉取图片和填充模板。
+        generateInitialContractPdf(contract);
         return true;
     }
 
@@ -323,6 +325,13 @@ public class ContractAutoCreateService {
             fileUrl = null;  // 文件生成失败，URL 为空
         }
 
+        // 创建时生成首版 PDF；合同编辑会清空该地址，后续下载/签署才会按需重建。
+        try {
+            fileUrl = generateInitialContractPdf(contract);
+        } catch (Exception ex) {
+            log.error("手动创建首版合同PDF失败：contractNo={}, contractId={}", contractNo, contractId, ex);
+        }
+
         // 11. 返回结果
         return new ContractCreateResponse(
                 contractId,
@@ -336,6 +345,21 @@ public class ContractAutoCreateService {
     /**
      * 应用手动补充的字段（覆盖领星和默认数据）。
      */
+    private String generateInitialContractPdf(Contract contract) {
+        try {
+            log.info("创建合同后生成首版PDF：contractNo={}", contract.getContractNo());
+            byte[] pdfBytes = contractPdfConverter.convert(contractTemplateService.fillTemplate(contract),
+                    contract.getContractNo());
+            String fileUrl = contractFileStore.store(contract.getContractNo(), pdfBytes, "pdf");
+            contractRepository.updatePdfUrl(contract.getId(), fileUrl);
+            contract.setContractPdfUrl(fileUrl);
+            log.info("合同首版PDF已保存：contractNo={}, bytes={}", contract.getContractNo(), pdfBytes.length);
+            return fileUrl;
+        } catch (Exception ex) {
+            throw new RuntimeException("生成合同首版PDF失败", ex);
+        }
+    }
+
     private void applyManualOverrides(Contract contract, ContractCreateRequest request) {
         if (request.getPrepaymentRatio() != null) {
             contract.setPrepayPercent(request.getPrepaymentRatio().stripTrailingZeros().toPlainString());

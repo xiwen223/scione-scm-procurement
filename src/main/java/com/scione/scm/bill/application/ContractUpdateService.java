@@ -74,6 +74,8 @@ public class ContractUpdateService {
         // 单条明细编辑只发两条精确 SQL：该明细的数量/单价/金额 + 合同金额合计。
         contractRepository.updateItemPricing(item);
         contractRepository.updateAmounts(contract);
+        contractRepository.updatePdfUrl(contractId, null);
+        contract.setContractPdfUrl(null);
         saveOperationLog(contract, operatorEmail, "修改合同明细", changeDetails);
         log.info("合同单条明细编辑完成，无全量明细更新：contractNo={}, itemId={}", contract.getContractNo(), itemId);
         return new ContractUpdateResponse(contractId, contract.getContractNo(), contract.getContractPdfUrl(), "合同明细修改成功");
@@ -109,6 +111,8 @@ public class ContractUpdateService {
 
         // 折扣保存只更新 contract 的三个金额字段；不更新任何 contract_item。
         contractRepository.updateAmounts(contract);
+        contractRepository.updatePdfUrl(contractId, null);
+        contract.setContractPdfUrl(null);
         saveOperationLog(contract, operatorEmail, operationDesc, changeDetails);
         log.info("合同折扣编辑完成，仅更新金额字段：contractNo={}, discountAmount={}, actualAmount={}",
                 contract.getContractNo(), contract.getDiscountedAmount(), contract.getContractAmount());
@@ -125,6 +129,8 @@ public class ContractUpdateService {
                 && !StringUtils.hasText(request.getSupplierCreditCode())
                 && !StringUtils.hasText(request.getSupplierBankAccount())
                 && !StringUtils.hasText(request.getSupplierBankName())
+                && !StringUtils.hasText(request.getPrepayPercent())
+                && !StringUtils.hasText(request.getSettlementMethod())
                 && !StringUtils.hasText(request.getBuyerCompanyName())
                 && !StringUtils.hasText(request.getBuyerAddress())
                 && !StringUtils.hasText(request.getPostCode())
@@ -170,6 +176,8 @@ public class ContractUpdateService {
 
         // 7. 保存修改
         contractRepository.update(contract);
+        contractRepository.updatePdfUrl(contractId, null);
+        contract.setContractPdfUrl(null);
         log.info("合同修改已保存：contractNo={}, changeCount={}", contractNo, changeDetails.size());
 
         // 8. 记录操作日志
@@ -177,7 +185,7 @@ public class ContractUpdateService {
 
         // 9. 编辑阶段（折扣、明细及其他可编辑字段）只修改数据库，绝不生成合同文件。
         //    原始合同下载和发起签署均会从数据库读取当前值，生成并保存最新 PDF。
-        String fileUrl = contract.getContractPdfUrl();
+        String fileUrl = null;
         log.info("合同编辑完成，跳过 PDF 重生成：contractNo={}, operation={}, originalAmount={}, discountAmount={}, actualAmount={}",
                 contractNo, operationDesc, contract.getOriginalAmount(), contract.getDiscountedAmount(), contract.getContractAmount());
 
@@ -251,6 +259,17 @@ public class ContractUpdateService {
             changeDetails.add("供方开户行：" + contract.getSupplierBankName()
                     + " → " + request.getSupplierBankName());
             contract.setSupplierBankName(request.getSupplierBankName());
+        }
+
+        if (StringUtils.hasText(request.getPrepayPercent())
+                && !request.getPrepayPercent().equals(contract.getPrepayPercent())) {
+            changeDetails.add("预付款比例：" + contract.getPrepayPercent() + " → " + request.getPrepayPercent());
+            contract.setPrepayPercent(request.getPrepayPercent());
+        }
+        if (StringUtils.hasText(request.getSettlementMethod())
+                && !request.getSettlementMethod().equals(contract.getSettlementMethod())) {
+            changeDetails.add("结算方式：" + contract.getSettlementMethod() + " → " + request.getSettlementMethod());
+            contract.setSettlementMethod(request.getSettlementMethod());
         }
 
         // 需方信息

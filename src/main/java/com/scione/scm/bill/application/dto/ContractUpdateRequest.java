@@ -36,6 +36,12 @@ public class ContractUpdateRequest {
     @Schema(description = "供方开户行", example = "中国工商银行")
     private String supplierBankName;
 
+    @Schema(description = "预付款比例", example = "0.3")
+    private String prepayPercent;
+
+    @Schema(description = "结算方式", example = "月结")
+    private String settlementMethod;
+
     // ========== 需方信息 ==========
 
     @Schema(description = "需方名称", example = "上海宋艳科技有限公司")

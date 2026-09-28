@@ -96,8 +96,7 @@ public class ContractSignAppService {
         }
 
         // 签署前始终依据当前合同数据生成新文件，确保折扣等延迟保存的金额已进入法大大签署文档。
-        byte[] fileBytes = generateLatestContractPdfForSigning(contract);
-        log.info("签署前最新PDF合同已生成：contractNo={}, bytes={}", contract.getContractNo(), fileBytes.length);
+        byte[] fileBytes = loadOrGenerateContractPdfForSigning(contract);
         String fileName = contract.getContractNo() + ".pdf";
         log.info("开始向法大大申请上传地址：contractNo={}, fileName={}, fileType=doc", contract.getContractNo(), fileName);
         FadadaOpenApiClient.UploadUrl upload = fadadaOpenApiClient.getUploadUrl("doc");
@@ -194,6 +193,29 @@ public class ContractSignAppService {
             log.error("签署前生成最新合同文件失败：contractNo={}", contract.getContractNo(), ex);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "签署前生成最新合同文件失败");
         }
+    }
+
+    /**
+     * 合同未修改且已有原始 PDF 时直接复用，避免签署前重复填充模板和下载商品图片。
+     * 合同编辑会清空 contract_pdf_url，因此仅发生过变更的合同才会走重新生成。
+     */
+    private byte[] loadOrGenerateContractPdfForSigning(Contract contract) {
+        if (StringUtils.hasText(contract.getContractPdfUrl())) {
+            try {
+                log.info("签署前复用已生成合同PDF：contractNo={}, fileUrl={}",
+                        contract.getContractNo(), contract.getContractPdfUrl());
+                byte[] cachedPdf = contractFileStore.download(contract.getContractPdfUrl());
+                if (cachedPdf != null && cachedPdf.length > 0) {
+                    log.info("签署前复用合同PDF成功：contractNo={}, bytes={}", contract.getContractNo(), cachedPdf.length);
+                    return cachedPdf;
+                }
+                log.warn("已保存合同PDF为空，改为重新生成：contractNo={}", contract.getContractNo());
+            } catch (Exception ex) {
+                log.warn("读取已保存合同PDF失败，改为重新生成：contractNo={}, reason={}",
+                        contract.getContractNo(), ex.getMessage());
+            }
+        }
+        return generateLatestContractPdfForSigning(contract);
     }
 
     public void cancel(Long contractId, ContractCancelRequest request, String operatorEmail) {
