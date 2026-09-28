@@ -137,10 +137,21 @@ public class ContractQueryService {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new RuntimeException("合同不存在：contractId=" + contractId));
 
-        // 原始合同按当前数据库数据即时生成，确保反复修改折扣后下载到的是最新金额。
+        // 仅创建状态允许编辑，因此只对创建状态按当前数据库数据即时生成。
+        // 签署中及之后直接读取已保存文件，避免下载时重复模板填充、PDF 转换及存储上传。
         if (!"signed".equals(type)) {
-            byte[] latestPdf = generateLatestContractPdf(contract, "下载原始合同");
-            return new DownloadResult(latestPdf, contract.getContractNo() + ".pdf");
+            if (contract.getStatus() == ContractStatus.CREATED) {
+                byte[] latestPdf = generateLatestContractPdf(contract, "下载创建状态合同");
+                return new DownloadResult(latestPdf, contract.getContractNo() + ".pdf");
+            }
+            String fileUrl = getOriginalPdfUrl(contract);
+            if (!StringUtils.hasText(fileUrl)) {
+                throw new RuntimeException("合同文件不存在，无法下载：contractId=" + contractId);
+            }
+            byte[] fileBytes = contractFileStore.download(fileUrl);
+            log.info("下载非创建状态合同，直接使用已保存文件：contractNo={}, status={}, fileUrl={}",
+                    contract.getContractNo(), contract.getStatus(), fileUrl);
+            return new DownloadResult(fileBytes, extractFileName(fileUrl, contract.getContractNo(), "original"));
         }
 
         String fileUrl = getSignedPdfUrl(contract);
@@ -268,14 +279,23 @@ public class ContractQueryService {
             long totalBytes = 0;
 
             for (Contract contract : contracts) {
-                // 已签署合同使用签署完成文件；未签署合同按当前数据即时生成，避免下载到旧折扣。
+                // 仅创建状态需要按当前可编辑数据生成；其他状态直接读取已保存文件。
                 String fileUrl = contract.getSignedPdfUrl();
                 byte[] fileBytes;
                 if (StringUtils.hasText(fileUrl)) {
                     fileBytes = contractFileStore.download(fileUrl);
-                } else {
+                } else if (contract.getStatus() == ContractStatus.CREATED) {
                     fileBytes = generateLatestContractPdf(contract, "批量下载原始合同");
                     fileUrl = contract.getContractPdfUrl();
+                } else {
+                    fileUrl = contract.getContractPdfUrl();
+                    if (!StringUtils.hasText(fileUrl)) {
+                        throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
+                                "合同文件不存在：contractNo=" + contract.getContractNo());
+                    }
+                    fileBytes = contractFileStore.download(fileUrl);
+                    log.info("批量下载非创建状态合同，直接使用已保存文件：contractNo={}, status={}",
+                            contract.getContractNo(), contract.getStatus());
                 }
                 totalBytes += fileBytes.length;
 

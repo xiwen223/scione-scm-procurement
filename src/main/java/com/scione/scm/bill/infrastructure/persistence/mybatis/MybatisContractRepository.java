@@ -378,6 +378,37 @@ public class MybatisContractRepository implements ContractRepository {
     }
 
     @Override
+    public void markFadadaAbolishPending(long contractId, String abolishedTaskId) {
+        if (contractMapper.markFadadaAbolishPending(contractId, abolishedTaskId) != 1) {
+            throw new IllegalStateException("合同状态已变更，无法保存法大大解除协议任务");
+        }
+    }
+
+    @Override
+    public void markFadadaAbolished(long contractId, String cancelReason) {
+        if (contractMapper.markFadadaAbolished(contractId, cancelReason) != 1) {
+            throw new IllegalStateException("合同状态已变更，无法标记法大大作废完成");
+        }
+    }
+
+    @Override
+    public void updateAmounts(Contract contract) {
+        if (contractMapper.updateAmounts(contract.getId(), contract.getOriginalAmount(),
+                contract.getDiscountedAmount(), contract.getContractAmount()) != 1) {
+            throw new IllegalStateException("合同状态已变更，无法更新金额");
+        }
+        log.info("合同金额字段更新成功：contractId={}", contract.getId());
+    }
+
+    @Override
+    public void updateItemPricing(ContractItem item) {
+        if (itemMapper.updatePricing(item.getId(), item.getQuantity(), item.getUnitPrice(), item.getAmount()) != 1) {
+            throw new IllegalStateException("合同明细不存在，无法更新");
+        }
+        log.info("合同单条明细价格更新成功：itemId={}", item.getId());
+    }
+
+    @Override
     public void saveOperationLog(ContractOperationLog operationLog) {
         logMapper.insert(toLogPO(operationLog));
         log.info("操作日志保存成功：contractId={}, operationType={}",

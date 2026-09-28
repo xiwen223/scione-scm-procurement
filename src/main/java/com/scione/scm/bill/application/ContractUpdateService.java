@@ -3,10 +3,6 @@ package com.scione.scm.bill.application;
 import com.scione.scm.bill.application.dto.ContractItemUpdateRequest;
 import com.scione.scm.bill.application.dto.ContractUpdateRequest;
 import com.scione.scm.bill.application.dto.ContractUpdateResponse;
-import com.scione.scm.bill.application.port.ContractFileStore;
-import com.scione.scm.bill.application.port.ContractPdfConverter;
-import com.scione.scm.bill.application.port.ContractTemplateService;
-import com.scione.scm.bill.application.port.LingxingProductClient;
 import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractItem;
 import com.scione.scm.bill.domain.contract.ContractOperationLog;
@@ -35,14 +31,10 @@ import java.util.stream.Collectors;
 public class ContractUpdateService {
 
     private final ContractRepository contractRepository;
-    private final ContractTemplateService contractTemplateService;
-    private final ContractFileStore contractFileStore;
-    private final ContractPdfConverter contractPdfConverter;
-    private final LingxingProductClient lingxingProductClient;
 
     /**
      * 专用明细修改入口：保证路径中的明细确实属于该合同，并仅允许创建状态的合同修改。
-     * 实际更新、金额重算、文件重生成和操作日志均复用合同修改主流程。
+     * 实际更新、金额重算和操作日志均复用合同修改主流程；文件仅在下载或签署时生成。
      */
     @Transactional
     public ContractUpdateResponse updateContractItem(Long contractId, Long itemId,
@@ -69,9 +61,22 @@ public class ContractUpdateService {
         }
 
         itemRequest.setId(itemId);
+        ContractItem item = contract.getItems().stream()
+                .filter(current -> itemId.equals(current.getId()))
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("合同明细不存在或不属于该合同：itemId=" + itemId));
+        List<String> changeDetails = new ArrayList<>();
         ContractUpdateRequest request = new ContractUpdateRequest();
         request.setItems(List.of(itemRequest));
-        return updateContractInternal(contractId, request, operatorEmail, "修改合同明细");
+        applyItemUpdates(contract, request, changeDetails);
+        recalculateContractAmount(contract, changeDetails);
+
+        // 单条明细编辑只发两条精确 SQL：该明细的数量/单价/金额 + 合同金额合计。
+        contractRepository.updateItemPricing(item);
+        contractRepository.updateAmounts(contract);
+        saveOperationLog(contract, operatorEmail, "修改合同明细", changeDetails);
+        log.info("合同单条明细编辑完成，无全量明细更新：contractNo={}, itemId={}", contract.getContractNo(), itemId);
+        return new ContractUpdateResponse(contractId, contract.getContractNo(), contract.getContractPdfUrl(), "合同明细修改成功");
     }
 
     /**
@@ -85,7 +90,49 @@ public class ContractUpdateService {
     public ContractUpdateResponse updateContract(Long contractId, ContractUpdateRequest request, String operatorEmail) {
         String operationDesc = request.getDiscountedAmount() != null
                 ? "修改合同折扣" : "修改合同";
+        if (isDiscountOnlyRequest(request)) {
+            return updateDiscountOnly(contractId, request, operatorEmail, operationDesc);
+        }
         return updateContractInternal(contractId, request, operatorEmail, operationDesc);
+    }
+
+    private ContractUpdateResponse updateDiscountOnly(Long contractId, ContractUpdateRequest request,
+                                                      String operatorEmail, String operationDesc) {
+        Contract contract = contractRepository.findById(contractId)
+                .orElseThrow(() -> new RuntimeException("合同不存在：contractId=" + contractId));
+        if (contract.getStatus() != ContractStatus.CREATED) {
+            throw new RuntimeException("合同状态为【" + contract.getStatus().getDesc() + "】，不允许修改");
+        }
+        List<String> changeDetails = new ArrayList<>();
+        applyFieldUpdates(contract, request, changeDetails);
+        recalculateContractAmount(contract, changeDetails);
+
+        // 折扣保存只更新 contract 的三个金额字段；不更新任何 contract_item。
+        contractRepository.updateAmounts(contract);
+        saveOperationLog(contract, operatorEmail, operationDesc, changeDetails);
+        log.info("合同折扣编辑完成，仅更新金额字段：contractNo={}, discountAmount={}, actualAmount={}",
+                contract.getContractNo(), contract.getDiscountedAmount(), contract.getContractAmount());
+        return new ContractUpdateResponse(contractId, contract.getContractNo(), contract.getContractPdfUrl(), "合同折扣修改成功");
+    }
+
+    private boolean isDiscountOnlyRequest(ContractUpdateRequest request) {
+        return request.getDiscountedAmount() != null
+                && request.getOriginalAmount() == null
+                && !StringUtils.hasText(request.getSupplierName())
+                && !StringUtils.hasText(request.getSupplierAddress())
+                && !StringUtils.hasText(request.getContactPerson())
+                && !StringUtils.hasText(request.getSupplierPhone())
+                && !StringUtils.hasText(request.getSupplierCreditCode())
+                && !StringUtils.hasText(request.getSupplierBankAccount())
+                && !StringUtils.hasText(request.getSupplierBankName())
+                && !StringUtils.hasText(request.getBuyerCompanyName())
+                && !StringUtils.hasText(request.getBuyerAddress())
+                && !StringUtils.hasText(request.getPostCode())
+                && !StringUtils.hasText(request.getBuyerPhone())
+                && !StringUtils.hasText(request.getFax())
+                && !StringUtils.hasText(request.getContractDate())
+                && !StringUtils.hasText(request.getDeliveryDate())
+                && (request.getItems() == null || request.getItems().isEmpty());
     }
 
     private ContractUpdateResponse updateContractInternal(Long contractId, ContractUpdateRequest request,
@@ -128,16 +175,11 @@ public class ContractUpdateService {
         // 8. 记录操作日志
         saveOperationLog(contract, operatorEmail, operationDesc, changeDetails);
 
-        // 9. 单独修改折扣只更新金额和操作日志，不在每次保存时生成 PDF。
-        //    下载原始合同或发起签署时会按当前合同数据生成最新 PDF。
+        // 9. 编辑阶段（折扣、明细及其他可编辑字段）只修改数据库，绝不生成合同文件。
+        //    原始合同下载和发起签署均会从数据库读取当前值，生成并保存最新 PDF。
         String fileUrl = contract.getContractPdfUrl();
-        if (isDiscountOnlyRequest(request)) {
-            log.info("合同折扣修改完成，跳过 PDF 重生成：contractNo={}, originalAmount={}, discountAmount={}, actualAmount={}",
-                    contractNo, contract.getOriginalAmount(), contract.getDiscountedAmount(), contract.getContractAmount());
-        } else {
-            fileUrl = regenerateContractFile(contract);
-            log.info("合同修改完成：contractNo={}, fileUrl={}", contractNo, fileUrl);
-        }
+        log.info("合同编辑完成，跳过 PDF 重生成：contractNo={}, operation={}, originalAmount={}, discountAmount={}, actualAmount={}",
+                contractNo, operationDesc, contract.getOriginalAmount(), contract.getDiscountedAmount(), contract.getContractAmount());
 
         return new ContractUpdateResponse(
                 contractId,
@@ -147,26 +189,6 @@ public class ContractUpdateService {
         );
     }
 
-    /** 只有折扣字段时不生成文件，避免用户连续调折扣时反复调用模板、图片和 PDF 服务。 */
-    private boolean isDiscountOnlyRequest(ContractUpdateRequest request) {
-        return request.getDiscountedAmount() != null
-                && request.getOriginalAmount() == null
-                && !StringUtils.hasText(request.getSupplierName())
-                && !StringUtils.hasText(request.getSupplierAddress())
-                && !StringUtils.hasText(request.getContactPerson())
-                && !StringUtils.hasText(request.getSupplierPhone())
-                && !StringUtils.hasText(request.getSupplierCreditCode())
-                && !StringUtils.hasText(request.getSupplierBankAccount())
-                && !StringUtils.hasText(request.getSupplierBankName())
-                && !StringUtils.hasText(request.getBuyerCompanyName())
-                && !StringUtils.hasText(request.getBuyerAddress())
-                && !StringUtils.hasText(request.getPostCode())
-                && !StringUtils.hasText(request.getBuyerPhone())
-                && !StringUtils.hasText(request.getFax())
-                && !StringUtils.hasText(request.getContractDate())
-                && !StringUtils.hasText(request.getDeliveryDate())
-                && (request.getItems() == null || request.getItems().isEmpty());
-    }
 
     /**
      * 应用字段更新。
@@ -453,110 +475,4 @@ public class ContractUpdateService {
                 contract.getContractNo(), operatorName, changeDetails.size());
     }
 
-    /**
-     * 重新生成合同文件。
-     */
-    private String regenerateContractFile(Contract contract) {
-        String contractNo = contract.getContractNo();
-        log.info("开始重新生成合同文件：contractNo={}, 原价={}, 折扣={}, 实际金额={}, oldFileUrl={}",
-                contractNo, contract.getOriginalAmount(), contract.getDiscountedAmount(),
-                contract.getContractAmount(), contract.getContractPdfUrl());
-
-        try {
-            // 1. 从领星API重新获取商品图片
-            enrichContractItemsWithImages(contract);
-
-            // 2. 直接根据合同数据生成 PDF，运行环境不依赖 Office/LibreOffice。
-            byte[] pdfBytes = contractPdfConverter.convert(contractTemplateService.fillTemplate(contract), contractNo);
-
-            // 3. 上传到 S3，返回访问 URL
-            String fileUrl = contractFileStore.store(contractNo, pdfBytes, "pdf");
-
-            // 4. 更新合同表的 contract_pdf_url 字段
-            contractRepository.updatePdfUrl(contract.getId(), fileUrl);
-
-            log.info("合同文件重新生成成功：contractNo={}, 原价={}, 折扣={}, 实际金额={}, newFileUrl={}",
-                    contractNo, contract.getOriginalAmount(), contract.getDiscountedAmount(),
-                    contract.getContractAmount(), fileUrl);
-            return fileUrl;
-
-        } catch (Exception ex) {
-            // 不允许出现“金额已保存、合同文件仍是旧版”的假成功。
-            // 该方法由事务内的修改接口调用，抛出异常后主表金额和操作日志都会回滚。
-            log.error("合同文件重新生成失败，合同修改将回滚：contractNo={}, 原价={}, 折扣={}, 实际金额={}",
-                    contractNo, contract.getOriginalAmount(), contract.getDiscountedAmount(), contract.getContractAmount(), ex);
-            throw new RuntimeException("合同文件重新生成失败，未保存本次修改", ex);
-        }
-    }
-
-    /**
-     * 从领星API获取商品图片并填充到合同明细中（复用创建时的逻辑）。
-     */
-    private void enrichContractItemsWithImages(Contract contract) {
-        String contractNo = contract.getContractNo();
-        log.info("开始从领星API获取商品图片：contractNo={}", contractNo);
-
-        try {
-            List<ContractItem> contractItems = contract.getItems();
-            if (contractItems == null || contractItems.isEmpty()) {
-                log.warn("合同无明细，跳过图片获取：contractNo={}", contractNo);
-                return;
-            }
-
-            int imageFoundCount = 0;
-            int imageNotFoundCount = 0;
-            int imageErrorCount = 0;
-
-            // 为每个合同明细获取图片URL
-            for (ContractItem contractItem : contractItems) {
-                if (StringUtils.hasText(contractItem.getPicUrl())) {
-                    log.debug("合同明细已有图片，跳过领星查询：sku={}", contractItem.getSku());
-                    imageFoundCount++;
-                    continue;
-                }
-                String sku = contractItem.getSku();
-
-                if (sku == null || sku.isBlank()) {
-                    log.warn("合同明细SKU为空，跳过图片获取：contractNo={}", contractNo);
-                    imageNotFoundCount++;
-                    continue;
-                }
-
-                try {
-                    log.debug("查询商品详情：sku={}", sku);
-
-                    // 调用领星API查询产品详情
-                    Optional<LingxingProductClient.ProductDetail> productOpt =
-                            lingxingProductClient.findBySku(sku);
-
-                    if (productOpt.isPresent()) {
-                        LingxingProductClient.ProductDetail product = productOpt.get();
-                        String picUrl = product.picUrl();
-
-                        if (picUrl != null && !picUrl.isBlank()) {
-                            contractItem.setPicUrl(picUrl);
-                            imageFoundCount++;
-                            log.info("获取商品图片成功：sku={}, picUrl={}", sku, picUrl);
-                        } else {
-                            log.warn("商品无图片URL：sku={}", sku);
-                            imageNotFoundCount++;
-                        }
-                    } else {
-                        log.warn("领星API未找到商品：sku={}", sku);
-                        imageNotFoundCount++;
-                    }
-
-                } catch (Exception ex) {
-                    log.error("获取商品图片失败（继续处理其他明细）：sku={}", sku, ex);
-                    imageErrorCount++;
-                }
-            }
-
-            log.info("领星图片获取完成：contractNo={}, 成功={}, 未找到={}, 失败={}",
-                    contractNo, imageFoundCount, imageNotFoundCount, imageErrorCount);
-
-        } catch (Exception ex) {
-            log.error("从领星获取商品图片失败（合同修改继续）：contractNo={}", contractNo, ex);
-        }
-    }
 }

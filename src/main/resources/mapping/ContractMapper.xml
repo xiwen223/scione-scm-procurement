@@ -74,7 +74,7 @@
             cancel_time = NOW(),
             update_time = NOW()
         WHERE id = #{id}
-          AND status IN (1, 2)
+          AND status IN (1, 2, 3)
           AND is_deleted = 0
     </update>
 
@@ -168,5 +168,38 @@
             delivery_date = #{deliveryDate},
             update_time = NOW()
         WHERE id = #{id}
+    </update>
+
+    <update id="markFadadaAbolishPending">
+        UPDATE contract
+        SET fadada_abolished_task_id = #{abolishedTaskId},
+            update_time = NOW()
+        WHERE id = #{id}
+          AND status = 3
+          AND is_deleted = 0
+    </update>
+
+    <update id="markFadadaAbolished">
+        UPDATE contract
+        SET status = 5,
+            cancel_reason = #{cancelReason},
+            cancel_time = NOW(),
+            is_fadada_abolished = 1,
+            fadada_abolished_time = NOW(),
+            update_time = NOW()
+        WHERE id = #{id}
+          AND status = 3
+          AND is_deleted = 0
+    </update>
+
+    <update id="updateAmounts">
+        UPDATE contract
+        SET original_amount = #{originalAmount},
+            discounted_amount = #{discountedAmount},
+            contract_amount = #{contractAmount},
+            update_time = NOW()
+        WHERE id = #{id}
+          AND status = 1
+          AND is_deleted = 0
     </update>
 </mapper>

@@ -35,6 +35,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ContractSignAppService {
 
+
     private final ContractRepository contractRepository;
     private final BuyerCompanyRepository buyerCompanyRepository;
     private final PoSyncRepository poSyncRepository;
@@ -198,8 +199,10 @@ public class ContractSignAppService {
     public void cancel(Long contractId, ContractCancelRequest request, String operatorEmail) {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
-        if (contract.getStatus() != ContractStatus.CREATED && contract.getStatus() != ContractStatus.SIGNING) {
-            throw new BusinessException(ResultCode.PARAM_ERROR, "仅创建或签署中状态的合同可作废");
+        if (contract.getStatus() != ContractStatus.CREATED
+                && contract.getStatus() != ContractStatus.SIGNING
+                && contract.getStatus() != ContractStatus.EXECUTING) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "仅创建、签署中或履行中状态的合同可作废");
         }
         String reason = request == null ? null : request.reason();
         if (contract.getStatus() == ContractStatus.SIGNING) {
@@ -207,6 +210,26 @@ public class ContractSignAppService {
                 throw new BusinessException(ResultCode.PARAM_ERROR, "签署中合同缺少法大大任务ID，无法安全作废");
             }
             fadadaOpenApiClient.cancelSignTask(contract.getFadadaTaskId(), reason);
+        }
+        if (contract.getStatus() == ContractStatus.EXECUTING) {
+            if (!StringUtils.hasText(contract.getFadadaTaskId())) {
+                throw new BusinessException(ResultCode.PARAM_ERROR, "履行中合同缺少法大大任务ID，无法发起作废协议");
+            }
+            if (!StringUtils.hasText(reason)) {
+                throw new BusinessException(ResultCode.PARAM_ERROR, "履行中合同作废必须填写作废原因");
+            }
+            String abolishedTaskId = fadadaOpenApiClient.abolishSignTask(
+                    contract.getFadadaTaskId(), fadadaProperties.getOpenCorpId(), reason);
+            contractRepository.markFadadaAbolishPending(contractId, abolishedTaskId);
+            String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
+            contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(
+                    contractId, contract.getContractNo(), operator, operator,
+                    "发起合同作废协议",
+                    "原签署任务=" + contract.getFadadaTaskId() + "；解除协议任务=" + abolishedTaskId
+                            + "；作废原因=" + reason + "；待原签署方完成解除协议后合同才会变更为取消"));
+            log.info("履行中合同已发起法大大作废协议：contractNo={}, originalTaskId={}, abolishedTaskId={}",
+                    contract.getContractNo(), contract.getFadadaTaskId(), abolishedTaskId);
+            return;
         }
         contractRepository.cancel(contractId, reason);
         String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
@@ -348,10 +371,35 @@ public class ContractSignAppService {
         if (!StringUtils.hasText(contract.getFadadaTaskId())) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "合同未关联法大大签署任务，无法催签");
         }
-
+        log.info("开始法大大催签：contractNo={}, signTaskId={}", contract.getContractNo(), contract.getFadadaTaskId());
+        logSignTaskActorsForUrge(contract.getContractNo(), contract.getFadadaTaskId(), "催签前");
         fadadaOpenApiClient.urgeSignTask(contract.getFadadaTaskId());
+        log.info("法大大催签接口已成功受理：contractNo={}, signTaskId={}；短信是否送达由法大大平台按任务状态和频控决定",
+                contract.getContractNo(), contract.getFadadaTaskId());
+        logSignTaskActorsForUrge(contract.getContractNo(), contract.getFadadaTaskId(), "催签后");
         String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
         contractRepository.saveOperationLog(ContractOperationLog.ofUrgeSign(
                 contract.getId(), contract.getContractNo(), operator, operator, contract.getFadadaTaskId()));
+    }
+
+    private void logSignTaskActorsForUrge(String contractNo, String signTaskId, String scene) {
+        try {
+            JsonNode detail = fadadaOpenApiClient.getSignTaskDetail(signTaskId);
+            StringBuilder actors = new StringBuilder();
+            for (JsonNode actor : detail.path("actors")) {
+                JsonNode info = actor.path("actorInfo");
+                if (!actors.isEmpty()) actors.append("; ");
+                actors.append(info.path("actorId").asText("<unknown>"))
+                        .append("(name=").append(info.path("actorName").asText("<unknown>"))
+                        .append(", joinStatus=").append(actor.path("joinStatus").asText("<unknown>"))
+                        .append(", signStatus=").append(actor.path("signStatus").asText("<unknown>"))
+                        .append(')');
+            }
+            log.info("{}法大大任务状态：contractNo={}, signTaskId={}, taskStatus={}, actors={}",
+                    scene, contractNo, signTaskId, detail.path("signTaskStatus").asText("<unknown>"), actors);
+        } catch (RuntimeException ex) {
+            log.warn("{}查询法大大任务状态失败（不影响催签结果）：contractNo={}, signTaskId={}, reason={}",
+                    scene, contractNo, signTaskId, ex.getMessage());
+        }
     }
 }

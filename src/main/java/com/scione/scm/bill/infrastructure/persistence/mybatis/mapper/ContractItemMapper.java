@@ -4,6 +4,7 @@ import com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractItemPO;
 import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
+import java.math.BigDecimal;
 
 /**
  * 合同明细 Mapper。
@@ -30,4 +31,9 @@ public interface ContractItemMapper {
      * @return 影响行数
      */
     int updateById(ContractItemPO item);
+
+    int updatePricing(@Param("id") Long id,
+                      @Param("quantity") Integer quantity,
+                      @Param("unitPrice") BigDecimal unitPrice,
+                      @Param("amount") BigDecimal amount);
 }

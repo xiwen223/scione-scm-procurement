@@ -143,7 +143,7 @@ public class ContractController {
     }
 
     @PutMapping("/{contractId}")
-    @Operation(summary = "修改合同", description = "修改合同信息（只更新传入的字段），修改后会重新生成合同文件")
+    @Operation(summary = "修改合同", description = "修改合同信息（只更新传入的字段）；仅更新数据库，下载或发起签署时才生成最新合同文件")
     public ApiResponse<com.scione.scm.bill.application.dto.ContractUpdateResponse> updateContract(
             @PathVariable Long contractId,
             @RequestBody @Validated com.scione.scm.bill.application.dto.ContractUpdateRequest request,
@@ -163,7 +163,7 @@ public class ContractController {
     }
 
     @PutMapping("/{contractId}/items/{itemId}")
-    @Operation(summary = "修改合同明细", description = "仅创建状态合同可修改；修改后自动重算原价、折扣后金额并重新生成合同文件")
+    @Operation(summary = "修改合同明细", description = "仅创建状态合同可修改；修改后自动重算金额并只更新数据库，下载或发起签署时才生成最新合同文件")
     public ApiResponse<com.scione.scm.bill.application.dto.ContractUpdateResponse> updateContractItem(
             @PathVariable Long contractId,
             @PathVariable Long itemId,
@@ -262,7 +262,7 @@ public class ContractController {
     }
 
     @PostMapping("/{contractId}/cancel")
-    @Operation(summary = "作废合同", description = "创建状态直接作废；签署中状态将先撤销法大大签署任务")
+    @Operation(summary = "作废合同", description = "创建状态直接作废；签署中撤销法大大任务；履行中发起解除协议，待法大大作废回调后置为取消")
     public ApiResponse<Void> cancelContract(
             @PathVariable Long contractId,
             @RequestBody(required = false) @Validated com.scione.scm.bill.application.dto.ContractCancelRequest request,

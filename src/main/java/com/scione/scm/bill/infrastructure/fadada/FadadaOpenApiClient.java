@@ -57,6 +57,7 @@ public class FadadaOpenApiClient {
     private static final String GET_ACTOR_URL_PATH = "/sign-task/actor/get-url";
     private static final String URGE_SIGN_TASK_PATH = "/sign-task/urge";
     private static final String CANCEL_SIGN_TASK_PATH = "/sign-task/cancel";
+    private static final String ABOLISH_SIGN_TASK_PATH = "/sign-task/abolish";
     /** 该查询路径来自本地 Python 示例，供应商标注为旧版；上线前请以租户 V5 文档核验。 */
     private static final String GET_SIGN_TASK_DETAIL_PATH = "/sign-task/app/get-detail";
     private static final String GET_DOWNLOAD_URL_PATH = "/sign-task/owner/get-download-url";
@@ -350,6 +351,22 @@ public class FadadaOpenApiClient {
         body.put("signTaskId", requireText(signTaskId, "signTaskId"));
         putIfNotBlank(body, "terminationNote", terminationNote);
         businessPost(CANCEL_SIGN_TASK_PATH, body, false);
+    }
+
+    /**
+     * 为已完成的原签署任务发起作废（解除协议）任务。
+     * 原任务不会立即作废，需原签署方完成解除协议签署后才会推送 sign-task-abolish 回调。
+     */
+    public String abolishSignTask(String signTaskId, String initiatorId, String reason) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("signTaskId", requireText(signTaskId, "signTaskId"));
+        body.put("abolishedInitiator", Map.of("initiatorId", requireText(initiatorId, "initiatorId")));
+        body.put("docSource", "platform");
+        body.put("reason", requireText(reason, "reason"));
+        body.put("followOriginalConfig", true);
+        body.put("autoStart", true);
+        JsonNode data = businessPost(ABOLISH_SIGN_TASK_PATH, body, false).path("data");
+        return requiredText(data, "abolishedSignTaskId", "发起签署任务作废失败");
     }
 
     /** 获取参与方签署入口。返回 URL 为短期敏感凭据，调用方不得持久化或写日志。 */

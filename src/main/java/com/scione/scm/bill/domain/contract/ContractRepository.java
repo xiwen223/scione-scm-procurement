@@ -41,6 +41,12 @@ public interface ContractRepository {
 
     void cancel(long contractId, String cancelReason);
 
+    /** 保存法大大解除协议任务，原合同仍待解除协议完成。 */
+    void markFadadaAbolishPending(long contractId, String abolishedTaskId);
+
+    /** 法大大作废回调完成后，标记正式作废并更新业务状态。 */
+    void markFadadaAbolished(long contractId, String cancelReason);
+
     void markExecuting(long contractId);
     void markCompleted(long contractId);
     List<Contract> findExecutingContracts();
@@ -74,6 +80,12 @@ public interface ContractRepository {
      * @param contract 待更新的合同聚合（含明细）
      */
     void update(Contract contract);
+
+    /** 仅更新合同金额字段，用于折扣调整，避免无关明细逐条 UPDATE。 */
+    void updateAmounts(Contract contract);
+
+    /** 仅更新一条合同明细的数量、单价与金额。 */
+    void updateItemPricing(ContractItem item);
 
     /**
      * 保存操作日志。

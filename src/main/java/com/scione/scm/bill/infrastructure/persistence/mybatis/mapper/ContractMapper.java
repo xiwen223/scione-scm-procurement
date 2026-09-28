@@ -4,6 +4,7 @@ import com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractPO;
 import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
+import java.math.BigDecimal;
 
 /**
  * 合同主表 Mapper。
@@ -44,6 +45,10 @@ public interface ContractMapper {
 
     int cancel(@Param("id") Long id, @Param("cancelReason") String cancelReason);
 
+    int markFadadaAbolishPending(@Param("id") Long id, @Param("abolishedTaskId") String abolishedTaskId);
+
+    int markFadadaAbolished(@Param("id") Long id, @Param("cancelReason") String cancelReason);
+
     int markExecuting(@Param("id") Long id);
     int markCompleted(@Param("id") Long id);
     List<ContractPO> selectExecutingContracts();
@@ -81,4 +86,9 @@ public interface ContractMapper {
      * @return 影响行数
      */
     int updateById(ContractPO contract);
+
+    int updateAmounts(@Param("id") Long id,
+                      @Param("originalAmount") BigDecimal originalAmount,
+                      @Param("discountedAmount") BigDecimal discountedAmount,
+                      @Param("contractAmount") BigDecimal contractAmount);
 }

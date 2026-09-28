@@ -57,6 +57,11 @@ public class FadadaContractCallbackService {
             log.info("法大大签署完成，合同已更新为履行中：contractId={}, contractNo={}", contract.getId(), contractNo);
             details += "；合同状态：签署中 → 履行中";
         }
+        if ("sign-task-abolish".equals(event) && contract.getStatus() == ContractStatus.EXECUTING) {
+            contractRepository.markFadadaAbolished(contract.getId(), reason);
+            details += "；解除协议已完成；合同状态：履行中 → 取消";
+            log.info("法大大作废协议已完成，合同已更新为取消：contractId={}, contractNo={}", contract.getId(), contractNo);
+        }
         ContractOperationLog log = ContractOperationLog.ofUpdate(contract.getId(), contractNo, "fadada", "法大大回调", "签署任务回调", details);
         contractRepository.saveOperationLog(log);
     }
@@ -89,6 +94,11 @@ public class FadadaContractCallbackService {
         if ("sign-task-finished".equals(event) && contract.getStatus() == ContractStatus.SIGNING) {
             contractRepository.markExecuting(contract.getId());
             details += "；合同状态：签署中 → 履行中";
+        }
+        if ("sign-task-abolish".equals(event) && contract.getStatus() == ContractStatus.EXECUTING) {
+            contractRepository.markFadadaAbolished(contract.getId(), reason);
+            details += "；解除协议已完成；合同状态：履行中 → 取消";
+            log.info("法大大作废协议已完成，合同已更新为取消：contractId={}, contractNo={}", contract.getId(), contractNo);
         }
         contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(
                 contract.getId(), contractNo, "fadada", "法大大回调", "签署任务回调", details));

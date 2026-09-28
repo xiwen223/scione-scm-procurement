@@ -31,6 +31,7 @@ public class ContractListItemResponse {
     private Integer createType;
     private String createTypeText;
 
+
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime createTime;
 
