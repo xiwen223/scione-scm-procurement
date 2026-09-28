@@ -98,7 +98,7 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getBuyerCompanyCode(), po.getBuyerAddress(), po.getPostCode(),
                 po.getBuyerPhone(), po.getFax(),
                 po.getOriginalAmount(), po.getDiscountedAmount(),
-                po.getContractAmount(), po.getContractDate(), po.getDeliveryDate(), po.getStatus(),
+                po.getContractAmount(), po.getContractDate(), po.getDeliveryDate(), po.getTemplateId(), po.getStatus(),
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
                 po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
@@ -318,12 +318,21 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getBuyerCompanyCode(), po.getBuyerAddress(), po.getPostCode(),
                 po.getBuyerPhone(), po.getFax(),
                 po.getOriginalAmount(), po.getDiscountedAmount(),
-                po.getContractAmount(), po.getContractDate(), po.getDeliveryDate(), po.getStatus(),
+                po.getContractAmount(), po.getContractDate(), po.getDeliveryDate(), po.getTemplateId(), po.getStatus(),
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
                 po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
                 items
         ));
+    }
+
+    @Override
+    public Optional<String> findLatestItemPicUrlBySku(String sku) {
+        if (sku == null || sku.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(itemMapper.selectLatestPicUrlBySku(sku))
+                .filter(value -> !value.isBlank());
     }
 
     /**
@@ -340,7 +349,7 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getBuyerCompanyCode(), po.getBuyerAddress(), po.getPostCode(),
                 po.getBuyerPhone(), po.getFax(),
                 po.getOriginalAmount(), po.getDiscountedAmount(),
-                po.getContractAmount(), po.getContractDate(), po.getDeliveryDate(), po.getStatus(),
+                po.getContractAmount(), po.getContractDate(), po.getDeliveryDate(), po.getTemplateId(), po.getStatus(),
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
                 po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),

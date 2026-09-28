@@ -71,7 +71,7 @@ public class PoiContractTemplateService implements ContractTemplateService {
         try {
             // 1. 根据合同类型查询默认模板
             log.info("步骤1：查询默认合同模板 - contractType={}", contract.getContractType());
-            ContractTemplatePO template = contractTemplateMapper.findPage(
+            ContractTemplatePO fallbackTemplate = contractTemplateMapper.findPage(
                     null,  // keyword
                     contract.getContractType(),  // contractType（已经是Integer类型）
                     1,     // isActive=1
@@ -85,6 +85,8 @@ public class PoiContractTemplateService implements ContractTemplateService {
                      "未找到合同类型对应的默认模板：" + contract.getContractType()));
 
             log.info("步骤1完成 - 找到默认模板：");
+            // 合同一经创建即固定关联模板；填充时必须使用该 template_id，不能被后续默认模板变更影响。
+            ContractTemplatePO template = resolveTemplateForContract(contract);
             log.info("  - 模板ID: {}", template.getId());
             log.info("  - 模板名称: {}", template.getTemplateName());
             log.info("  - S3对象键: {}", template.getObjectKey());
@@ -361,6 +363,30 @@ public class PoiContractTemplateService implements ContractTemplateService {
             log.error("合同模板填充失败：contractNo={}", contract.getContractNo(), ex);
             throw new BusinessException(ResultCode.CONTRACT_TEMPLATE_FILL_FAILED);
         }
+    }
+
+    /**
+     * 合同创建时已经确定 template_id。填充、重新生成、下载都必须沿用这一模板，
+     * 避免同类型默认模板被调整后，历史合同的版式被意外替换。
+     */
+    private ContractTemplatePO resolveTemplateForContract(Contract contract) {
+        if (contract.getTemplateId() == null) {
+            return contractTemplateMapper.findPage(null, contract.getContractType(), 1, true, 0, 1).stream()
+                    .findFirst()
+                    .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
+                            "未找到合同类型对应的启用默认模板：" + contract.getContractType()));
+        }
+
+        ContractTemplatePO template = contractTemplateMapper.findById(contract.getTemplateId())
+                .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
+                        "合同关联模板不存在或已删除：templateId=" + contract.getTemplateId()));
+        if (!java.util.Objects.equals(template.getContractType(), contract.getContractType())
+                || !Integer.valueOf(1).equals(template.getIsDefault())
+                || !Integer.valueOf(1).equals(template.getIsActive())) {
+            throw new BusinessException(ResultCode.PARAM_ERROR,
+                    "合同关联模板不符合当前合同类型的启用默认模板要求：templateId=" + contract.getTemplateId());
+        }
+        return template;
     }
 
     private String settlementText(Contract contract) {

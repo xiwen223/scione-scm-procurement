@@ -29,6 +29,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -262,24 +263,40 @@ public class FadadaOpenApiClient {
         body.put("autoStart", true);
         body.put("autoFillFinalize", true);
         body.put("signInOrder", true);
+        boolean needsCrossPageSeal = request.fileTotalPages() != null && request.fileTotalPages() > 1;
+        List<Map<String, Object>> docFields = new ArrayList<>();
+        docFields.add(sealField("buyer-seal", "需方\n单位（盖章）"));
+        docFields.add(sealField("supplier-seal", "供方\n单位（盖章）"));
+        // 签订日期由最后签署的供方完成签署时写入，避免对已签 PDF 做二次修改而破坏验签。
+        docFields.add(dateSignField("supplier-sign-date", "签订日期："));
+        if (needsCrossPageSeal) {
+            docFields.add(crossPageSealField("buyer-cross-page-seal"));
+            docFields.add(crossPageSealField("supplier-cross-page-seal"));
+        }
         body.put("docs", List.of(Map.of(
                 "docId", "contract-doc",
                 "docName", requireText(request.taskName(), "taskName"),
                 "docFileId", requireText(request.fileId(), "fileId"),
-                "docFields", List.of(
-                        sealField("buyer-seal", "需方\n单位（盖章）"),
-                        sealField("supplier-seal", "供方\n单位（盖章）")))));
+                "docFields", docFields)));
+
+        List<Map<String, Object>> buyerSignFields = new ArrayList<>();
+        buyerSignFields.add(signField("buyer-seal", request.buyerSealId()));
+        if (needsCrossPageSeal) buyerSignFields.add(signField("buyer-cross-page-seal", request.buyerSealId()));
+        List<Map<String, Object>> supplierSignFields = new ArrayList<>();
+        supplierSignFields.add(signField("supplier-seal", null));
+        supplierSignFields.add(signField("supplier-sign-date", null));
+        if (needsCrossPageSeal) supplierSignFields.add(signField("supplier-cross-page-seal", null));
         body.put("actors", List.of(
                 Map.of("actor", buyerActor,
-                        "signFields", List.of(signField("buyer-seal", request.buyerSealId())),
+                        "signFields", buyerSignFields,
                         // 免验证签必须在参与方签署配置中显式开启；任务顶层 businessId 提供场景码。
                         "signConfigInfo", Map.of("orderNo", 1, "resizeSeal", true, "requestVerifyFree", true)),
                 Map.of("actor", supplierActor,
-                        "signFields", List.of(signField("supplier-seal", null)),
+                        "signFields", supplierSignFields,
                         "signConfigInfo", Map.of("orderNo", 2, "resizeSeal", true))));
         putIfNotBlank(body, "notifyUrl", request.notifyUrl());
-        log.info("调用法大大创建签署任务：businessNo={}, autoStart=true, signInOrder=true, buyerOrder=1, supplierOrder=2, buyerFieldType=corp_seal, supplierFieldType=corp_seal, notifyUrlPresent={}",
-                request.businessNo(), !isBlank(request.notifyUrl()));
+        log.info("调用法大大创建签署任务：businessNo={}, pages={}, crossPageSealEnabled={}, autoStart=true, signInOrder=true, buyerOrder=1, supplierOrder=2, notifyUrlPresent={}",
+                request.businessNo(), request.fileTotalPages(), needsCrossPageSeal, !isBlank(request.notifyUrl()));
         JsonNode data = businessPost(CREATE_SIGN_TASK_PATH, body, false).path("data");
         String signTaskId = requiredText(data, "signTaskId", "创建签署任务失败");
         log.info("法大大签署任务创建响应成功：businessNo={}, signTaskId={}", request.businessNo(), signTaskId);
@@ -292,6 +309,21 @@ public class FadadaOpenApiClient {
                 "moveable", false,
                 "position", Map.of("positionMode", "keyword", "positionKeyword", keyword,
                         "keywordOffsetX", 0, "keywordOffsetY", 0));
+    }
+
+    /** 企业骑缝章仅需纵向坐标；0 表示采用法大大默认的页面边缘纵向定位。 */
+    private Map<String, Object> crossPageSealField(String fieldId) {
+        return Map.of("fieldId", fieldId, "fieldName", fieldId, "fieldType", "corp_seal_cross_page",
+                "moveable", false,
+                "position", Map.of("positionMode", "pixel", "positionY", "0"));
+    }
+
+    /** 签署日期控件，关键字定位在模板“签订日期：”标签右侧。 */
+    private Map<String, Object> dateSignField(String fieldId, String keyword) {
+        return Map.of("fieldId", fieldId, "fieldName", fieldId, "fieldType", "date_sign",
+                "moveable", false,
+                "position", Map.of("positionMode", "keyword", "positionKeyword", keyword,
+                        "keywordOffsetX", 70, "keywordOffsetY", 0));
     }
 
     private Map<String, Object> signField(String fieldId, String sealId) {
@@ -747,7 +779,7 @@ public class FadadaOpenApiClient {
     public record PurchaseContractTaskRequest(
             String taskName, String fileId, String businessNo, String notifyUrl,
             String buyerName, String buyerCreditCode, String buyerOpenCorpId, String buyerSealId, String freeSignBusinessId,
-            String supplierName, String supplierCreditCode, String supplierPhone) {
+            String supplierName, String supplierCreditCode, String supplierPhone, Integer fileTotalPages) {
     }
 
     public record ActorSignUrl(

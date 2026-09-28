@@ -80,7 +80,7 @@
 
     <update id="markExecuting">
         UPDATE contract
-        SET status = 3, sign_complete_time = NOW(), update_time = NOW()
+        SET status = 3, contract_date = CURDATE(), sign_complete_time = NOW(), update_time = NOW()
         WHERE id = #{id} AND status = 2 AND is_deleted = 0
     </update>
     <update id="markCompleted">
@@ -148,6 +148,12 @@
         SET contract_name = #{contractName},
             supplier_name = #{supplierName},
             supplier_phone = #{supplierPhone},
+            supplier_credit_code = #{supplierCreditCode},
+            supplier_account_name = #{supplierAccountName},
+            supplier_bank_name = #{supplierBankName},
+            supplier_bank_account = #{supplierBankAccount},
+            prepay_percent = #{prepayPercent},
+            settlement_method = #{settlementMethod},
             supplier_address = #{supplierAddress},
             contact_person = #{contactPerson},
             buyer_company_name = #{buyerCompanyName},

@@ -2,8 +2,12 @@ package com.scione.scm.bill.application;
 
 import com.scione.scm.bill.application.dto.*;
 import com.scione.scm.bill.application.port.ContractFileStore;
+import com.scione.scm.bill.application.port.ContractPdfConverter;
+import com.scione.scm.bill.application.port.ContractTemplateService;
+import com.scione.scm.bill.application.port.LingxingProductClient;
 import com.scione.scm.bill.config.FadadaOpenApiProperties;
 import com.scione.scm.bill.domain.contract.Contract;
+import com.scione.scm.bill.domain.contract.ContractItem;
 import com.scione.scm.bill.domain.contract.ContractPage;
 import com.scione.scm.bill.domain.contract.ContractRepository;
 import com.scione.scm.bill.domain.contract.ContractStatus;
@@ -11,6 +15,7 @@ import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.zip.ZipEntry;
@@ -35,8 +40,11 @@ public class ContractQueryService {
 
     private final ContractRepository contractRepository;
     private final ContractFileStore contractFileStore;
+    private final ContractTemplateService contractTemplateService;
+    private final ContractPdfConverter contractPdfConverter;
     private final FadadaOpenApiClient fadadaOpenApiClient;
     private final FadadaOpenApiProperties fadadaOpenApiProperties;
+    private final LingxingProductClient lingxingProductClient;
 
     /**
      * 分页查询合同列表。
@@ -70,10 +78,50 @@ public class ContractQueryService {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new RuntimeException("合同不存在：contractId=" + contractId));
 
+        fillMissingItemImages(contract);
         ContractDetailResponse response = ContractDetailResponse.from(contract);
 
         log.info("查询合同详情成功：contractNo={}", contract.getContractNo());
         return response;
+    }
+
+    /**
+     * 新合同创建时会将领星商品图片保存到 contract_item。历史合同可能没有保存图片，
+     * 详情查询时按同一 SKU 查询逻辑补齐展示数据，不修改合同明细本身。
+     */
+    private void fillMissingItemImages(Contract contract) {
+        if (contract.getItems() == null || contract.getItems().isEmpty()) {
+            return;
+        }
+        int queried = 0;
+        int filled = 0;
+        for (ContractItem item : contract.getItems()) {
+            if (StringUtils.hasText(item.getPicUrl()) || !StringUtils.hasText(item.getSku())) {
+                continue;
+            }
+            queried++;
+            try {
+                var cachedPicUrl = contractRepository.findLatestItemPicUrlBySku(item.getSku());
+                if (cachedPicUrl.isPresent()) {
+                    item.setPicUrl(cachedPicUrl.get());
+                    filled++;
+                    continue;
+                }
+                var product = lingxingProductClient.findBySku(item.getSku());
+                if (product.isPresent() && StringUtils.hasText(product.get().picUrl())) {
+                    item.setPicUrl(product.get().picUrl());
+                    filled++;
+                }
+            } catch (Exception e) {
+                // 图片展示失败不影响合同详情主流程；下次查询仍会尝试补齐。
+                log.warn("合同明细图片查询失败：contractNo={}, sku={}",
+                        contract.getContractNo(), item.getSku(), e);
+            }
+        }
+        if (queried > 0) {
+            log.info("合同详情明细图片补齐完成：contractNo={}, queried={}, filled={}",
+                    contract.getContractNo(), queried, filled);
+        }
     }
 
     /**
@@ -89,10 +137,13 @@ public class ContractQueryService {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new RuntimeException("合同不存在：contractId=" + contractId));
 
-        // 根据类型选择 URL
-        String fileUrl = "signed".equals(type)
-                ? getSignedPdfUrl(contract)
-                : getOriginalPdfUrl(contract);
+        // 原始合同按当前数据库数据即时生成，确保反复修改折扣后下载到的是最新金额。
+        if (!"signed".equals(type)) {
+            byte[] latestPdf = generateLatestContractPdf(contract, "下载原始合同");
+            return new DownloadResult(latestPdf, contract.getContractNo() + ".pdf");
+        }
+
+        String fileUrl = getSignedPdfUrl(contract);
 
         if (fileUrl == null || fileUrl.isEmpty()) {
             throw new RuntimeException("合同文件不存在：type=" + type);
@@ -108,6 +159,25 @@ public class ContractQueryService {
                 contract.getContractNo(), fileName, fileBytes.length);
 
         return new DownloadResult(fileBytes, fileName);
+    }
+
+    private byte[] generateLatestContractPdf(Contract contract, String scene) throws IOException {
+        try {
+            log.info("{}：开始按当前合同数据生成文件：contractNo={}, 原价={}, 折扣={}, 实际金额={}",
+                    scene, contract.getContractNo(), contract.getOriginalAmount(),
+                    contract.getDiscountedAmount(), contract.getContractAmount());
+            byte[] pdfBytes = contractPdfConverter.convert(contractTemplateService.fillTemplate(contract),
+                    contract.getContractNo());
+            String fileUrl = contractFileStore.store(contract.getContractNo(), pdfBytes, "pdf");
+            contractRepository.updatePdfUrl(contract.getId(), fileUrl);
+            contract.setContractPdfUrl(fileUrl);
+            log.info("{}：最新合同文件已生成：contractNo={}, fileUrl={}, bytes={}",
+                    scene, contract.getContractNo(), fileUrl, pdfBytes.length);
+            return pdfBytes;
+        } catch (Exception ex) {
+            log.error("{}：生成最新合同文件失败：contractNo={}", scene, contract.getContractNo(), ex);
+            throw new IOException("生成最新合同文件失败", ex);
+        }
     }
 
     /**
@@ -198,18 +268,15 @@ public class ContractQueryService {
             long totalBytes = 0;
 
             for (Contract contract : contracts) {
-                // 优先下载已签署PDF，如果没有则下载原始文件
-                String fileUrl = contract.getSignedPdfUrl() != null
-                        ? contract.getSignedPdfUrl()
-                        : contract.getContractPdfUrl();
-
-                if (fileUrl == null) {
-                    log.warn("合同文件不存在，跳过: contractNo={}", contract.getContractNo());
-                    continue;
+                // 已签署合同使用签署完成文件；未签署合同按当前数据即时生成，避免下载到旧折扣。
+                String fileUrl = contract.getSignedPdfUrl();
+                byte[] fileBytes;
+                if (StringUtils.hasText(fileUrl)) {
+                    fileBytes = contractFileStore.download(fileUrl);
+                } else {
+                    fileBytes = generateLatestContractPdf(contract, "批量下载原始合同");
+                    fileUrl = contract.getContractPdfUrl();
                 }
-
-                // 下载文件
-                byte[] fileBytes = contractFileStore.download(fileUrl);
                 totalBytes += fileBytes.length;
 
                 // 检查总大小限制
@@ -219,7 +286,7 @@ public class ContractQueryService {
                 }
 
                 // 生成唯一文件名：合同编号.pdf
-                String extension = fileUrl.endsWith(".xlsx") ? ".xlsx" : ".pdf";
+                String extension = fileUrl != null && fileUrl.endsWith(".xlsx") ? ".xlsx" : ".pdf";
                 String fileName = uniqueFileName(contract.getContractNo() + extension, fileNames);
 
                 // 写入ZIP

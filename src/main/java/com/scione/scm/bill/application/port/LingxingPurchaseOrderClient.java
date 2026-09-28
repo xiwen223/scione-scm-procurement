@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 领星采购单列表实时查询端口。
@@ -21,6 +22,9 @@ public interface LingxingPurchaseOrderClient {
      * @return 采购单单头（含明细）列表；无数据返回空列表
      */
     List<PurchaseOrderData> fetchPurchaseOrders(LocalDateTime startTime, LocalDateTime endTime, String searchFieldTime);
+
+    /** 通过领星 purchaseOrderList 的 order_sn 精确筛选，实时查询单个采购单。 */
+    Optional<PurchaseOrderData> findByOrderNo(String orderNo);
 
     /** 采购单单头（对应领星 data[]）。 */
     record PurchaseOrderData(
@@ -65,6 +69,7 @@ public interface LingxingPurchaseOrderClient {
             String warehouseName,
             LocalDate expectArriveTime,
             String remark,
-            String attributeJson) {
+            String attributeJson,
+            String picUrl) {
     }
 }

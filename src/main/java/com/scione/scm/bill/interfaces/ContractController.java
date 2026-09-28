@@ -44,6 +44,7 @@ public class ContractController {
     private final com.scione.scm.bill.application.PoSyncAppService poSyncAppService;
     private final com.scione.scm.bill.application.ContractUpdateService contractUpdateService;
     private final com.scione.scm.bill.application.ContractSignAppService contractSignAppService;
+    private final com.scione.scm.bill.application.ContractLingxingSyncService contractLingxingSyncService;
 
     @PostMapping("/auto-create/trigger")
     @Operation(summary = "手动触发合同自动创建",
@@ -158,6 +159,58 @@ public class ContractController {
         } catch (RuntimeException ex) {
             log.error("修改合同失败：contractId={}", contractId, ex);
             return ApiResponse.fail(500, ex.getMessage());
+        }
+    }
+
+    @PutMapping("/{contractId}/items/{itemId}")
+    @Operation(summary = "修改合同明细", description = "仅创建状态合同可修改；修改后自动重算原价、折扣后金额并重新生成合同文件")
+    public ApiResponse<com.scione.scm.bill.application.dto.ContractUpdateResponse> updateContractItem(
+            @PathVariable Long contractId,
+            @PathVariable Long itemId,
+            @RequestBody @Validated com.scione.scm.bill.application.dto.ContractItemUpdateRequest request,
+            @RequestHeader("X-User-Email") String userEmail) {
+        try {
+            return ApiResponse.success(contractUpdateService.updateContractItem(contractId, itemId, request, userEmail));
+        } catch (RuntimeException ex) {
+            log.error("修改合同明细失败：contractId={}, itemId={}", contractId, itemId, ex);
+            return ApiResponse.fail(500, ex.getMessage());
+        }
+    }
+
+    @PostMapping("/{contractId}/lingxing-sync/compare")
+    @Operation(summary = "查询合同与领星字段差异", description = "返回逐字段差异，前端决定哪些字段应用")
+    public ApiResponse<com.scione.scm.bill.application.dto.ContractLingxingSyncDTO.CompareResponse> compareLingxingData(
+            @PathVariable Long contractId) {
+        try {
+            return ApiResponse.success(contractLingxingSyncService.compare(contractId));
+        } catch (com.scione.scm.bill.common.BusinessException ex) {
+            return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
+        }
+    }
+
+    @PostMapping("/{contractId}/lingxing-sync/apply")
+    @Operation(summary = "按选择字段同步领星数据", description = "仅更新 selectedFieldKeys 指定字段，不覆盖未选择字段")
+    public ApiResponse<com.scione.scm.bill.application.dto.ContractLingxingSyncDTO.ApplyResponse> applyLingxingData(
+            @PathVariable Long contractId,
+            @RequestBody com.scione.scm.bill.application.dto.ContractLingxingSyncDTO.ApplyRequest request,
+            @RequestHeader("X-User-Email") String userEmail) {
+        try {
+            return ApiResponse.success(contractLingxingSyncService.apply(contractId, request, userEmail));
+        } catch (com.scione.scm.bill.common.BusinessException ex) {
+            return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
+        }
+    }
+
+    @PostMapping("/{contractId}/lingxing-sync/proceed-with-differences")
+    @Operation(summary = "确认领星差异后继续签署", description = "仅记录当前比对结果的完整差异日志，不修改合同数据")
+    public ApiResponse<Void> proceedWithLingxingDifferences(
+            @PathVariable Long contractId,
+            @RequestHeader("X-User-Email") String userEmail) {
+        try {
+            contractLingxingSyncService.recordProceedWithoutSync(contractId, userEmail);
+            return ApiResponse.success(null);
+        } catch (com.scione.scm.bill.common.BusinessException ex) {
+            return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
         }
     }
 

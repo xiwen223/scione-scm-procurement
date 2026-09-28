@@ -172,6 +172,7 @@ public class PoSyncAppService {
         po.setExpectArriveTime(item.expectArriveTime());
         po.setRemark(item.remark());
         po.setAttributeJson(item.attributeJson());
+        po.setPicUrl(item.picUrl());
         po.setSyncTime(syncTime);
         return po;
     }

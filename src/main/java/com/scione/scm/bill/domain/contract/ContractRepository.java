@@ -64,6 +64,11 @@ public interface ContractRepository {
     Optional<Contract> findById(Long contractId);
 
     /**
+     * 按 SKU 复用历史合同明细已经保存的商品图片，避免重复请求领星商品接口。
+     */
+    Optional<String> findLatestItemPicUrlBySku(String sku);
+
+    /**
      * 更新合同（合同主表 + 明细）。
      *
      * @param contract 待更新的合同聚合（含明细）

@@ -135,7 +135,7 @@ public class Contract {
                                      String buyerCompanyCode, String buyerAddress, String postCode,
                                      String buyerPhone, String fax,
                                      BigDecimal originalAmount, BigDecimal discountedAmount,
-                                     BigDecimal contractAmount, LocalDate contractDate, LocalDate deliveryDate, Integer status,
+                                     BigDecimal contractAmount, LocalDate contractDate, LocalDate deliveryDate, Long templateId, Integer status,
                                      String creatorId, String creatorName, Integer createType,
                                      String contractPdfUrl, String signedPdfUrl, String fadadaTaskId,
                                      LocalDateTime signStartTime, LocalDateTime signCompleteTime,
@@ -171,6 +171,7 @@ public class Contract {
         c.contractAmount = contractAmount;
         c.contractDate = contractDate;
         c.deliveryDate = deliveryDate;
+        c.templateId = templateId;
         c.status = status == null ? ContractStatus.CREATED : ContractStatus.of(status);
         c.creatorId = creatorId;
         c.creatorName = creatorName;

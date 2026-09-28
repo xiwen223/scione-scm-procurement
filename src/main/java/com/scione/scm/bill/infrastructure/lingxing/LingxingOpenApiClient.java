@@ -271,7 +271,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         List<PurchaseOrderData> all = new ArrayList<>();
         int offset = 0;
         while (true) {
-            JsonNode response = callPurchaseOrderList(startTime, endTime, searchFieldTime, offset);
+            JsonNode response = callPurchaseOrderList(startTime, endTime, searchFieldTime, offset, null);
             JsonNode data = response == null ? null : response.get("data");
             if (data == null || !data.isArray() || data.isEmpty()) {
                 break;                       // 查不到就结束，不抛异常
@@ -288,9 +288,33 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         return all;
     }
 
+    @Override
+    public Optional<PurchaseOrderData> findByOrderNo(String orderNo) {
+        if (orderNo == null || orderNo.isBlank()) {
+            return Optional.empty();
+        }
+        ensureConfigured();
+        // order_sn 为精确筛选条件；时间范围仅满足领星列表接口的必传约束。
+        JsonNode response = callPurchaseOrderList(
+                LocalDateTime.of(2000, 1, 1, 0, 0), LocalDateTime.now(), "create_time", 0,
+                List.of(orderNo.trim()));
+        JsonNode data = response == null ? null : response.get("data");
+        if (data == null || !data.isArray()) {
+            return Optional.empty();
+        }
+        for (JsonNode order : data) {
+            PurchaseOrderData result = toPurchaseOrderData(order);
+            if (orderNo.trim().equals(result.orderSn())) {
+                return Optional.of(result);
+            }
+        }
+        return Optional.empty();
+    }
+
     /** 发一页请求：签名/query 拼接与 findBySku 一致，只是换了 path 和 body。 */
     private JsonNode callPurchaseOrderList(
-            LocalDateTime startTime, LocalDateTime endTime, String searchFieldTime, int offset) {
+            LocalDateTime startTime, LocalDateTime endTime, String searchFieldTime, int offset,
+            List<String> orderSns) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("start_date", startTime.format(LINGXING_DATE_TIME));
         body.put("end_date", endTime.format(LINGXING_DATE_TIME));
@@ -299,6 +323,9 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         }
         body.put("offset", offset);
         body.put("length", PURCHASE_ORDER_PAGE_SIZE);
+        if (orderSns != null && !orderSns.isEmpty()) {
+            body.put("order_sn", orderSns);
+        }
 
         String timestamp = Long.toString(Instant.now().getEpochSecond());
         String accessToken = accessToken();
@@ -394,7 +421,8 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
                 text(item, "ware_house_name"),
                 date(item, "expect_arrive_time"),
                 text(item, "remark"),
-                attributeJson(item));
+                attributeJson(item),
+                text(item, "pic_url"));
     }
 
     /** attribute 数组原文转 JSON 字符串存库；失败降级 null。 */

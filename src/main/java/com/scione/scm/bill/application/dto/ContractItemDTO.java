@@ -13,6 +13,7 @@ import java.time.LocalDate;
 @Data
 public class ContractItemDTO {
 
+    private Long id;
     private String sku;
     private String productName;
     private String specification;
@@ -26,9 +27,11 @@ public class ContractItemDTO {
 
     private String warehouseName;
     private String remark;
+    private String picUrl;
 
     public static ContractItemDTO from(ContractItem item) {
         ContractItemDTO dto = new ContractItemDTO();
+        dto.setId(item.getId());
         dto.setSku(item.getSku());
         dto.setProductName(item.getProductName());
         dto.setSpecification(item.getSpecification());
@@ -39,6 +42,7 @@ public class ContractItemDTO {
         dto.setDeliveryDate(item.getDeliveryDate());
         dto.setWarehouseName(item.getWarehouseName());
         dto.setRemark(item.getRemark());
+        dto.setPicUrl(item.getPicUrl());
         return dto;
     }
 }

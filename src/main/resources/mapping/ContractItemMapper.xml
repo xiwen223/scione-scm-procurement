@@ -25,12 +25,26 @@
         ORDER BY id
     </select>
 
+    <select id="selectLatestPicUrlBySku" resultType="string">
+        SELECT pic_url
+        FROM contract_item
+        WHERE sku = #{sku}
+          AND pic_url IS NOT NULL
+          AND pic_url != ''
+        ORDER BY id DESC
+        LIMIT 1
+    </select>
+
     <update id="updateById">
         UPDATE contract_item
-        SET quantity = #{quantity},
+        SET product_name = #{productName},
+            specification = #{specification},
+            quantity = #{quantity},
             unit_price = #{unitPrice},
             amount = #{amount},
             delivery_date = #{deliveryDate},
+            warehouse_name = #{warehouseName},
+            pic_url = #{picUrl},
             remark = #{remark}
         WHERE id = #{id}
     </update>

@@ -205,18 +205,19 @@ public class ContractAutoCreateService {
 
         // 填充 Excel 模板并上传到 S3
         try {
-            log.info("开始生成合同文件：contractNo={}", contractNo);
+            log.info("自动创建跳过即时合同文件生成：contractNo={}", contractNo);
 
             // 1. 直接根据合同数据生成 PDF，运行环境不依赖 Office/LibreOffice。
-            byte[] pdfBytes = contractPdfConverter.convert(contractTemplateService.fillTemplate(contract), contractNo);
+            byte[] pdfBytes = null;
 
             // 2. 上传到 S3，返回访问 URL
-            String fileUrl = contractFileStore.store(contractNo, pdfBytes, "pdf");
+            String fileUrl = null;
 
             // 3. 更新合同表的 contract_pdf_url 字段
-            contractRepository.updatePdfUrl(contractId, fileUrl);
+            // 合同文件延迟到下载或签署时生成，不在创建阶段写入文件地址。
 
-            log.info("合同文件生成成功：contractNo={}, url={}", contractNo, fileUrl);
+            log.info("自动创建已跳过合同文件生成，延迟到下载或签署：contractNo={}, contractId={}",
+                    contractNo, contractId);
 
         } catch (Exception ex) {
             // 文件生成失败不影响合同记录（已保存），只记录日志
@@ -301,18 +302,19 @@ public class ContractAutoCreateService {
         // 12. 填充 Excel 模板并上传到 S3
         String fileUrl = null;
         try {
-            log.info("开始生成合同文件：contractNo={}", contractNo);
+            log.info("手动创建跳过即时合同文件生成：contractNo={}", contractNo);
 
             // 直接根据合同数据生成 PDF，运行环境不依赖 Office/LibreOffice。
-            byte[] pdfBytes = contractPdfConverter.convert(contractTemplateService.fillTemplate(contract), contractNo);
+            // 合同文件延迟到下载或签署时生成。
 
             // 上传到 S3，返回访问 URL
-            fileUrl = contractFileStore.store(contractNo, pdfBytes, "pdf");
+            fileUrl = null;
 
             // 更新合同表的 contract_pdf_url 字段
-            contractRepository.updatePdfUrl(contractId, fileUrl);
+            // 合同文件延迟到下载或签署时生成，不在创建阶段写入文件地址。
 
-            log.info("合同文件生成成功：contractNo={}, url={}", contractNo, fileUrl);
+            log.info("手动创建已跳过合同文件生成，延迟到下载或签署：contractNo={}, contractId={}",
+                    contractNo, contractId);
 
         } catch (Exception ex) {
             // 文件生成失败不影响合同记录（已保存），只记录日志
@@ -490,17 +492,30 @@ public class ContractAutoCreateService {
                 return;
             }
 
+            int cacheHitCount = 0;
             int imageFoundCount = 0;
             int imageNotFoundCount = 0;
             int imageErrorCount = 0;
 
             // 为每个合同明细获取图片URL
             for (ContractItem contractItem : contractItems) {
+                if (StringUtils.hasText(contractItem.getPicUrl())) {
+                    cacheHitCount++;
+                    continue;
+                }
                 String sku = contractItem.getSku();
 
                 if (sku == null || sku.isBlank()) {
                     log.warn("合同明细SKU为空，跳过图片获取：contractNo={}", contract.getContractNo());
                     imageNotFoundCount++;
+                    continue;
+                }
+
+                Optional<String> cachedPicUrl = contractRepository.findLatestItemPicUrlBySku(sku);
+                if (cachedPicUrl.isPresent()) {
+                    contractItem.setPicUrl(cachedPicUrl.get());
+                    cacheHitCount++;
+                    log.debug("复用合同明细图片缓存：sku={}", sku);
                     continue;
                 }
 
@@ -535,8 +550,8 @@ public class ContractAutoCreateService {
                 }
             }
 
-            log.info("领星图片获取完成：contractNo={}, 成功={}, 未找到={}, 失败={}",
-                    contract.getContractNo(), imageFoundCount, imageNotFoundCount, imageErrorCount);
+            log.info("合同明细图片处理完成：contractNo={}, 本地缓存={}, 领星查询成功={}, 未找到={}, 失败={}",
+                    contract.getContractNo(), cacheHitCount, imageFoundCount, imageNotFoundCount, imageErrorCount);
 
         } catch (Exception ex) {
             // 整体失败也不影响合同创建

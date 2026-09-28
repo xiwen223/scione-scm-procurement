@@ -5,6 +5,7 @@ import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.application.dto.ContractCancelRequest;
 import com.scione.scm.bill.application.port.ContractFileStore;
 import com.scione.scm.bill.application.port.ContractPdfConverter;
+import com.scione.scm.bill.application.port.ContractTemplateService;
 import com.scione.scm.bill.application.port.LingxingSupplierClient;
 import com.scione.scm.bill.config.FadadaOpenApiProperties;
 import com.scione.scm.bill.domain.company.BuyerCompany;
@@ -25,7 +26,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -41,6 +41,7 @@ public class ContractSignAppService {
     private final LingxingSupplierClient lingxingSupplierClient;
     private final ContractFileStore contractFileStore;
     private final ContractPdfConverter contractPdfConverter;
+    private final ContractTemplateService contractTemplateService;
     private final FadadaOpenApiClient fadadaOpenApiClient;
     private final FadadaOpenApiProperties fadadaProperties;
 
@@ -52,9 +53,6 @@ public class ContractSignAppService {
             throw new BusinessException(ResultCode.PARAM_ERROR, "仅创建状态的合同可发起签署");
         }
         log.info("签署前合同状态校验通过：contractNo={}, status={}", contract.getContractNo(), contract.getStatus());
-        if (!StringUtils.hasText(contract.getContractPdfUrl())) {
-            throw new BusinessException(ResultCode.PARAM_ERROR, "合同签署文件未生成，无法发起签署");
-        }
         BuyerCompany buyer = buyerCompanyRepository.findById(contract.getBuyerCompanyId())
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同关联的需方公司不存在"));
         log.info("签署需方配置：contractNo={}, buyerCompanyId={}, buyerName={}, openCorpIdPresent={}, creditCodePresent={}, sealImagePresent={}, fadadaSealIdPresent={}, fadadaSealId={}, freeSignCodePresent={}, freeSignCode={}, freeSignExpireTime={}",
@@ -96,27 +94,9 @@ public class ContractSignAppService {
             return new StartSignResult(false, true, differences);
         }
 
-        byte[] fileBytes;
-        try {
-            log.info("开始下载待签署合同文件：contractNo={}, fileUrl={}", contract.getContractNo(), contract.getContractPdfUrl());
-            fileBytes = contractFileStore.download(contract.getContractPdfUrl());
-        } catch (IOException ex) {
-            log.error("待签署合同文件下载失败：contractNo={}, fileUrl={}", contract.getContractNo(), contract.getContractPdfUrl(), ex);
-            throw new BusinessException(ResultCode.SYSTEM_ERROR, "读取合同签署文件失败");
-        }
-        if (!isPdf(fileBytes)) {
-            log.info("历史合同为Excel，按合同数据重新生成PDF：contractNo={}", contract.getContractNo());
-            fileBytes = contractPdfConverter.convert(fileBytes, contract.getContractNo());
-            String pdfUrl;
-            try {
-                pdfUrl = contractFileStore.store(contract.getContractNo(), fileBytes, "pdf");
-            } catch (IOException ex) {
-                throw new BusinessException(ResultCode.SYSTEM_ERROR, "转换后的合同PDF上传失败");
-            }
-            contractRepository.updatePdfUrl(contractId, pdfUrl);
-            contract.setContractPdfUrl(pdfUrl);
-        }
-        log.info("已读取待签署PDF合同文件：contractNo={}, bytes={}", contract.getContractNo(), fileBytes.length);
+        // 签署前始终依据当前合同数据生成新文件，确保折扣等延迟保存的金额已进入法大大签署文档。
+        byte[] fileBytes = generateLatestContractPdfForSigning(contract);
+        log.info("签署前最新PDF合同已生成：contractNo={}, bytes={}", contract.getContractNo(), fileBytes.length);
         String fileName = contract.getContractNo() + ".pdf";
         log.info("开始向法大大申请上传地址：contractNo={}, fileName={}, fileType=doc", contract.getContractNo(), fileName);
         FadadaOpenApiClient.UploadUrl upload = fadadaOpenApiClient.getUploadUrl("doc");
@@ -136,7 +116,7 @@ public class ContractSignAppService {
                         "采购合同-" + contract.getContractNo(), file.fileId(), contract.getContractNo(),
                         fadadaProperties.getNotifyUrl(), buyer.getCompanyName(), buyer.getCreditCode(), buyer.getOpenCorpId(),
                         buyer.getFadadaSealId(), buyer.getFadadaFreeSignBusinessId(),
-                        contract.getSupplierName(), signingSupplierCreditCode, signingSupplierPhone));
+                        contract.getSupplierName(), signingSupplierCreditCode, signingSupplierPhone, file.fileTotalPages()));
         log.info("法大大双企业签署任务创建成功：contractNo={}, signTaskId={}", contract.getContractNo(), task.signTaskId());
         contractRepository.markSigning(contractId, task.signTaskId());
         log.info("合同状态已更新为签署中：contractNo={}, signTaskId={}", contract.getContractNo(), task.signTaskId());
@@ -196,9 +176,23 @@ public class ContractSignAppService {
         }
     }
 
-    private boolean isPdf(byte[] bytes) {
-        return bytes != null && bytes.length >= 4
-                && bytes[0] == '%' && bytes[1] == 'P' && bytes[2] == 'D' && bytes[3] == 'F';
+    private byte[] generateLatestContractPdfForSigning(Contract contract) {
+        try {
+            log.info("签署前生成最新合同文件：contractNo={}, 原价={}, 折扣={}, 实际金额={}",
+                    contract.getContractNo(), contract.getOriginalAmount(),
+                    contract.getDiscountedAmount(), contract.getContractAmount());
+            byte[] pdfBytes = contractPdfConverter.convert(contractTemplateService.fillTemplate(contract),
+                    contract.getContractNo());
+            String pdfUrl = contractFileStore.store(contract.getContractNo(), pdfBytes, "pdf");
+            contractRepository.updatePdfUrl(contract.getId(), pdfUrl);
+            contract.setContractPdfUrl(pdfUrl);
+            log.info("签署前最新合同文件已上传：contractNo={}, fileUrl={}, bytes={}",
+                    contract.getContractNo(), pdfUrl, pdfBytes.length);
+            return pdfBytes;
+        } catch (Exception ex) {
+            log.error("签署前生成最新合同文件失败：contractNo={}", contract.getContractNo(), ex);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "签署前生成最新合同文件失败");
+        }
     }
 
     public void cancel(Long contractId, ContractCancelRequest request, String operatorEmail) {
