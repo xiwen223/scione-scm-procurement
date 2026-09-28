@@ -46,6 +46,7 @@ public class ContractAutoCreateService {
     private final ContractSupplierWhitelistProperties supplierWhitelist;
     private final ContractCreationValidator contractCreationValidator;
     private final LingxingSupplierClient lingxingSupplierClient;
+    private final ContractCreateProgressTracker contractCreateProgressTracker;
 
     /**
      * 自动创建合同（为指定 PO 列表创建合同）。
@@ -248,12 +249,31 @@ public class ContractAutoCreateService {
     /**
      * 手动创建单个合同（指定采购单号）。
      *
-     * @param request 创建合同请求，包含采购单号
+     * <p>整个方法是同步的，慢在按 SKU 逐个查领星商品图，前端几十秒看不到任何反馈。
+     * 因此额外接收一个 {@code progressKey}：全程把「第几步 / 在做什么」写进
+     * {@link ContractCreateProgressTracker}，供前端并行轮询显示小字步骤提示。
+     * 该参数只影响展示，为 null（定时任务、老客户端）时所有进度写入都会静默跳过。
+     *
+     * @param request      创建合同请求，包含采购单号
+     * @param creatorEmail 操作人邮箱，写入创建人
+     * @param progressKey  前端生成的进度标识，可为 null
      * @return 创建结果（包含合同ID、合同编号、文件URL） 响应对象
      */
-    public ContractCreateResponse createContract(ContractCreateRequest request, String creatorEmail) {
+    public ContractCreateResponse createContract(ContractCreateRequest request, String creatorEmail, String progressKey) {
         String purchaseOrderNo = request.getPurchaseOrderNo();
-        log.info("手动创建合同开始：purchaseOrderNo={}", purchaseOrderNo);
+        log.info("手动创建合同开始：purchaseOrderNo={}, progressKeyPresent={}",
+                purchaseOrderNo, StringUtils.hasText(progressKey));
+        contractCreateProgressTracker.begin(progressKey, "正在校验采购单与需方公司信息");
+        try {
+            return doCreateContract(request, creatorEmail, progressKey);
+        } finally {
+            // 成功或失败都清掉，进度只是过程展示，不需要保留。
+            contractCreateProgressTracker.clear(progressKey);
+        }
+    }
+
+    private ContractCreateResponse doCreateContract(ContractCreateRequest request, String creatorEmail, String progressKey) {
+        String purchaseOrderNo = request.getPurchaseOrderNo();
         // 1. 不传需方公司时使用 priority=1；传入时使用页面下拉框选中的公司。
         BuyerCompany buyer = resolveManualBuyerCompany(request.getBuyerCompanyId());
 
@@ -274,6 +294,9 @@ public class ContractAutoCreateService {
             throw new RuntimeException("该采购单已存在合同（非取消状态）");
         }
 
+        contractCreateProgressTracker.advance(progressKey, ContractCreateProgressTracker.STEP_ASSEMBLE,
+                "正在根据采购单组装合同数据");
+
         // 5. 生成合同编号
         String contractNo = generateContractNo();
 
@@ -287,8 +310,11 @@ public class ContractAutoCreateService {
         // 7. 手动补充字段（覆盖领星和默认数据）
         applyManualOverrides(contract, request);
 
-        // 8. 从领星API获取并填充商品图片URL
-        enrichContractItemsWithImages(contract);
+        // 8. 从领星API获取并填充商品图片URL（最慢的一步，进度按 SKU 逐个上报）
+        enrichContractItemsWithImages(contract, progressKey);
+
+        contractCreateProgressTracker.advance(progressKey, ContractCreateProgressTracker.STEP_SAVE,
+                "正在校验必填字段并保存合同");
 
         // 9. 以最终合同数据做统一必填校验；签署时间允许为空。
         validateManualRequiredFields(contract);
@@ -300,6 +326,9 @@ public class ContractAutoCreateService {
         poSyncRepository.markContractCreated(purchaseOrderNo, contractId);
 
         log.info("合同创建成功：poNo={}, contractNo={}, contractId={}", purchaseOrderNo, contractNo, contractId);
+
+        contractCreateProgressTracker.advance(progressKey, ContractCreateProgressTracker.STEP_PDF,
+                "合同已保存，正在生成合同文件");
 
         // 12. 填充 Excel 模板并上传到 S3
         String fileUrl = null;
@@ -506,6 +535,17 @@ public class ContractAutoCreateService {
      * @param contract 合同聚合根
      */
     private void enrichContractItemsWithImages(Contract contract) {
+        enrichContractItemsWithImages(contract, null);
+    }
+
+    /**
+     * 从领星API获取商品图片并填充到合同明细中。
+     *
+     * <p>这里是创建合同最慢的一段（未命中缓存时每个 SKU 一次领星请求），
+     * 所以按明细逐条上报进度（{@code 正在获取商品图片（3/12）}），
+     * 让前端能看出是在推进而不是卡死。{@code progressKey} 为 null 时不上报。
+     */
+    private void enrichContractItemsWithImages(Contract contract, String progressKey) {
         String poNo = contract.getPurchaseOrderNo();
         log.info("开始从领星API获取商品图片：contractNo={}, poNo={}", contract.getContractNo(), poNo);
 
@@ -516,13 +556,17 @@ public class ContractAutoCreateService {
                 return;
             }
 
+            int total = contractItems.size();
             int cacheHitCount = 0;
             int imageFoundCount = 0;
             int imageNotFoundCount = 0;
             int imageErrorCount = 0;
 
             // 为每个合同明细获取图片URL
-            for (ContractItem contractItem : contractItems) {
+            for (int index = 0; index < total; index++) {
+                ContractItem contractItem = contractItems.get(index);
+                contractCreateProgressTracker.advance(progressKey, ContractCreateProgressTracker.STEP_IMAGES,
+                        "正在获取商品图片（" + (index + 1) + "/" + total + "）");
                 if (StringUtils.hasText(contractItem.getPicUrl())) {
                     cacheHitCount++;
                     continue;

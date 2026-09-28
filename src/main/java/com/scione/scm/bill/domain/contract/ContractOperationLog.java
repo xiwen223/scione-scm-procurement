@@ -16,6 +16,8 @@ public class ContractOperationLog {
     public static final String TYPE_CANCEL = "CANCEL";
     public static final String TYPE_STATUS_CHANGE = "STATUS_CHANGE";
     public static final String TYPE_SKIP_CREATE = "SKIP_CREATE";
+    /** 发起签署被前置校验拦截（如我司未配置免验证签场景码），合同状态保持不变、未调用法大大。 */
+    public static final String TYPE_START_SIGN_BLOCKED = "START_SIGN_BLOCKED";
 
     private Long id;
     private Long contractId;
@@ -103,6 +105,25 @@ public class ContractOperationLog {
         log.operationDetails = "合同状态：创建 → 签署中；法大大任务ID=" + taskId
                 + "；我方免验证自动盖章；已向供应商发送签署短信"
                 + (consistencyDetails == null || consistencyDetails.isBlank() ? "" : "；" + consistencyDetails);
+        return log;
+    }
+
+    /**
+     * 构建一条「发起签署被拦截」日志。
+     * 前置校验（如需方公司未配置免验证签场景码）不通过时调用：合同仍是创建状态，未向法大大发起任何请求。
+     */
+    public static ContractOperationLog ofStartSignBlocked(Long contractId, String contractNo,
+                                                          String operatorId, String operatorName,
+                                                          String reason) {
+        ContractOperationLog log = new ContractOperationLog();
+        log.contractId = contractId;
+        log.contractNo = contractNo;
+        log.operatorId = operatorId;
+        log.operatorName = operatorName;
+        log.operationType = TYPE_START_SIGN_BLOCKED;
+        log.operationDesc = "发起合同签署被拦截";
+        log.operationDetails = "合同状态保持「创建」，未调用法大大；拦截原因="
+                + (reason == null || reason.isBlank() ? "未提供" : reason);
         return log;
     }
 

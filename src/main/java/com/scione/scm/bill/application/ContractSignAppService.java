@@ -61,6 +61,9 @@ public class ContractSignAppService {
                 StringUtils.hasText(buyer.getCreditCode()),
                 StringUtils.hasText(buyer.getSealUrl()), StringUtils.hasText(buyer.getFadadaSealId()), mask(buyer.getFadadaSealId()),
                 StringUtils.hasText(buyer.getFadadaFreeSignBusinessId()), mask(buyer.getFadadaFreeSignBusinessId()), buyer.getFadadaFreeSignExpireTime());
+        // 免验证签场景码是法大大建任务的必填项：缺失/过期时必须在任何外部调用之前拦下来，
+        // 否则后续领星复核、PDF 生成、文件上传都会白跑一遍，最后仍以法大大报错收场。
+        assertFreeSignBusinessIdConfigured(contract, buyer, operatorEmail);
         boolean manualContract = contract.getCreateType() != null
                 && contract.getCreateType() == Contract.CREATE_TYPE_MANUAL;
         PoSyncRecord latestPo = null;
@@ -321,6 +324,41 @@ public class ContractSignAppService {
 
     public record SignTaskSyncResult(Long contractId, String signTaskId, String signTaskStatus, boolean statusUpdated) { }
 
+    /**
+     * 发起签署的第一道闸门：校验 buyer_company.fadada_free_sign_business_id。
+     *
+     * <p>该字段是法大大创建签署任务（免验证签场景码）的必填项，没有值就一定发不起签署。
+     * 因此这里在**任何外部调用之前**直接拦截：写 error 日志 + 落一条合同操作日志，
+     * 再抛出带专用业务码 {@link ResultCode#CONTRACT_SIGN_FREE_SIGN_NOT_CONFIGURED} 的业务异常，
+     * 由接口层回给前端，前端据此弹出提醒弹窗，流程到此为止，不会去发起签署。
+     */
+    private void assertFreeSignBusinessIdConfigured(Contract contract, BuyerCompany buyer, String operatorEmail) {
+        String reason;
+        String userMessage;
+        if (!StringUtils.hasText(buyer.getFadadaFreeSignBusinessId())) {
+            reason = "需方公司[" + buyer.getCompanyName() + "(id=" + buyer.getId()
+                    + ")]未配置法大大免验证签场景码：buyer_company.fadada_free_sign_business_id 为空";
+            userMessage = "我司未配置免验证签场景码，无法发起签署。"
+                    + "请先在需方公司配置中完成法大大免验证签授权，配置完成后再重新发起签署。";
+        } else if (buyer.getFadadaFreeSignExpireTime() != null
+                && !buyer.getFadadaFreeSignExpireTime().isAfter(LocalDateTime.now())) {
+            reason = "需方公司[" + buyer.getCompanyName() + "(id=" + buyer.getId()
+                    + ")]免验证签场景码已过期：fadada_free_sign_expire_time=" + buyer.getFadadaFreeSignExpireTime();
+            userMessage = "我司免验证签场景码已过期，无法发起签署。"
+                    + "请重新完成法大大免验证签授权，授权完成后再重新发起签署。";
+        } else {
+            return;
+        }
+        log.error("发起签署被拦截：{}；contractId={}, contractNo={}, buyerCompanyId={}, forceSignSkipped=true",
+                reason, contract.getId(), contract.getContractNo(), buyer.getId());
+        String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
+        contractRepository.saveOperationLog(ContractOperationLog.ofStartSignBlocked(
+                contract.getId(), contract.getContractNo(), operator, operator, reason));
+        log.info("发起签署拦截日志已写入：contractId={}, contractNo={}, operationType={}",
+                contract.getId(), contract.getContractNo(), ContractOperationLog.TYPE_START_SIGN_BLOCKED);
+        throw new BusinessException(ResultCode.CONTRACT_SIGN_FREE_SIGN_NOT_CONFIGURED, userMessage);
+    }
+
     private void validateSigningData(Contract contract, BuyerCompany buyer, String latestSupplierPhone,
                                      String latestSupplierCreditCode) {
         log.info("签署参数校验：contractNo={}, openCorpIdPresent={}, sealImagePresent={}, fadadaSealIdPresent={}, freeSignCodePresent={}, freeSignExpireTime={}, supplierCreditCodePresent={}, supplierPhonePresent={}",
@@ -339,15 +377,8 @@ public class ContractSignAppService {
             log.warn("签署参数校验失败：法大大印章ID缺失，contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
             throw new BusinessException(ResultCode.PARAM_ERROR, "我司法大大印章未审核完成");
         }
-        if (!StringUtils.hasText(buyer.getFadadaFreeSignBusinessId())) {
-            log.warn("签署参数校验失败：免验证签场景码缺失，contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
-            throw new BusinessException(ResultCode.PARAM_ERROR, "我司未配置免验证签场景码");
-        }
-        if (buyer.getFadadaFreeSignExpireTime() != null
-                && !buyer.getFadadaFreeSignExpireTime().isAfter(LocalDateTime.now())) {
-            log.warn("签署参数校验失败：免验证签场景码已过期，contractNo={}, expireTime={}", contract.getContractNo(), buyer.getFadadaFreeSignExpireTime());
-            throw new BusinessException(ResultCode.PARAM_ERROR, "我司免验证签场景码已过期");
-        }
+        // 免验证签场景码的「缺失 / 过期」校验已提前到 assertFreeSignBusinessIdConfigured()，
+        // 这里不再重复，避免同一条拦截出现两种不同的提示。
         if (!StringUtils.hasText(latestSupplierCreditCode)
                 || !StringUtils.hasText(latestSupplierPhone)) {
             log.warn("签署参数校验失败：供方签署资料缺失，contractNo={}, creditCodePresent={}, phonePresent={}",

@@ -33,6 +33,11 @@ public enum ResultCode {
     CONTRACT_TEMPLATE_DEFAULT_REQUIRED(1013002, "系统必须保留一个启用的默认合同模板"),
     CONTRACT_TEMPLATE_DEFAULT_CANNOT_DELETE(1013003, "默认合同模板不可删除"),
     CONTRACT_TEMPLATE_IN_USE(1013004, "合同模板已被合同引用，不能删除"),
+    /**
+     * 需方公司未配置（或已过期）法大大免验证签场景码，发起签署前即被拦截。
+     * 前端按该业务码弹出阻断提示弹窗，而不是只给一条容易忽略的轻提示。
+     */
+    CONTRACT_SIGN_FREE_SIGN_NOT_CONFIGURED(1013005, "我司未配置免验证签场景码，无法发起签署"),
     STORAGE_API_ERROR(1014001, "文件存储服务调用失败"),
     PROCUREMENT_OPERATION_LOG_BUSINESS_TYPE_INVALID(1015001, "供应链操作日志业务类型无效"),
     CONTRACT_TEMPLATE_FILL_FAILED(1013001, "合同模板填充失败"),

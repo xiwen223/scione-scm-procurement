@@ -45,6 +45,7 @@ public class ContractController {
     private final com.scione.scm.bill.application.ContractUpdateService contractUpdateService;
     private final com.scione.scm.bill.application.ContractSignAppService contractSignAppService;
     private final com.scione.scm.bill.application.ContractLingxingSyncService contractLingxingSyncService;
+    private final com.scione.scm.bill.application.ContractCreateProgressTracker contractCreateProgressTracker;
 
     @PostMapping("/auto-create/trigger")
     @Operation(summary = "手动触发合同自动创建",
@@ -56,15 +57,16 @@ public class ContractController {
 
     @PostMapping("/create")
     @Operation(summary = "手动创建合同",
-            description = "指定采购单号创建合同，用于测试或补建合同")
+            description = "指定采购单号创建合同，用于测试或补建合同；可选 progressKey 用于配合 /create/progress 展示创建步骤")
     public ApiResponse<ContractCreateResponse> createContract(
             @RequestBody @Validated ContractCreateRequest request,
-            @RequestHeader("X-User-Email") String userEmail) {
+            @RequestHeader("X-User-Email") String userEmail,
+            @RequestParam(value = "progressKey", required = false) String progressKey) {
 
         log.info("手动创建合同请求：purchaseOrderNo={}", request.getPurchaseOrderNo());
 
         try {
-            ContractCreateResponse response = contractAutoCreateService.createContract(request, userEmail);
+            ContractCreateResponse response = contractAutoCreateService.createContract(request, userEmail, progressKey);
             return ApiResponse.success(response);
 
         } catch (com.scione.scm.bill.common.BusinessException ex) {
@@ -75,6 +77,18 @@ public class ContractController {
             log.error("手动创建合同失败：purchaseOrderNo={}", request.getPurchaseOrderNo(), ex);
             return ApiResponse.fail(500, ex.getMessage());
         }
+    }
+
+    /**
+     * 手动创建合同的进度查询。创建本身是同步长请求，前端拿不到中间状态，
+     * 因此由前端在发起创建时生成 progressKey，并行轮询这里显示「第几步 / 在做什么」。
+     * 查询不到（key 过期、后端多实例、创建已结束）时 data 为 null，前端退回通用文案，不影响创建。
+     */
+    @GetMapping("/create/progress")
+    @Operation(summary = "查询手动创建合同进度", description = "配合 POST /create 的 progressKey 使用，仅用于前端展示步骤小字")
+    public ApiResponse<com.scione.scm.bill.application.ContractCreateProgressTracker.Snapshot> createProgress(
+            @RequestParam("progressKey") String progressKey) {
+        return ApiResponse.success(contractCreateProgressTracker.find(progressKey).orElse(null));
     }
 
     @GetMapping
