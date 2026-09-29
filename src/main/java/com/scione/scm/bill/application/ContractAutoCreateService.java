@@ -6,6 +6,7 @@ import com.scione.scm.bill.application.port.ContractFileStore;
 import com.scione.scm.bill.application.port.ContractPdfConverter;
 import com.scione.scm.bill.application.port.ContractTemplateService;
 import com.scione.scm.bill.application.port.LingxingProductClient;
+import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
 import com.scione.scm.bill.application.port.LingxingSupplierClient;
 import com.scione.scm.bill.config.ContractSupplierWhitelistProperties;
 import com.scione.scm.bill.domain.company.BuyerCompany;
@@ -16,6 +17,8 @@ import com.scione.scm.bill.domain.contract.ContractOperationLog;
 import com.scione.scm.bill.domain.contract.ContractRepository;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
 import com.scione.scm.bill.domain.posync.PoSyncRepository;
+import com.scione.scm.bill.common.BusinessException;
+import com.scione.scm.bill.common.ResultCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -23,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
@@ -43,10 +47,32 @@ public class ContractAutoCreateService {
     private final ContractFileStore contractFileStore;
     private final ContractPdfConverter contractPdfConverter;
     private final LingxingProductClient lingxingProductClient;
+    private final LingxingPurchaseOrderClient lingxingPurchaseOrderClient;
     private final ContractSupplierWhitelistProperties supplierWhitelist;
     private final ContractCreationValidator contractCreationValidator;
     private final LingxingSupplierClient lingxingSupplierClient;
     private final ContractCreateProgressTracker contractCreateProgressTracker;
+
+    /** 创建前供页面提示使用；只查询状态，不创建合同。 */
+    public ManualPoStatus checkManualPoStatus(String purchaseOrderNo) {
+        if (!StringUtils.hasText(purchaseOrderNo)) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "采购单号不能为空");
+        }
+        String orderNo = purchaseOrderNo.trim();
+        Optional<PoSyncRecord> local = poSyncRepository.findByPurchaseOrderNo(orderNo);
+        if (local.isPresent()) {
+            PoSyncRecord po = local.get();
+            return new ManualPoStatus(po.getPoStatus(), po.getPoStatusText(),
+                    Integer.valueOf(1).equals(po.getPoStatus()));
+        }
+        LingxingPurchaseOrderClient.PurchaseOrderData po = lingxingPurchaseOrderClient.findByOrderNo(orderNo)
+                .orElseThrow(() -> new BusinessException(ResultCode.PARAM_ERROR,
+                        "本地和领星均未找到采购单：" + orderNo));
+        return new ManualPoStatus(po.status(), po.statusText(), Integer.valueOf(1).equals(po.status()));
+    }
+
+    public record ManualPoStatus(Integer status, String statusText, boolean pendingOrder) {
+    }
 
     /**
      * 自动创建合同（为指定 PO 列表创建合同）。
@@ -254,17 +280,24 @@ public class ContractAutoCreateService {
         // 1. 不传需方公司时使用 priority=1；传入时使用页面下拉框选中的公司。
         BuyerCompany buyer = resolveManualBuyerCompany(request.getBuyerCompanyId());
 
-        // 2. 查询指定的 PO（带明细）
+        // 2. 优先使用本地已同步的 PO；仅本地缺失时按单号从领星补查旧 PO。
         Optional<PoSyncRecord> poOpt = poSyncRepository.findByPurchaseOrderNo(purchaseOrderNo);
         if (poOpt.isEmpty()) {
-            throw new RuntimeException("采购单不存在：purchaseOrderNo=" + purchaseOrderNo);
+            LingxingPurchaseOrderClient.PurchaseOrderData order = lingxingPurchaseOrderClient
+                    .findByOrderNo(purchaseOrderNo)
+                    .orElseThrow(() -> new BusinessException(ResultCode.PARAM_ERROR,
+                            "本地和领星均未找到采购单：" + purchaseOrderNo));
+            poSyncRepository.save(PoSyncAppService.toRecord(order, LocalDateTime.now()));
+            poOpt = poSyncRepository.findByPurchaseOrderNo(purchaseOrderNo);
+        }
+        if (poOpt.isEmpty()) {
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "采购单补充同步后读取失败：" + purchaseOrderNo);
         }
         PoSyncRecord po = poOpt.get();
 
-        // 3. 校验 PO 状态
-        if (po.getPoStatus() == null || po.getPoStatus() != 1) {
-            throw new RuntimeException("采购单状态不是待下单（po_status != 1）：purchaseOrderNo=" + purchaseOrderNo);
-        }
+        // 3. 手动创建不受自动创建的“待下单”状态限制；保留实际状态便于排查。
+        log.info("手动创建采购单状态：purchaseOrderNo={}, poStatus={}, poStatusText={}",
+                purchaseOrderNo, po.getPoStatus(), po.getPoStatusText());
 
         // 4. 唯一性检查。手动字段将在合同组装后统一校验，允许补齐领星缺失数据。
         if (contractRepository.existsActiveByPurchaseOrderNo(purchaseOrderNo)) {

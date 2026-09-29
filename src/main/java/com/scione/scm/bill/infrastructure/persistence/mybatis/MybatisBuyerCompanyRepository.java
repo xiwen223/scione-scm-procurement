@@ -54,6 +54,7 @@ public class MybatisBuyerCompanyRepository implements BuyerCompanyRepository {
         domain.setIsActive(po.getIsActive());
         domain.setCreateTime(po.getCreateTime());
         domain.setUpdateTime(po.getUpdateTime());
+        domain.setEntityId(po.getEntityId());
         return domain;
     }
 }

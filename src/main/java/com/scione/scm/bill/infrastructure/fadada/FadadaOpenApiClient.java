@@ -236,6 +236,8 @@ public class FadadaOpenApiClient {
         // 指定企业印章时，法大大要求参与方同时指定该企业的 actorOpenId/actorFDDId。
         // 当前需方为本集成应用所属企业，复用应用配置的 openCorpId。
         buyerActor.put("actorOpenId", requireText(request.buyerOpenCorpId(), "buyerOpenCorpId"));
+        // 同一个 OpenCorpId 下的子公司需显式指定主体，否则法大大默认使用主企业。
+        putIfNotBlank(buyerActor, "actorEntityId", request.buyerEntityId());
         buyerActor.put("permissions", List.of("sign"));
         buyerActor.put("sendNotification", false);
 
@@ -258,6 +260,8 @@ public class FadadaOpenApiClient {
         body.put("signTaskSubject", requireText(request.taskName(), "taskName"));
         body.put("signDocType", "contract");
         body.put("initiator", Map.of("idType", "corp", "openId", configuredOpenCorpId()));
+        // 与签署方主体保持一致，避免子公司任务被统计到主企业名下。
+        putIfNotBlank(body, "initiatorEntityId", request.buyerEntityId());
         body.put("businessNo", requireText(request.businessNo(), "businessNo"));
         body.put("transReferenceId", requireText(request.businessNo(), "businessNo"));
         body.put("businessId", requireText(request.freeSignBusinessId(), "freeSignBusinessId"));
@@ -919,7 +923,7 @@ public class FadadaOpenApiClient {
 
     public record PurchaseContractTaskRequest(
             String taskName, String fileId, String businessNo, String notifyUrl,
-            String buyerName, String buyerCreditCode, String buyerOpenCorpId, String buyerSealId, String freeSignBusinessId,
+            String buyerName, String buyerCreditCode, String buyerOpenCorpId, String buyerEntityId, String buyerSealId, String freeSignBusinessId,
             String supplierName, String supplierCreditCode, String supplierPhone, Integer fileTotalPages) {
     }
 

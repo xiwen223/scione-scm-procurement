@@ -130,7 +130,7 @@ public class ContractSignAppService {
         FadadaOpenApiClient.SignTask task = fadadaOpenApiClient.createPurchaseContractTask(
                 new FadadaOpenApiClient.PurchaseContractTaskRequest(
                         "采购合同-" + contract.getContractNo(), file.fileId(), contract.getContractNo(),
-                        fadadaProperties.getNotifyUrl(), buyer.getCompanyName(), buyer.getCreditCode(), buyer.getOpenCorpId(),
+                        fadadaProperties.getNotifyUrl(), buyer.getCompanyName(), buyer.getCreditCode(), buyer.getOpenCorpId(), buyer.getEntityId(),
                         buyer.getFadadaSealId(), buyer.getFadadaFreeSignBusinessId(),
                         contract.getSupplierName(), signingSupplierCreditCode, signingSupplierPhone, file.fileTotalPages()));
         log.info("法大大双企业签署任务创建成功：contractNo={}, signTaskId={}", contract.getContractNo(), task.signTaskId());

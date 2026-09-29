@@ -68,6 +68,18 @@ public class ContractController {
         return ApiResponse.success(poSyncAppService.pullAndSync());
     }
 
+    /** 手动创建前检查 PO 状态；非待下单只提示，用户仍可继续创建。 */
+    @GetMapping("/manual/po-status")
+    @Operation(summary = "查询手动创建采购单状态")
+    public ApiResponse<ContractAutoCreateService.ManualPoStatus> checkManualPoStatus(
+            @RequestParam("purchaseOrderNo") String purchaseOrderNo) {
+        try {
+            return ApiResponse.success(contractAutoCreateService.checkManualPoStatus(purchaseOrderNo));
+        } catch (BusinessException ex) {
+            return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
+        }
+    }
+
     @PostMapping("/create")
     @Operation(summary = "手动创建合同",
             description = "指定采购单号创建合同，用于测试或补建合同；可选 progressKey 用于配合 /create/progress 展示创建步骤")

@@ -30,4 +30,5 @@ public class BuyerCompany {
     private Integer isActive;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
+    private String entityId;
 }

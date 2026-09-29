@@ -117,7 +117,7 @@ public class PoSyncAppService {
         return new SyncResult(result.total(), result.success(), result.failed(), contractResult);
     }
 
-    private PoSyncRecord toRecord(PurchaseOrderData order, LocalDateTime syncTime) {
+    static PoSyncRecord toRecord(PurchaseOrderData order, LocalDateTime syncTime) {
         PoSyncRecord record = new PoSyncRecord();
         record.setPurchaseOrderNo(order.orderSn());
         record.setCustomOrderSn(order.customOrderSn());
@@ -151,7 +151,7 @@ public class PoSyncAppService {
         return record;
     }
 
-    private PoSyncRecordItem toItem(String orderSn, PurchaseOrderItemData item, LocalDateTime syncTime) {
+    private static PoSyncRecordItem toItem(String orderSn, PurchaseOrderItemData item, LocalDateTime syncTime) {
         PoSyncRecordItem po = new PoSyncRecordItem();
         po.setPurchaseOrderNo(orderSn);
         po.setLxItemId(item.lxItemId());
