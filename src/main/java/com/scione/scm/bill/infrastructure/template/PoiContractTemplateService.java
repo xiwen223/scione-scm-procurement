@@ -71,19 +71,6 @@ public class PoiContractTemplateService implements ContractTemplateService {
         try {
             // 1. 根据合同类型查询默认模板
             log.info("步骤1：查询默认合同模板 - contractType={}", contract.getContractType());
-            ContractTemplatePO fallbackTemplate = contractTemplateMapper.findPage(
-                    null,  // keyword
-                    contract.getContractType(),  // contractType（已经是Integer类型）
-                    1,     // isActive=1
-                    true,  // defaultOnly=true
-                    0,     // offset
-                    1      // pageSize
-            ).stream()
-             .findFirst()
-             .orElseThrow(() -> new BusinessException(
-                     ResultCode.RESOURCE_NOT_FOUND,
-                     "未找到合同类型对应的默认模板：" + contract.getContractType()));
-
             log.info("步骤1完成 - 找到默认模板：");
             // 合同一经创建即固定关联模板；填充时必须使用该 template_id，不能被后续默认模板变更影响。
             ContractTemplatePO template = resolveTemplateForContract(contract);
@@ -114,7 +101,7 @@ public class PoiContractTemplateService implements ContractTemplateService {
 
             String presignedUrl = response.getData();
             log.info("步骤2完成 - 获取预签名URL成功");
-            log.info("  - URL长度:  字符", presignedUrl.length());
+            log.info("  - URL长度: {} 字符", presignedUrl.length());
             log.info("  - URL前100字符: {}", presignedUrl.length() > 100 ? presignedUrl.substring(0, 100) + "..." : presignedUrl);
 
             // 3. 通过URL下载模板到内存
@@ -136,7 +123,7 @@ public class PoiContractTemplateService implements ContractTemplateService {
             }
 
             log.info("步骤3完成 - 模板下载成功");
-            log.info("  - 文件大小: {} 字节 ( KB)", templateBytes.length, templateBytes.length / 1024);
+            log.info("  - 文件大小: {} 字节 ({} KB)", templateBytes.length, templateBytes.length / 1024);
             log.info("  - 文件来源: S3存储 -> objectKey={}", template.getObjectKey());
 
             // 4. 用下载的模板创建Workbook

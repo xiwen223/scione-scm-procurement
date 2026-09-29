@@ -123,6 +123,10 @@ public class FadadaCallBackController {
             log.warn("法大大回调缺少签名或时间戳，已忽略：event={}", event);
             return false;
         }
+        if (isBlank(appId) || !appId.equals(fadadaOpenApiProperties.getAppId())) {
+            log.warn("法大大回调 AppId 不匹配，已忽略：event={}", event);
+            return false;
+        }
         if (!isBlank(signType) && !SIGN_TYPE.equalsIgnoreCase(signType)) {
             log.warn("法大大回调签名类型不支持，已忽略：signType={}", signType);
             return false;

@@ -2,35 +2,48 @@ package com.scione.scm.bill.interfaces;
 
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.ContractAutoCreateService;
-import com.scione.scm.bill.application.ContractAutoCreateService.AutoCreateResult;
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.tags.Tag;
-import lombok.RequiredArgsConstructor;
-import org.springframework.validation.annotation.Validated;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-import com.scione.scm.bill.application.ContractQueryService;
-import com.scione.scm.bill.application.ContractQueryService.PageResult;
+import com.scione.scm.bill.application.PoSyncAppService;
+import com.scione.scm.bill.application.ContractCreateProgressTracker;
+import com.scione.scm.bill.application.ContractLingxingSyncService;
+import com.scione.scm.bill.application.ContractSignAppService;
+import com.scione.scm.bill.application.ContractUpdateService;
+import com.scione.scm.bill.application.dto.ContractCancelRequest;
+import com.scione.scm.bill.application.dto.ContractCreateRequest;
+import com.scione.scm.bill.application.dto.ContractCreateResponse;
+import com.scione.scm.bill.application.dto.ContractBatchDownloadRequest;
 import com.scione.scm.bill.application.dto.ContractDetailResponse;
+import com.scione.scm.bill.application.dto.ContractItemUpdateRequest;
+import com.scione.scm.bill.application.dto.ContractLingxingSyncDTO;
 import com.scione.scm.bill.application.dto.ContractListItemResponse;
 import com.scione.scm.bill.application.dto.ContractListQueryRequest;
+import com.scione.scm.bill.application.dto.ContractUpdateRequest;
+import com.scione.scm.bill.application.dto.ContractUpdateResponse;
+import com.scione.scm.bill.common.BusinessException;
+import com.scione.scm.bill.common.ResultCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import com.scione.scm.bill.application.ContractQueryService;
+import com.scione.scm.bill.application.ContractQueryService.PageResult;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import java.net.URI;
-import org.springframework.validation.annotation.Validated;
-import org.springframework.web.bind.annotation.*;
-import com.scione.scm.bill.application.dto.ContractCreateRequest;
-import com.scione.scm.bill.application.dto.ContractCreateResponse;
 import lombok.extern.slf4j.Slf4j;
-import com.scione.scm.bill.application.dto.ContractBatchDownloadRequest;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 /**
- * 合同接口（手动触发合同自动创建，联调用；生产由 XXL-Job 定时触发）。
+ * 合同接口
  */
 @Slf4j
 @RestController
@@ -41,16 +54,16 @@ import com.scione.scm.bill.application.dto.ContractBatchDownloadRequest;
 public class ContractController {
     private final ContractQueryService contractQueryService;
     private final ContractAutoCreateService contractAutoCreateService;
-    private final com.scione.scm.bill.application.PoSyncAppService poSyncAppService;
-    private final com.scione.scm.bill.application.ContractUpdateService contractUpdateService;
-    private final com.scione.scm.bill.application.ContractSignAppService contractSignAppService;
-    private final com.scione.scm.bill.application.ContractLingxingSyncService contractLingxingSyncService;
-    private final com.scione.scm.bill.application.ContractCreateProgressTracker contractCreateProgressTracker;
+    private final PoSyncAppService poSyncAppService;
+    private final ContractUpdateService contractUpdateService;
+    private final ContractSignAppService contractSignAppService;
+    private final ContractLingxingSyncService contractLingxingSyncService;
+    private final ContractCreateProgressTracker contractCreateProgressTracker;
 
     @PostMapping("/auto-create/trigger")
     @Operation(summary = "手动触发合同自动创建",
             description = "扫描 po_status=1 且 has_contract=0 的 PO，自动生成合同")
-    public ApiResponse<com.scione.scm.bill.application.PoSyncAppService.SyncResult> triggerAutoCreate() {
+    public ApiResponse<PoSyncAppService.SyncResult> triggerAutoCreate() {
         // 与 5 分钟原生调度使用同一条链路：先从领星拉取，再仅处理本次状态=1 的 PO。
         return ApiResponse.success(poSyncAppService.pullAndSync());
     }
@@ -69,13 +82,13 @@ public class ContractController {
             ContractCreateResponse response = contractAutoCreateService.createContract(request, userEmail, progressKey);
             return ApiResponse.success(response);
 
-        } catch (com.scione.scm.bill.common.BusinessException ex) {
+        } catch (BusinessException ex) {
             log.warn("手动创建合同校验未通过：purchaseOrderNo={}, reason={}",
                     request.getPurchaseOrderNo(), ex.getMessage());
             return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
         } catch (RuntimeException ex) {
-            log.error("手动创建合同失败：purchaseOrderNo={}", request.getPurchaseOrderNo(), ex);
-            return ApiResponse.fail(500, ex.getMessage());
+            log.error("手动创建合同发生未处理异常：purchaseOrderNo={}", request.getPurchaseOrderNo(), ex);
+            return ApiResponse.fail(ResultCode.SYSTEM_ERROR.getCode(), ResultCode.SYSTEM_ERROR.getMessage());
         }
     }
 
@@ -86,7 +99,7 @@ public class ContractController {
      */
     @GetMapping("/create/progress")
     @Operation(summary = "查询手动创建合同进度", description = "配合 POST /create 的 progressKey 使用，仅用于前端展示步骤小字")
-    public ApiResponse<com.scione.scm.bill.application.ContractCreateProgressTracker.Snapshot> createProgress(
+    public ApiResponse<ContractCreateProgressTracker.Snapshot> createProgress(
             @RequestParam("progressKey") String progressKey) {
         return ApiResponse.success(contractCreateProgressTracker.find(progressKey).orElse(null));
     }
@@ -158,59 +171,60 @@ public class ContractController {
 
     @PutMapping("/{contractId}")
     @Operation(summary = "修改合同", description = "修改合同信息（只更新传入的字段）；仅更新数据库，下载或发起签署时才生成最新合同文件")
-    public ApiResponse<com.scione.scm.bill.application.dto.ContractUpdateResponse> updateContract(
+    public ApiResponse<ContractUpdateResponse> updateContract(
             @PathVariable Long contractId,
-            @RequestBody @Validated com.scione.scm.bill.application.dto.ContractUpdateRequest request,
+            @RequestBody @Validated ContractUpdateRequest request,
             @RequestHeader("X-User-Email") String userEmail) {
 
         log.info("修改合同请求：contractId={}", contractId);
 
         try {
-            com.scione.scm.bill.application.dto.ContractUpdateResponse response =
+            ContractUpdateResponse response =
                     contractUpdateService.updateContract(contractId, request, userEmail);
             return ApiResponse.success(response);
 
         } catch (RuntimeException ex) {
-            log.error("修改合同失败：contractId={}", contractId, ex);
-            return ApiResponse.fail(500, ex.getMessage());
+            log.error("修改合同发生未处理异常：contractId={}", contractId, ex);
+            return ApiResponse.fail(ResultCode.SYSTEM_ERROR.getCode(), ResultCode.SYSTEM_ERROR.getMessage());
         }
     }
 
     @PutMapping("/{contractId}/items/{itemId}")
     @Operation(summary = "修改合同明细", description = "仅创建状态合同可修改；修改后自动重算金额并只更新数据库，下载或发起签署时才生成最新合同文件")
-    public ApiResponse<com.scione.scm.bill.application.dto.ContractUpdateResponse> updateContractItem(
+    public ApiResponse<ContractUpdateResponse> updateContractItem(
             @PathVariable Long contractId,
             @PathVariable Long itemId,
-            @RequestBody @Validated com.scione.scm.bill.application.dto.ContractItemUpdateRequest request,
+            @RequestBody @Validated ContractItemUpdateRequest request,
             @RequestHeader("X-User-Email") String userEmail) {
         try {
             return ApiResponse.success(contractUpdateService.updateContractItem(contractId, itemId, request, userEmail));
         } catch (RuntimeException ex) {
             log.error("修改合同明细失败：contractId={}, itemId={}", contractId, itemId, ex);
-            return ApiResponse.fail(500, ex.getMessage());
+            log.error("修改合同明细发生未处理异常：contractId={}, itemId={}", contractId, itemId, ex);
+            return ApiResponse.fail(ResultCode.SYSTEM_ERROR.getCode(), ResultCode.SYSTEM_ERROR.getMessage());
         }
     }
 
     @PostMapping("/{contractId}/lingxing-sync/compare")
     @Operation(summary = "查询合同与领星字段差异", description = "返回逐字段差异，前端决定哪些字段应用")
-    public ApiResponse<com.scione.scm.bill.application.dto.ContractLingxingSyncDTO.CompareResponse> compareLingxingData(
+    public ApiResponse<ContractLingxingSyncDTO.CompareResponse> compareLingxingData(
             @PathVariable Long contractId) {
         try {
             return ApiResponse.success(contractLingxingSyncService.compare(contractId));
-        } catch (com.scione.scm.bill.common.BusinessException ex) {
+        } catch (BusinessException ex) {
             return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
         }
     }
 
     @PostMapping("/{contractId}/lingxing-sync/apply")
     @Operation(summary = "按选择字段同步领星数据", description = "仅更新 selectedFieldKeys 指定字段，不覆盖未选择字段")
-    public ApiResponse<com.scione.scm.bill.application.dto.ContractLingxingSyncDTO.ApplyResponse> applyLingxingData(
+    public ApiResponse<ContractLingxingSyncDTO.ApplyResponse> applyLingxingData(
             @PathVariable Long contractId,
-            @RequestBody com.scione.scm.bill.application.dto.ContractLingxingSyncDTO.ApplyRequest request,
+            @RequestBody ContractLingxingSyncDTO.ApplyRequest request,
             @RequestHeader("X-User-Email") String userEmail) {
         try {
             return ApiResponse.success(contractLingxingSyncService.apply(contractId, request, userEmail));
-        } catch (com.scione.scm.bill.common.BusinessException ex) {
+        } catch (BusinessException ex) {
             return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
         }
     }
@@ -223,7 +237,7 @@ public class ContractController {
         try {
             contractLingxingSyncService.recordProceedWithoutSync(contractId, userEmail);
             return ApiResponse.success(null);
-        } catch (com.scione.scm.bill.common.BusinessException ex) {
+        } catch (BusinessException ex) {
             return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
         }
     }
@@ -235,42 +249,42 @@ public class ContractController {
         try {
             contractSignAppService.urgeSign(contractId, userEmail);
             return ApiResponse.success(null);
-        } catch (com.scione.scm.bill.common.BusinessException ex) {
+        } catch (BusinessException ex) {
             return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
         }
     }
 
     @GetMapping("/{contractId}/sign-task-status")
     @Operation(summary = "查询法大大签署任务状态", description = "返回法大大任务及参与方当前签署状态，用于联调")
-    public ApiResponse<com.scione.scm.bill.application.ContractSignAppService.SignTaskStatusResult> getSignTaskStatus(@PathVariable Long contractId) {
+    public ApiResponse<ContractSignAppService.SignTaskStatusResult> getSignTaskStatus(@PathVariable Long contractId) {
         try {
             return ApiResponse.success(contractSignAppService.getSignTaskStatus(contractId));
-        } catch (com.scione.scm.bill.common.BusinessException ex) {
+        } catch (BusinessException ex) {
             return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
         }
     }
 
     @PostMapping("/{contractId}/sync-sign-task-status")
     @Operation(summary = "同步法大大已完成任务状态", description = "回调未送达时，查询法大大任务；仅 task_finished 才更新合同为履行中")
-    public ApiResponse<com.scione.scm.bill.application.ContractSignAppService.SignTaskSyncResult> syncSignTaskStatus(
+    public ApiResponse<ContractSignAppService.SignTaskSyncResult> syncSignTaskStatus(
             @PathVariable Long contractId,
             @RequestHeader("X-User-Email") String userEmail) {
         try {
             return ApiResponse.success(contractSignAppService.syncFinishedSignTask(contractId, userEmail));
-        } catch (com.scione.scm.bill.common.BusinessException ex) {
+        } catch (BusinessException ex) {
             return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
         }
     }
 
     @PostMapping("/{contractId}/start-sign")
     @Operation(summary = "发起合同签署", description = "我方免验证自动盖章并短信通知供应商签署")
-    public ApiResponse<com.scione.scm.bill.application.ContractSignAppService.StartSignResult> startSign(
+    public ApiResponse<ContractSignAppService.StartSignResult> startSign(
             @PathVariable Long contractId,
             @RequestParam(value = "forceConfirm", defaultValue = "false") boolean forceConfirm,
             @RequestHeader("X-User-Email") String userEmail) {
         try {
             return ApiResponse.success(contractSignAppService.startSign(contractId, userEmail, forceConfirm));
-        } catch (com.scione.scm.bill.common.BusinessException ex) {
+        } catch (BusinessException ex) {
             return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
         }
     }
@@ -279,7 +293,7 @@ public class ContractController {
     @Operation(summary = "作废合同", description = "创建状态直接作废；签署中撤销法大大任务；履行中发起解除协议，待法大大作废回调后置为取消")
     public ApiResponse<Void> cancelContract(
             @PathVariable Long contractId,
-            @RequestBody(required = false) @Validated com.scione.scm.bill.application.dto.ContractCancelRequest request,
+            @RequestBody(required = false) @Validated ContractCancelRequest request,
             @RequestHeader("X-User-Email") String userEmail) {
         try {
             contractSignAppService.cancel(contractId, request, userEmail);

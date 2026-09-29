@@ -75,8 +75,17 @@ public class ContractSignAppService {
             signingSupplierPhone = contract.getSupplierPhone();
             signingSupplierCreditCode = contract.getSupplierCreditCode();
             latestPo = poSyncRepository.findByPurchaseOrderNo(contract.getPurchaseOrderNo()).orElse(null);
-            if (contract.getSupplierId() != null) {
+            if (contract.getSupplierId() == null) {
+                throw new BusinessException(ResultCode.PARAM_ERROR,
+                        "合同缺少供应商ID，无法完成领星复核，请重新查询后再发起签署");
+            }
+            try {
                 latestSupplier = lingxingSupplierClient.findSupplierProfile(contract.getSupplierId()).orElse(null);
+            } catch (RuntimeException exception) {
+                log.error("手动合同签署前领星供应商复核失败：contractNo={}, supplierId={}",
+                        contract.getContractNo(), contract.getSupplierId(), exception);
+                throw new BusinessException(ResultCode.LINGXING_API_ERROR,
+                        "领星供应商信息查询失败，请重新查询后再发起签署");
             }
             log.info("手动合同签署使用合同保存的供方信息：contractNo={}", contract.getContractNo());
         } else {
@@ -93,6 +102,10 @@ public class ContractSignAppService {
         log.info("签署前需方印章与免验证签配置校验通过：contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
         List<String> differences = findLingxingDifferences(contract, latestPo, latestSupplier);
         log.info("领星复核完成：contractNo={}, differenceCount={}", contract.getContractNo(), differences.size());
+        if (manualContract && (latestPo == null || latestSupplier == null) && forceConfirm) {
+            throw new BusinessException(ResultCode.LINGXING_API_ERROR,
+                    "领星采购单或供应商信息未查询到，请重新查询后再发起签署");
+        }
         if (!differences.isEmpty() && !forceConfirm) {
             log.warn("合同与领星存在差异，等待用户确认：contractNo={}, differences={}", contract.getContractNo(), differences);
             return new StartSignResult(false, true, differences);

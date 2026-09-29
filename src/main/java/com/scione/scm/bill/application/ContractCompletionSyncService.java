@@ -1,10 +1,9 @@
 package com.scione.scm.bill.application;
 
+import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
 import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractOperationLog;
 import com.scione.scm.bill.domain.contract.ContractRepository;
-import com.scione.scm.bill.domain.posync.PoSyncRepository;
-import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -16,6 +15,7 @@ import org.springframework.stereotype.Service;
 public class ContractCompletionSyncService {
     private final ContractRepository contractRepository;
     private final LingxingPurchaseOrderClient lingxingPurchaseOrderClient;
+
     public SyncResult sync() {
         int scanned = 0, completed = 0, failed = 0;
         for (Contract contract : contractRepository.findExecutingContracts()) {
@@ -35,7 +35,9 @@ public class ContractCompletionSyncService {
                 }
                 log.info("领星完成状态核验：contractNo={}, purchaseOrderNo={}, poStatus={}, poStatusText={}",
                         contract.getContractNo(), contract.getPurchaseOrderNo(), po.status(), po.statusText());
-                if (po.status() == null || po.status() != 9) continue;
+                if (po.status() == null || po.status() != 9) {
+                    continue;
+                }
                 contractRepository.markCompleted(contract.getId());
                 String text = po.statusText() == null ? "" : po.statusText();
                 contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(contract.getId(), contract.getContractNo(), Contract.SYSTEM_OPERATOR, Contract.SYSTEM_OPERATOR, "领星采购单完成同步", "采购单状态=9(" + text + ")；合同状态：履行中 → 完成；同步来源=领星实时查询"));

@@ -54,7 +54,6 @@ public class FadadaContractCallbackService {
         if ("sign-task-finished".equals(event) && contract.getStatus() == ContractStatus.SIGNING) {
             contractRepository.markExecuting(contract.getId());
             log.info("法大大签署完成，合同已更新为履行中：contractId={}, contractNo={}", contract.getId(), contractNo);
-            log.info("法大大签署完成，合同已更新为履行中：contractId={}, contractNo={}", contract.getId(), contractNo);
             details += "；合同状态：签署中 → 履行中";
         }
         if ("sign-task-abolish".equals(event) && contract.getStatus() == ContractStatus.EXECUTING) {

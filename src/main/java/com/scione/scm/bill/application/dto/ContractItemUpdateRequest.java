@@ -21,7 +21,7 @@ public class ContractItemUpdateRequest {
     @Schema(description = "单价", example = "10.50")
     private BigDecimal unitPrice;
 
-    @Schema(description = "金额（如果传入，会覆盖自动计算的金额）", example = "1050.00")
+    @Schema(description = "金额（禁止手动传入，由数量 × 不含税单价自动计算）", example = "1050.00")
     private BigDecimal amount;
 
     @Schema(description = "交货日期（格式 yyyy-MM-dd）", example = "2026-12-15")

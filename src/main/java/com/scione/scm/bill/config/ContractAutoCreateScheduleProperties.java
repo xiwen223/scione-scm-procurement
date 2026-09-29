@@ -9,8 +9,8 @@ import org.springframework.stereotype.Component;
 @Component
 @ConfigurationProperties(prefix = "contract.auto-create")
 public class ContractAutoCreateScheduleProperties {
-    /** 默认关闭，避免本地启动即创建合同；测试/生产在 Nacos 或环境变量显式开启。 */
-    private boolean enabled = false;
-    /** Spring cron，默认每 10 分钟执行一次。 */
+    /** 默认开启，本地、测试和生产环境均执行采购单同步与合同自动创建。 */
+    private boolean enabled = true;
+    /** Spring cron，默认每 5 分钟执行一次。 */
     private String cron = "0 0/5 * * * ?";
 }

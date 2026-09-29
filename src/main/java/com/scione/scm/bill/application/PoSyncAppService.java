@@ -3,11 +3,11 @@ package com.scione.scm.bill.application;
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient.PurchaseOrderData;
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient.PurchaseOrderItemData;
+import com.scione.scm.bill.domain.contract.ContractOperationLog;
+import com.scione.scm.bill.domain.contract.ContractRepository;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
 import com.scione.scm.bill.domain.posync.PoSyncRecordItem;
 import com.scione.scm.bill.domain.posync.PoSyncRepository;
-import com.scione.scm.bill.domain.contract.ContractOperationLog;
-import com.scione.scm.bill.domain.contract.ContractRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -60,12 +60,13 @@ public class PoSyncAppService {
         } catch (RuntimeException ex) {
             // 拉取本身失败（网络/签名/限流等）：整批放弃，记错误日志，不抛给调度器让它反复报警
             log.error("采购单拉取失败，窗口 [{} ~ {}]", startTime, endTime, ex);
-            return new SyncResult(0, 0, 0, new ContractAutoCreateService.AutoCreateResult(0, 0, 0, 0));
+            return new SyncResult(0, 0, 0,
+                    new ContractAutoCreateService.AutoCreateResult(0, 0, 0, 0));
         }
 
         int success = 0;
         int failed = 0;
-        List<String> successOrderNos = new ArrayList<>();  // ← 新增这一行
+        List<String> successOrderNos = new ArrayList<>();
 
         for (PurchaseOrderData order : orders) {
             String orderSn = order.orderSn();

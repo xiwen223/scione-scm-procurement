@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scione.scm.bill.application.port.LingxingProductClient;
+import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
+import com.scione.scm.bill.application.port.LingxingSupplierClient;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.config.LingxingOpenApiProperties;
@@ -15,18 +17,15 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
-import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
-import com.scione.scm.bill.application.port.LingxingSupplierClient;
+import java.math.BigDecimal;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-
-import java.math.BigDecimal;
 import java.net.SocketTimeoutException;
-import java.net.URI;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -239,24 +238,24 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     }
 
     private Optional<SupplierPaymentAccount> defaultPaymentAccount(JsonNode supplier) {
-            JsonNode accounts = supplier.path("payment_account_group");
-            if (!accounts.isArray()) {
+        JsonNode accounts = supplier.path("payment_account_group");
+        if (!accounts.isArray()) {
+            return Optional.empty();
+        }
+        for (JsonNode account : accounts) {
+            if (!isDefaultPaymentAccount(account)) {
+                continue;
+            }
+            String accountName = text(account, "account_name");
+            String accountId = text(account, "account_id");
+            String bankName = text(account, "bank_name");
+            if (isBlank(accountName) || isBlank(accountId) || isBlank(bankName)) {
+                log.warn("领星供应商默认收款账号字段不完整");
                 return Optional.empty();
             }
-            for (JsonNode account : accounts) {
-                if (!isDefaultPaymentAccount(account)) {
-                    continue;
-                }
-                String accountName = text(account, "account_name");
-                String accountId = text(account, "account_id");
-                String bankName = text(account, "bank_name");
-                if (isBlank(accountName) || isBlank(accountId) || isBlank(bankName)) {
-                    log.warn("领星供应商默认收款账号字段不完整");
-                    return Optional.empty();
-                }
-                return Optional.of(new SupplierPaymentAccount(accountName, accountId, bankName));
-            }
-            return Optional.empty();
+            return Optional.of(new SupplierPaymentAccount(accountName, accountId, bankName));
+        }
+        return Optional.empty();
     }
 
     private static boolean isDefaultPaymentAccount(JsonNode account) {
