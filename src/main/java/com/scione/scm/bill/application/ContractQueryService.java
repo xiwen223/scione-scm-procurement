@@ -151,8 +151,12 @@ public class ContractQueryService {
         // 签署中及之后直接读取已保存文件，避免下载时重复模板填充、PDF 转换及存储上传。
         if (!"signed".equals(type)) {
             if (contract.getStatus() == ContractStatus.CREATED) {
-                byte[] latestPdf = generateLatestContractPdf(contract, "下载创建状态合同");
-                return new DownloadResult(latestPdf, contract.getContractNo() + ".pdf");
+                if (!StringUtils.hasText(contract.getContractPdfUrl())) {
+                    byte[] latestPdf = generateLatestContractPdf(contract, "下载创建状态合同");
+                    return new DownloadResult(latestPdf, contract.getContractNo() + ".pdf");
+                }
+                byte[] cachedPdf = contractFileStore.download(contract.getContractPdfUrl());
+                return new DownloadResult(cachedPdf, contract.getContractNo() + ".pdf");
             }
             String fileUrl = getOriginalPdfUrl(contract);
             if (!StringUtils.hasText(fileUrl)) {
@@ -329,8 +333,13 @@ public class ContractQueryService {
                 String fileUrl = null;
                 byte[] fileBytes;
                 if (contract.getStatus() == ContractStatus.CREATED) {
-                    fileBytes = generateLatestContractPdf(contract, "批量下载原始合同");
-                    fileUrl = contract.getContractPdfUrl();
+                    if (StringUtils.hasText(contract.getContractPdfUrl())) {
+                        fileUrl = contract.getContractPdfUrl();
+                        fileBytes = contractFileStore.download(fileUrl);
+                    } else {
+                        fileBytes = generateLatestContractPdf(contract, "批量下载原始合同");
+                        fileUrl = contract.getContractPdfUrl();
+                    }
                 } else if (usesFadadaDocument(contract.getStatus())) {
                     fileBytes = downloadFadadaDocument(contract);
                 } else {

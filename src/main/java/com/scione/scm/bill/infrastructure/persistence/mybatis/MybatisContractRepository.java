@@ -1,5 +1,6 @@
 package com.scione.scm.bill.infrastructure.persistence.mybatis;
 
+import com.scione.scm.bill.application.dto.ContractListQueryRequest;
 import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractItem;
 import com.scione.scm.bill.domain.contract.ContractOperationLog;
@@ -13,8 +14,8 @@ import com.scione.scm.bill.infrastructure.persistence.mybatis.po.ProcurementOper
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Transactional;
 import com.scione.scm.bill.domain.contract.ContractPage;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -279,7 +280,7 @@ public class MybatisContractRepository implements ContractRepository {
     }
 
     @Override
-    public ContractPage findByPage(com.scione.scm.bill.application.dto.ContractListQueryRequest request) {
+    public ContractPage findByPage(ContractListQueryRequest request) {
         // 1. 统计总数
         long total = contractMapper.countByCondition(request);
 

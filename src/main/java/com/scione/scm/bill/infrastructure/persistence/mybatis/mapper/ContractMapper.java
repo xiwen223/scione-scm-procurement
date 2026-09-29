@@ -1,5 +1,6 @@
 package com.scione.scm.bill.infrastructure.persistence.mybatis.mapper;
 
+import com.scione.scm.bill.application.dto.ContractListQueryRequest;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractPO;
 import org.apache.ibatis.annotations.Param;
 
@@ -61,7 +62,7 @@ public interface ContractMapper {
      * @param request 查询条件
      * @return 合同 PO 列表
      */
-    List<ContractPO> selectByPage(@Param("req") com.scione.scm.bill.application.dto.ContractListQueryRequest request);
+    List<ContractPO> selectByPage(@Param("req") ContractListQueryRequest request);
 
     /**
      * 统计查询条件下的合同总数。
@@ -69,7 +70,7 @@ public interface ContractMapper {
      * @param request 查询条件
      * @return 总数
      */
-    long countByCondition(@Param("req") com.scione.scm.bill.application.dto.ContractListQueryRequest request);
+    long countByCondition(@Param("req") ContractListQueryRequest request);
 
     /**
      * 按 ID 查询合同。

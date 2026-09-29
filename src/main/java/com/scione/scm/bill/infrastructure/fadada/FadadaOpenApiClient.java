@@ -272,8 +272,9 @@ public class FadadaOpenApiClient {
         // 签订日期由最后签署的供方完成签署时写入，避免对已签 PDF 做二次修改而破坏验签。
         docFields.add(dateSignField("supplier-sign-date", "签订日期："));
         if (needsCrossPageSeal) {
-            docFields.add(crossPageSealField("buyer-cross-page-seal"));
-            docFields.add(crossPageSealField("supplier-cross-page-seal"));
+            // 骑缝章按法大大规范使用 pixel + positionY；双方使用不同纵向位置，避免控件重叠。
+            docFields.add(crossPageSealField("buyer-cross-page-seal", "120"));
+            docFields.add(crossPageSealField("supplier-cross-page-seal", "240"));
         }
         body.put("docs", List.of(Map.of(
                 "docId", "contract-doc",
@@ -313,11 +314,13 @@ public class FadadaOpenApiClient {
                         "keywordOffsetX", 0, "keywordOffsetY", 0));
     }
 
-    /** 企业骑缝章仅需纵向坐标；0 表示采用法大大默认的页面边缘纵向定位。 */
-    private Map<String, Object> crossPageSealField(String fieldId) {
+    /**
+     * 企业骑缝章使用法大大要求的 pixel 定位模式，仅传纵向坐标；横向位置由平台固定在页面边缘。
+     */
+    private Map<String, Object> crossPageSealField(String fieldId, String positionY) {
         return Map.of("fieldId", fieldId, "fieldName", fieldId, "fieldType", "corp_seal_cross_page",
                 "moveable", false,
-                "position", Map.of("positionMode", "pixel", "positionY", "0"));
+                "position", Map.of("positionMode", "pixel", "positionY", positionY));
     }
 
     /** 签署日期控件，关键字定位在模板“签订日期：”标签右侧。 */
@@ -325,7 +328,8 @@ public class FadadaOpenApiClient {
         return Map.of("fieldId", fieldId, "fieldName", fieldId, "fieldType", "date_sign",
                 "moveable", false,
                 "position", Map.of("positionMode", "keyword", "positionKeyword", keyword,
-                        "keywordOffsetX", 70, "keywordOffsetY", 0));
+                        // date_sign 按控件中心定位，偏移 100 可使日期文字与相邻值列左侧对齐。
+                        "keywordOffsetX", 100, "keywordOffsetY", 0));
     }
 
     private Map<String, Object> signField(String fieldId, String sealId) {

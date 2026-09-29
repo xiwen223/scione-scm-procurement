@@ -12,12 +12,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /** Uses LibreOffice to preserve the original Excel contract template layout in PDF. */
 @Slf4j
 @Component
 public class LibreOfficeContractPdfConverter implements ContractPdfConverter {
-    @Value("${contract.pdf-converter.command:C:/Program Files/LibreOffice/program/soffice.exe}")
+    @Value("${contract.pdf-converter.command}")
     private String sofficeCommand;
 
     @Override
@@ -32,8 +33,13 @@ public class LibreOfficeContractPdfConverter implements ContractPdfConverter {
                     "-env:UserInstallation=" + profile.toUri(), "--convert-to", "pdf", "--outdir", workspace.toString(), source.toString());
             log.info("开始通过LibreOffice转换合同PDF：contractNo={}, command={}", contractNo, sofficeCommand);
             Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+            if (!process.waitFor(120, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                throw new BusinessException(ResultCode.CONTRACT_TEMPLATE_FILL_FAILED,
+                        "合同PDF转换超时，请稍后重试");
+            }
+            int exitCode = process.exitValue();
             String output = new String(process.getInputStream().readAllBytes());
-            int exitCode = process.waitFor();
             Path pdf = workspace.resolve(contractNo + ".pdf");
             if (exitCode != 0 || !Files.isRegularFile(pdf)) {
                 log.error("LibreOffice转换合同PDF失败：contractNo={}, exitCode={}, output={}", contractNo, exitCode, output);

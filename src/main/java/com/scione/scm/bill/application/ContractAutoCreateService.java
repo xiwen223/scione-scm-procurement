@@ -204,29 +204,6 @@ public class ContractAutoCreateService {
 
         log.info("合同创建成功：poNo={}, contractNo={}, contractId={}", poNo, contractNo, contractId);
 
-        // 填充 Excel 模板并上传到 S3
-        try {
-            log.info("自动创建跳过即时合同文件生成：contractNo={}", contractNo);
-
-            // 1. 直接根据合同数据生成 PDF，运行环境不依赖 Office/LibreOffice。
-            byte[] pdfBytes = null;
-
-            // 2. 上传到 S3，返回访问 URL
-            String fileUrl = null;
-
-            // 3. 更新合同表的 contract_pdf_url 字段
-            // 合同文件延迟到下载或签署时生成，不在创建阶段写入文件地址。
-
-            log.info("自动创建已跳过合同文件生成，延迟到下载或签署：contractNo={}, contractId={}",
-                    contractNo, contractId);
-
-        } catch (Exception ex) {
-            // 文件生成失败不影响合同记录（已保存），只记录日志
-            log.error("合同文件生成失败（合同记录已创建）：contractNo={}, contractId={}",
-                    contractNo, contractId, ex);
-            // 不抛异常，允许继续处理下一条 PO
-        }
-
         // 首次创建完成即保存 PDF；后续未编辑时签署可直接复用，避免再次拉取图片和填充模板。
         generateInitialContractPdf(contract);
         return true;
@@ -330,31 +307,8 @@ public class ContractAutoCreateService {
         contractCreateProgressTracker.advance(progressKey, ContractCreateProgressTracker.STEP_PDF,
                 "合同已保存，正在生成合同文件");
 
-        // 12. 填充 Excel 模板并上传到 S3
-        String fileUrl = null;
-        try {
-            log.info("手动创建跳过即时合同文件生成：contractNo={}", contractNo);
-
-            // 直接根据合同数据生成 PDF，运行环境不依赖 Office/LibreOffice。
-            // 合同文件延迟到下载或签署时生成。
-
-            // 上传到 S3，返回访问 URL
-            fileUrl = null;
-
-            // 更新合同表的 contract_pdf_url 字段
-            // 合同文件延迟到下载或签署时生成，不在创建阶段写入文件地址。
-
-            log.info("手动创建已跳过合同文件生成，延迟到下载或签署：contractNo={}, contractId={}",
-                    contractNo, contractId);
-
-        } catch (Exception ex) {
-            // 文件生成失败不影响合同记录（已保存），只记录日志
-            log.error("合同文件生成失败（合同记录已创建）：contractNo={}, contractId={}",
-                    contractNo, contractId, ex);
-            fileUrl = null;  // 文件生成失败，URL 为空
-        }
-
         // 创建时生成首版 PDF；合同编辑会清空该地址，后续下载/签署才会按需重建。
+        String fileUrl = null;
         try {
             fileUrl = generateInitialContractPdf(contract);
         } catch (Exception ex) {

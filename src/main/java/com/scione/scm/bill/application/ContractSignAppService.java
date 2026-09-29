@@ -75,8 +75,17 @@ public class ContractSignAppService {
             signingSupplierPhone = contract.getSupplierPhone();
             signingSupplierCreditCode = contract.getSupplierCreditCode();
             latestPo = poSyncRepository.findByPurchaseOrderNo(contract.getPurchaseOrderNo()).orElse(null);
-            if (contract.getSupplierId() != null) {
+            if (contract.getSupplierId() == null) {
+                throw new BusinessException(ResultCode.PARAM_ERROR,
+                        "合同缺少供应商ID，无法完成领星复核，请重新查询后再发起签署");
+            }
+            try {
                 latestSupplier = lingxingSupplierClient.findSupplierProfile(contract.getSupplierId()).orElse(null);
+            } catch (RuntimeException exception) {
+                log.error("手动合同签署前领星供应商复核失败：contractNo={}, supplierId={}",
+                        contract.getContractNo(), contract.getSupplierId(), exception);
+                throw new BusinessException(ResultCode.LINGXING_API_ERROR,
+                        "领星供应商信息查询失败，请重新查询后再发起签署");
             }
             log.info("手动合同签署使用合同保存的供方信息：contractNo={}", contract.getContractNo());
         } else {
@@ -93,6 +102,10 @@ public class ContractSignAppService {
         log.info("签署前需方印章与免验证签配置校验通过：contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
         List<String> differences = findLingxingDifferences(contract, latestPo, latestSupplier);
         log.info("领星复核完成：contractNo={}, differenceCount={}", contract.getContractNo(), differences.size());
+        if (manualContract && (latestPo == null || latestSupplier == null) && forceConfirm) {
+            throw new BusinessException(ResultCode.LINGXING_API_ERROR,
+                    "领星采购单或供应商信息未查询到，请重新查询后再发起签署");
+        }
         if (!differences.isEmpty() && !forceConfirm) {
             log.warn("合同与领星存在差异，等待用户确认：contractNo={}, differences={}", contract.getContractNo(), differences);
             return new StartSignResult(false, true, differences);
@@ -422,17 +435,42 @@ public class ContractSignAppService {
             throw new BusinessException(ResultCode.PARAM_ERROR, "仅签署中状态的合同可催签");
         }
         if (!StringUtils.hasText(contract.getFadadaTaskId())) {
-            throw new BusinessException(ResultCode.PARAM_ERROR, "合同未关联法大大签署任务，无法催签");
+            throw new BusinessException(ResultCode.PARAM_ERROR, "合同缺少签署任务信息，无法催办");
         }
         log.info("开始法大大催签：contractNo={}, signTaskId={}", contract.getContractNo(), contract.getFadadaTaskId());
         logSignTaskActorsForUrge(contract.getContractNo(), contract.getFadadaTaskId(), "催签前");
-        fadadaOpenApiClient.urgeSignTask(contract.getFadadaTaskId());
+        try {
+            fadadaOpenApiClient.urgeSignTask(contract.getFadadaTaskId());
+        } catch (BusinessException ex) {
+            // 第三方返回内容只留在后台日志；接口响应使用本系统业务文案，避免向用户暴露服务商及业务码。
+            log.warn("催办请求未受理：contractNo={}, signTaskId={}, upstreamReason={}",
+                    contract.getContractNo(), contract.getFadadaTaskId(), ex.getMessage());
+            if (isUrgeTimeLimit(ex.getMessage())) {
+                throw new BusinessException(ResultCode.PARAM_ERROR, "催办时间间隔未到，请稍后再试");
+            }
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "催办暂未成功，请稍后再试");
+        }
         log.info("法大大催签接口已成功受理：contractNo={}, signTaskId={}；短信是否送达由法大大平台按任务状态和频控决定",
                 contract.getContractNo(), contract.getFadadaTaskId());
         logSignTaskActorsForUrge(contract.getContractNo(), contract.getFadadaTaskId(), "催签后");
         String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
         contractRepository.saveOperationLog(ContractOperationLog.ofUrgeSign(
                 contract.getId(), contract.getContractNo(), operator, operator, contract.getFadadaTaskId()));
+    }
+
+    private boolean isUrgeTimeLimit(String message) {
+        if (!StringUtils.hasText(message)) {
+            return false;
+        }
+        String normalized = message.toLowerCase();
+        return normalized.contains("时间")
+                || normalized.contains("小时")
+                || normalized.contains("分钟")
+                || normalized.contains("间隔")
+                || normalized.contains("频率")
+                || normalized.contains("频繁")
+                || normalized.contains("too many")
+                || normalized.contains("rate limit");
     }
 
     private void logSignTaskActorsForUrge(String contractNo, String signTaskId, String scene) {
