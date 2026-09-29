@@ -37,15 +37,19 @@ import java.util.Map;
  *
  * <p>当前处理的事件：</p>
  * <ul>
- *   <li>{@code seal-verify-successed}（印章审核通过）：取 {@code openCorpId} 与 {@code sealId}，
- *       把 {@code fadada_seal_id} 与 {@code seal_flow_status = 1} 写入对应公司；</li>
- *   <li>{@code seal-verify-failed}（印章审核不通过）：取 {@code openCorpId} 与 {@code reason}，
- *       把 {@code seal_flow_status = 2} 与 {@code seal_failed_reason = reason} 写入对应公司；</li>
- *   <li>{@code seal-authorize-free-sign}（印章免验证签授权）：取 {@code openCorpId}、{@code businessId}
- *       与 {@code expiresTime}，把免验证签场景码与授权到期时间写入对应公司；</li>
+ *   <li>{@code seal-verify-successed}（印章审核通过）：取 {@code verifyId} 与 {@code sealId}，
+ *       按 {@code seal_verify_id} 定位公司，写入 {@code fadada_seal_id} 与 {@code seal_flow_status = 1}；</li>
+ *   <li>{@code seal-verify-failed}（印章审核不通过）：取 {@code verifyId} 与 {@code reason}，
+ *       按 {@code seal_verify_id} 定位公司，写入 {@code seal_flow_status = 2} 与 {@code seal_failed_reason = reason}；</li>
+ *   <li>{@code seal-authorize-free-sign}（印章免验证签授权）：取 {@code sealId}、{@code businessId}
+ *       与 {@code expiresTime}，按 {@code fadada_seal_id} 定位公司，写入免验证签场景码与授权到期时间；</li>
  *   <li>其余事件（{@code seal-create} / {@code seal-disable} / {@code seal-delete} / {@code notifyUrlVerify} 等）
  *       暂只记录日志，按需在此扩展。</li>
  * </ul>
+ *
+ * <p>上述印章类事件一律以<b>法大大侧唯一的 ID</b>（{@code verifyId} / {@code sealId}）作为公司定位键，
+ * 不使用 {@code openCorpId} —— 本地 {@code open_corpid} 允许重复，用它定位会一次命中多行，
+ * 把审核结果或授权配置写到别的公司上。</p>
  */
 @Slf4j
 @RestController
@@ -154,7 +158,11 @@ public class FadadaCallBackController {
     }
 
     /**
-     * 印章审核通过：从 bizContent 取 openCorpId / sealId，写回对应公司的印章信息。
+     * 印章审核通过：从 bizContent 取 verifyId / sealId，写回对应公司的印章信息。
+     *
+     * <p>{@code verifyId} 是上传印章时调 {@code /seal/create-by-image} 拿到并已写入
+     * {@code buyer_company.seal_verify_id} 的核验 ID，用它定位公司（本地 open_corpid 允许重复，不能当定位键）。
+     * {@code openCorpId} 仍会出现在报文里，但这里不读、也不参与定位。</p>
      *
      * <p>业务字段优先取 bizContent 顶层；若顶层没有则回落到 {@code data} 节点，兼容业务字段被包一层的报文结构。
      * 字段缺失时只记日志、不抛异常 —— 报文结构问题重试也无法修复，且返回非 success 会导致法大大反复重推。</p>
@@ -166,18 +174,22 @@ public class FadadaCallBackController {
         }
         JsonNode business = businessNode(payload);
 
-        String openCorpId = text(business, "openCorpId");
+        Long verifyId = longValue(business, "verifyId");
         String sealId = text(business, "sealId");
-        if (isBlank(openCorpId) || isBlank(sealId)) {
-            log.error("法大大印章审核通过回调缺少 openCorpId 或 sealId，无法更新公司印章：event={}", EVENT_SEAL_VERIFY_SUCCESS);
+        if (verifyId == null || isBlank(sealId)) {
+            log.error("法大大印章审核通过回调缺少 verifyId 或 sealId（或 verifyId 非法），无法更新公司印章：event={}",
+                    EVENT_SEAL_VERIFY_SUCCESS);
             return;
         }
 
-        buyerCompanyApplicationService.handleSealVerifySuccess(openCorpId, sealId);
+        buyerCompanyApplicationService.handleSealVerifySuccess(verifyId, sealId);
     }
 
     /**
-     * 印章免验证签授权：从 bizContent 取 openCorpId / businessId / expiresTime，写回对应公司的免验证签配置。
+     * 印章免验证签授权：从 bizContent 取 sealId / businessId / expiresTime，写回对应公司的免验证签配置。
+     *
+     * <p>按印章定位（{@code fadada_seal_id}）：免验证签在法大大侧是「印章 + 场景码」维度的授权，
+     * 且该事件发生在印章审核通过之后，此时印章 ID 已落库。不再使用 {@code openCorpId} 定位。</p>
      *
      * <p>该事件是免验证签授权状态的权威来源 —— 场景码与到期时间成对写入，用于签署前判断授权是否仍有效
      * （见 {@code ContractSignAppService} 的过期校验）。{@code expiresTime} 是法大大下发的毫秒级时间戳字符串，
@@ -192,22 +204,25 @@ public class FadadaCallBackController {
         }
         JsonNode business = businessNode(payload);
 
-        String openCorpId = text(business, "openCorpId");
+        String sealId = text(business, "sealId");
         String businessId = text(business, "businessId");
-        if (isBlank(openCorpId) || isBlank(businessId)) {
-            log.error("法大大免验证签授权回调缺少 openCorpId 或 businessId，无法更新公司免验证签配置：event={}",
+        if (isBlank(sealId) || isBlank(businessId)) {
+            log.error("法大大免验证签授权回调缺少 sealId 或 businessId，无法更新公司免验证签配置：event={}",
                     EVENT_SEAL_AUTHORIZE_FREE_SIGN);
             return;
         }
 
-        buyerCompanyApplicationService.handleSealAuthorizeFreeSign(openCorpId, businessId, text(business, "expiresTime"));
+        buyerCompanyApplicationService.handleSealAuthorizeFreeSign(sealId, businessId, text(business, "expiresTime"));
     }
 
     /**
-     * 印章审核不通过：从 bizContent 取 openCorpId 与 reason，把公司印章置为审核失败并记录不通过原因。
+     * 印章审核不通过：从 bizContent 取 verifyId 与 reason，把公司印章置为审核失败并记录不通过原因。
+     *
+     * <p>与审核通过回调使用同一套定位键（{@code verifyId} → {@code buyer_company.seal_verify_id}），
+     * 不再使用 {@code openCorpId}。</p>
      *
      * <p>{@code reason} 允许为空 —— 为空时只更新审核状态，详情页不展示原因。
-     * openCorpId 缺失时只记日志、不抛异常：报文结构问题重试无法修复，且返回非 success 会导致法大大反复重推。</p>
+     * verifyId 缺失时只记日志、不抛异常：报文结构问题重试无法修复，且返回非 success 会导致法大大反复重推。</p>
      */
     private void handleSealVerifyFailed(String bizContent) throws InterruptedException {
         JsonNode payload = parseBizContent(bizContent);
@@ -216,17 +231,18 @@ public class FadadaCallBackController {
         }
         JsonNode business = businessNode(payload);
 
-        String openCorpId = text(business, "openCorpId");
-        if (isBlank(openCorpId)) {
-            log.error("法大大印章审核不通过回调缺少 openCorpId，无法更新公司印章：event={}", EVENT_SEAL_VERIFY_FAILED);
+        Long verifyId = longValue(business, "verifyId");
+        if (verifyId == null) {
+            log.error("法大大印章审核不通过回调缺少 verifyId（或 verifyId 非法），无法更新公司印章：event={}",
+                    EVENT_SEAL_VERIFY_FAILED);
             return;
         }
 
         String reason = text(business, "reason");
         if (isBlank(reason)) {
-            log.warn("法大大印章审核不通过回调未携带 reason，仅更新审核状态：openCorpId={}", openCorpId);
+            log.warn("法大大印章审核不通过回调未携带 reason，仅更新审核状态：verifyId={}", verifyId);
         }
-        buyerCompanyApplicationService.handleSealVerifyFailed(openCorpId, reason);
+        buyerCompanyApplicationService.handleSealVerifyFailed(verifyId, reason);
     }
 
     /**
@@ -257,6 +273,25 @@ public class FadadaCallBackController {
         }
         JsonNode value = node.path(field);
         return value.isMissingNode() || value.isNull() ? null : value.asText();
+    }
+
+    /**
+     * 取长整型字段（{@code verifyId} 这类 19 位 ID）。
+     *
+     * <p>报文里该字段可能是 JSON number、也可能是带引号的字符串（法大大各事件/版本形态不完全一致），
+     * 因此统一按文本取回再解析，两种形态都能吃下。缺失或无法解析成 long 时返回 null，
+     * 由调用方记 ERROR 后跳过本条 —— 报文结构问题重试无法修复，且返回非 success 会导致法大大反复重推。</p>
+     */
+    private static Long longValue(JsonNode node, String field) {
+        String value = text(node, field);
+        if (isBlank(value)) {
+            return null;
+        }
+        try {
+            return Long.valueOf(value.trim());
+        } catch (NumberFormatException exception) {
+            return null;
+        }
     }
 
     private static boolean isBlank(String value) {

@@ -63,6 +63,7 @@ public class FadadaOpenApiClient {
     private static final String GET_DOWNLOAD_URL_PATH = "/sign-task/owner/get-download-url";
     private static final String GET_CORP_AUTH_URL_PATH = "/corp/get-auth-url";
     private static final String GET_CORP_INFO_PATH = "/corp/get";
+    private static final String GET_CORP_ENTITY_LIST_PATH = "/corp/entity/get-list";
     private static final String GET_EDIT_URL_PATH = "/sign-task/get-edit-url";
     private static final String GET_TEMPLATE_DETAIL_PATH = "/sign-template/get-detail";
     private static final String CREATE_SEAL_BY_IMAGE_PATH = "/seal/create-by-image";
@@ -429,6 +430,57 @@ public class FadadaOpenApiClient {
         return businessPost(GET_CORP_INFO_PATH, body, true).path("data");
     }
 
+    /**
+     * 查询企业主体列表（{@code /corp/entity/get-list}，POST）。
+     *
+     * <p>一个法大大企业账号下可以有多个主体：{@code entityType=primary} 是企业本身，
+     * {@code subsidiary} 是成员企业。建章（{@link #createSealByImage}）需要指定印章归属哪个主体，
+     * 因此先调本接口取主体清单，再按企业名称挑出 {@code entityId}。只读查询，允许重试。</p>
+     *
+     * <p>响应 {@code data} 是数组；缺失、非数组或为空数组时一律返回空列表
+     * （等价于「该企业下没有可用主体」），由调用方决定如何降级。</p>
+     */
+    public List<CorpEntity> getCorpEntityList(String openCorpId) {
+        JsonNode data = businessPost(GET_CORP_ENTITY_LIST_PATH,
+                Map.of("openCorpId", requireText(openCorpId, "openCorpId")), true).path("data");
+        if (data == null || !data.isArray() || data.isEmpty()) {
+            return List.of();
+        }
+        List<CorpEntity> entities = new ArrayList<>(data.size());
+        for (JsonNode item : data) {
+            entities.add(new CorpEntity(text(item, "entityId"), text(item, "entityType"),
+                    text(item, "corpName"), text(item, "corpIdentNo"), text(item, "identStatus")));
+        }
+        return entities;
+    }
+
+    /**
+     * 按企业名称在主体列表中定位 {@code entityId}，供建章时指定印章归属主体。
+     *
+     * <p>取第一个「名称（忽略首尾空白）相同且 entityId 非空」的主体。只有在查到主体却没有同名主体时
+     * 才返回 null，此时建章请求<b>不携带 {@code entityId}</b>，沿用「按 openCorpId 归属」的默认行为，
+     * 不阻断建章。</p>
+     *
+     * <p>主体查询本身失败<b>不吞异常</b>：降级建章有可能把印章挂到错误的主体上，属于事后极难察觉的脏数据，
+     * 宁可让上传失败（调用方已有补偿逻辑，会清理对象存储与库内签章字段）。</p>
+     */
+    private String resolveEntityId(String openCorpId, String corpName) {
+        if (isBlank(corpName)) {
+            log.warn("企业名称为空，跳过法大大主体查询，建章请求不带 entityId");
+            return null;
+        }
+        String target = corpName.trim();
+        List<CorpEntity> entities = getCorpEntityList(openCorpId);
+        for (CorpEntity entity : entities) {
+            if (target.equals(entity.corpName() == null ? null : entity.corpName().trim())
+                    && !isBlank(entity.entityId())) {
+                return entity.entityId().trim();
+            }
+        }
+        log.warn("法大大主体列表中未找到同名主体，建章请求不带 entityId：corpName={}, 主体数={}", target, entities.size());
+        return null;
+    }
+
     /** 获取签署任务编辑链接。redirectUrl 会按本地 Python 客户端规则进行完整 URL 编码。 */
     public String getSignTaskEditUrl(EditUrlRequest request) {
         Objects.requireNonNull(request, "request");
@@ -463,17 +515,34 @@ public class FadadaOpenApiClient {
     /**
      * 通过印章图片创建企业印章（{@code /seal/create-by-image}）。
      *
+     * <p><b>先查主体、再建章</b>：本方法内部会先按 {@code openCorpId} 调
+     * {@link #getCorpEntityList}（{@code /corp/entity/get-list}），用 {@code corpName}
+     * 匹配出主体 {@code entityId}，命中时把它作为请求字段传给建章接口，指定印章归属的主体；
+     * 未匹配到则不传该字段（行为与旧版一致）。请求体字段顺序为
+     * {@code openCorpId → entityId → sealName → sealImage}。</p>
+     *
      * <p>印章图片以 Base64 字符串提交（不含 {@code data:} 前缀），调用方负责读取文件字节并编码。
      * 返回 data 中的 {@code verifyId} 表示法大大已受理，印章审核为异步流程；创建类接口不做重试，
      * 避免网络异常时重复建章。</p>
+     *
+     * <p>{@code verifyId} 是 19 位长整型，因此按 {@code Long} 返回（本地 {@code seal_verify_id} 列同为
+     * {@code bigint}）—— 它要在回调里当定位键做等值比较，若以字符串形态落到字符列上，
+     * MySQL 会把字符列转成 DOUBLE 再比较，尾数精度不足会让相邻的 verifyId 互相误命中。</p>
+     *
+     * @param openCorpId       法大大企业 ID
+     * @param corpName         企业名称，用于在主体列表中匹配 {@code entityId}；为空则跳过主体查询
+     * @param sealName         印章名称
+     * @param sealImageBase64  印章图片的 Base64 内容
      */
-    public String createSealByImage(String openCorpId, String sealName, String sealImageBase64) {
+    public Long createSealByImage(String openCorpId, String corpName, String sealName, String sealImageBase64) {
+        String corpId = requireText(openCorpId, "openCorpId");
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("openCorpId", requireText(openCorpId, "openCorpId"));
+        body.put("openCorpId", corpId);
+        putIfNotBlank(body, "entityId", resolveEntityId(corpId, corpName));
         body.put("sealName", requireText(sealName, "sealName"));
         body.put("sealImage", requireText(sealImageBase64, "sealImage"));
         JsonNode data = businessPost(CREATE_SEAL_BY_IMAGE_PATH, body, false).path("data");
-        return requiredText(data, "verifyId", "创建印章失败");
+        return requiredLong(data, "verifyId", "创建印章失败");
     }
 
     /**
@@ -721,6 +790,22 @@ public class FadadaOpenApiClient {
         return value;
     }
 
+    /**
+     * 取必填的长整型字段。法大大报文里数字型 ID 有时是 JSON number、有时是带引号的字符串，
+     * 统一按文本取回再解析，两种形态都能吃下。
+     */
+    private Long requiredLong(JsonNode node, String field, String failureMessage) {
+        String value = text(node, field);
+        if (isBlank(value)) {
+            throw fadadaError(failureMessage + "：响应中未返回 " + field);
+        }
+        try {
+            return Long.valueOf(value.trim());
+        } catch (NumberFormatException exception) {
+            throw fadadaError(failureMessage + "：响应中的 " + field + " 不是合法的长整型");
+        }
+    }
+
     private String requireText(String value, String field) {
         if (isBlank(value)) {
             throw new BusinessException(ResultCode.PARAM_ERROR, field + " 不能为空");
@@ -773,6 +858,20 @@ public class FadadaOpenApiClient {
     }
 
 
+
+    /**
+     * 企业主体（{@code /corp/entity/get-list} 的一条记录）。
+     *
+     * @param entityId    企业主体 ID，建章时作为 {@code entityId} 字段传给 {@code /seal/create-by-image}，
+     *                    指定印章归属的主体
+     * @param entityType  主体类型：{@code primary} 企业本身，{@code subsidiary} 成员企业
+     * @param corpName    主体名称，建章时按它与本地 {@code buyer_company.company_name} 匹配
+     * @param corpIdentNo 主体证件号
+     * @param identStatus 主体实名认证状态
+     */
+    public record CorpEntity(String entityId, String entityType, String corpName, String corpIdentNo,
+                             String identStatus) {
+    }
 
     public record UploadUrl(String uploadUrl, String fddFileUrl) {
     }

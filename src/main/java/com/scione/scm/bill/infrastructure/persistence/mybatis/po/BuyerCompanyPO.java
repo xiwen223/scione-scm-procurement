@@ -22,6 +22,16 @@ public class BuyerCompanyPO {
     private String sealUrl;
     private String sealBase64;
     private String fadadaSealId;
+    /**
+     * 印章核验 ID：调用法大大 {@code /seal/create-by-image} 成功后的返回值，上传印章时立即写入。
+     * 印章审核结果回调（{@code seal-verify-successed} / {@code seal-verify-failed}）以它作为定位键，
+     * 取代原先「按 open_corpid 定位」的做法 —— open_corpid 允许重复，用它定位会一次命中多行。
+     *
+     * <p>法大大该字段是 19 位长整型，本地列 {@code seal_verify_id} 也是 {@code bigint}，
+     * 两边同为整数才能做精确等值比较；若列退化成字符型，MySQL 比较时会把列转成 DOUBLE，
+     * 尾数精度不足会让相邻的 verifyId 互相误命中。</p>
+     */
+    private Long sealVerifyId;
     /** 印章审核状态：0-审核中，1-审核成功，2-审核失败（由法大大回调写入） */
     private Integer sealFlowStatus;
     /** 印章审核不通过的原因，仅 sealFlowStatus = 2 时有值（由法大大回调写入），为空表示无失败原因 */

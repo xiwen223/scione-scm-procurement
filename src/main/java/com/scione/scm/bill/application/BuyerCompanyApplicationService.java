@@ -163,16 +163,24 @@ public class BuyerCompanyApplicationService {
 
     /**
      * 上传印章图片：公司必须已通过法大大实名认证，先把图片落到对象存储并写入库内签章字段，
-     * 再用法大大创建企业印章。
+     * 再用法大大创建企业印章，最后把法大大返回的 {@code verifyId} 回写到 {@code seal_verify_id}。
      *
-     * <p><b>顺序固定为「对象存储 → 落库 → 法大大」，不能颠倒。</b>法大大受理建章后会立刻异步回调
-     * （{@code seal-verify-successed}），回调按 {@code open_corpid} 把 {@code seal_flow_status} 置为 1。
+     * <p><b>顺序固定为「对象存储 → 落库 → 法大大 → 回写 verifyId」，不能颠倒。</b>法大大受理建章后会异步回调
+     * （{@code seal-verify-successed}），回调按 {@code seal_verify_id} 定位公司并把 {@code seal_flow_status} 置为 1。
      * 若落库排在法大大之后，回调就可能插在两次写之间：回调先写入 1，随后这里的 0（审核中）把它覆盖，
      * 而法大大收到 {@code success} 应答后不再重推，状态会永久停在「审核中」。
      * 先落库则保证回调必然晚于本次写入，顺序天然正确。</p>
      *
+     * <p><b>已知残余窗口</b>：{@code verifyId} 只有调完法大大才拿得到，因此回调若恰好落在
+     * 「法大大建章成功」与「回写 verifyId」之间，会因定位不到记录而被丢弃（记 WARN）。印章审核本身是异步流程
+     * （人工审核），实际远晚于这两步，窗口可忽略。</p>
+     *
      * <p>因此法大大创建失败时必须补偿：删除刚上传的对象存储文件并清空库内签章字段，
      * 保持「法大大失败 = 无残留」的语义。印章图片的 Base64 只在本次调用中使用，不落库。</p>
+     *
+     * <p>建章这一步内部是两次法大大调用：先按 {@code openCorpId} 查 {@code /corp/entity/get-list}，
+     * 用本行 {@code company_name} 匹配出主体 {@code entityId}，再带着它调 {@code /seal/create-by-image}；
+     * 匹配不到就不传 {@code entityId}。主体查询失败会向上抛，走下面同一条补偿路径。</p>
      *
      * <p>该方法刻意<b>不加 {@code @Transactional}</b>：落库必须立即提交，
      * 回调线程才能读到「已持有签章且审核中」的那一行。</p>
@@ -202,15 +210,21 @@ public class BuyerCompanyApplicationService {
         //    必须先于第 3 步提交，回调到达时才能匹配到这一行（见方法注释的时序说明）
         mapper.updateSeal(id, uploaded.objectKey(), name);
 
-        // 3. 法大大：用图片创建企业印章（sealImage 为 Base64 字符串）
-        String verifyId;
+        // 3. 法大大：用图片创建企业印章（sealImage 为 Base64 字符串）。
+        //    传公司名进去，客户端会先查 /corp/entity/get-list 匹配主体 entityId，命中才带上该字段
+        Long verifyId;
         try {
             verifyId = fadadaOpenApiClient.createSealByImage(
-                    openCorpId, name, Base64.getEncoder().encodeToString(content));
+                    openCorpId, company.getCompanyName(), name, Base64.getEncoder().encodeToString(content));
         } catch (RuntimeException exception) {
             compensateFailedSealUpload(id, uploaded.objectKey(), exception);
             throw exception;
         }
+
+        // 4. 回写核验 ID：印章审核结果是异步回调，回调报文只带 verifyId、没有本地主键，
+        //    不落库就无法定位到这一行。此步失败不做落库补偿 —— 法大大侧印章已经创建，
+        //    清空本地字段只会留下孤儿印章；异常向上抛，由调用方决定重试或人工处理。
+        mapper.updateSealVerifyId(id, verifyId);
 
         return new BuyerCompanySealUploadResponse(verifyId, toDetail(requireCompany(id)));
     }
@@ -277,57 +291,62 @@ public class BuyerCompanyApplicationService {
     /**
      * 法大大印章审核通过回调（{@code X-FASC-Event = seal-verify-successed}）的落库入口。
      *
-     * <p>按 {@code open_corpid} 找到对应公司，写入 {@code fadada_seal_id}（法大大印章 ID）并把
-     * {@code seal_flow_status} 置为 {@value #SEAL_FLOW_APPROVED}（审核成功），同时清空 {@code seal_failed_reason}。
-     * 回调可能重复投递，更新语句本身幂等；未匹配到记录（印章已被移除、或公司已逻辑删除）时只记日志，
+     * <p>按 {@code seal_verify_id}（上传印章时由 {@link #uploadSeal} 写入的法大大 verifyId）定位公司，
+     * 写入 {@code fadada_seal_id}（法大大印章 ID）并把 {@code seal_flow_status} 置为
+     * {@value #SEAL_FLOW_APPROVED}（审核成功），同时清空 {@code seal_failed_reason}。
+     * 不再按 {@code open_corpid} 定位 —— 该列允许重复，用它定位会一次命中多行、把审核结果广播到其它公司。</p>
+     *
+     * <p>回调可能重复投递，更新语句本身幂等；未匹配到记录（印章已被移除、或公司已逻辑删除）时只记日志，
      * 不抛异常 —— 该场景重试也无法修复，且回调方期望 success 应答以停止重推。</p>
      *
-     * @param openCorpId 法大大唯一公司 ID，对应 {@code buyer_company.open_corpid}
-     * @param sealId     法大大印章 ID，写入 {@code buyer_company.fadada_seal_id}
+     * @param verifyId 法大大受理创章时返回的核验 ID（19 位长整型），对应 {@code buyer_company.seal_verify_id}
+     * @param sealId   法大大印章 ID，写入 {@code buyer_company.fadada_seal_id}
      */
     @Transactional
-    public void handleSealVerifySuccess(String openCorpId, String sealId) throws InterruptedException {
-        String corpId = requireText(openCorpId, "openCorpId 不能为空");
+    public void handleSealVerifySuccess(Long verifyId, String sealId) throws InterruptedException {
+        Long verify = requireVerifyId(verifyId);
         String fadadaSealId = requireText(sealId, "sealId 不能为空");
         Thread.sleep(3000);
-        int updated = mapper.updateSealVerified(corpId, fadadaSealId);
+        int updated = mapper.updateSealVerified(verify, fadadaSealId);
         if (updated == 0) {
-            log.warn("法大大印章审核通过回调未匹配到待更新记录（印章可能已移除或公司已删除）：openCorpId={}, sealId={}",
-                    corpId, fadadaSealId);
+            log.warn("法大大印章审核通过回调未匹配到待更新记录（印章可能已移除、公司已删除或 verifyId 未被记录）：verifyId={}, sealId={}",
+                    verify, fadadaSealId);
             return;
         }
-        log.info("法大大印章审核通过，已更新公司印章：openCorpId={}, sealId={}, 更新行数={}",
-                corpId, fadadaSealId, updated);
+        log.info("法大大印章审核通过，已更新公司印章：verifyId={}, sealId={}, 更新行数={}",
+                verify, fadadaSealId, updated);
     }
 
     /**
      * 法大大印章免验证签授权回调（{@code X-FASC-Event = seal-authorize-free-sign}）的落库入口。
      *
-     * <p>按 {@code open_corpid} 找到对应公司，把回调携带的场景码 {@code businessId} 与授权到期时间
-     * {@code expiresTime} 成对写入 {@code fadada_free_sign_business_id} 与 {@code fadada_free_sign_expire_time}。
+     * <p>按 {@code fadada_seal_id}（法大大印章 ID）定位公司 —— 免验证签在法大大侧是「印章 + 场景码」维度的授权，
+     * 因此按印章定位；该事件发生在印章审核通过之后，此时 {@code fadada_seal_id} 已由审核通过回调写入。
+     * 把回调携带的场景码 {@code businessId} 与授权到期时间 {@code expiresTime} 成对写入
+     * {@code fadada_free_sign_business_id} 与 {@code fadada_free_sign_expire_time}。
      * 这两个字段会在发起签署前被读取用于判断授权是否可用（见 {@code ContractSignAppService}），
      * 因此以本回调为权威来源整体覆盖，不做「有值才写」—— 否则重新授权时无法把旧的到期时间刷新。
-     * 更新语句幂等，法大大重复回调结果一致；未匹配到记录（openCorpId 无对应公司、或公司已逻辑删除）时
+     * 更新语句幂等，法大大重复回调结果一致；未匹配到记录（印章已被移除、或公司已逻辑删除）时
      * 只记日志、不抛异常 —— 该场景重试无法修复，且回调方期望 success 应答以停止重推。</p>
      *
-     * @param openCorpId  法大大唯一公司 ID，对应 {@code buyer_company.open_corpid}
+     * @param sealId      法大大印章 ID，对应 {@code buyer_company.fadada_seal_id}
      * @param businessId  免验证签场景码，写入 {@code buyer_company.fadada_free_sign_business_id}
      * @param expiresTime 授权到期时间（法大大下发的毫秒级时间戳字符串），可为空表示不限期
      */
     @Transactional
-    public void handleSealAuthorizeFreeSign(String openCorpId, String businessId, String expiresTime) {
-        String corpId = requireText(openCorpId, "openCorpId 不能为空");
+    public void handleSealAuthorizeFreeSign(String sealId, String businessId, String expiresTime) {
+        String fadadaSealId = requireText(sealId, "sealId 不能为空");
         String sceneCode = requireText(businessId, "businessId 不能为空");
         LocalDateTime expireAt = toFreeSignExpireTime(expiresTime);
 
-        int updated = mapper.updateFreeSignAuthorization(corpId, sceneCode, expireAt);
+        int updated = mapper.updateFreeSignAuthorization(fadadaSealId, sceneCode, expireAt);
         if (updated == 0) {
-            log.warn("法大大免验证签授权回调未匹配到待更新记录（openCorpId 无对应公司、或公司已逻辑删除）：openCorpId={}",
-                    corpId);
+            log.warn("法大大免验证签授权回调未匹配到待更新记录（印章已被移除、公司已逻辑删除、或印章尚未落库）：sealId={}",
+                    fadadaSealId);
             return;
         }
-        log.info("法大大免验证签授权已更新公司配置：openCorpId={}, businessId={}, 到期时间={}, 更新行数={}",
-                corpId, sceneCode, expireAt, updated);
+        log.info("法大大免验证签授权已更新公司配置：sealId={}, businessId={}, 到期时间={}, 更新行数={}",
+                fadadaSealId, sceneCode, expireAt, updated);
     }
 
     /**
@@ -355,29 +374,29 @@ public class BuyerCompanyApplicationService {
     /**
      * 法大大印章审核不通过回调（{@code X-FASC-Event = seal-verify-failed}）的落库入口。
      *
-     * <p>按 {@code open_corpid} 找到对应公司，把 {@code seal_flow_status} 置为
-     * {@value #SEAL_FLOW_REJECTED}（审核失败），并把回调携带的 {@code reason} 写入
-     * {@code seal_failed_reason}；详情页只在失败原因非空时展示。原因可以为空，此时仅更新审核状态。
-     * 原因超过列宽时按 {@value #MAX_SEAL_FAILED_REASON_LENGTH} 个字符截断 ——
+     * <p>按 {@code seal_verify_id}（上传印章时由 {@link #uploadSeal} 写入的法大大 verifyId，与审核通过回调同一套定位键）
+     * 定位公司，把 {@code seal_flow_status} 置为 {@value #SEAL_FLOW_REJECTED}（审核失败），
+     * 并把回调携带的 {@code reason} 写入 {@code seal_failed_reason}；详情页只在失败原因非空时展示。
+     * 原因可以为空，此时仅更新审核状态。原因超过列宽时按 {@value #MAX_SEAL_FAILED_REASON_LENGTH} 个字符截断 ——
      * 超长值直接入库会被 MySQL 严格模式拒绝，导致整笔回调连状态一起丢失。
      * 未匹配到记录时只记日志、不抛异常，与审核通过回调一致：重试无法修复，且回调方期望 success 应答。</p>
      *
-     * @param openCorpId 法大大唯一公司 ID，对应 {@code buyer_company.open_corpid}
-     * @param reason     审核不通过原因，可为空
+     * @param verifyId 法大大受理创章时返回的核验 ID（19 位长整型），对应 {@code buyer_company.seal_verify_id}
+     * @param reason   审核不通过原因，可为空
      */
     @Transactional
-    public void handleSealVerifyFailed(String openCorpId, String reason) throws InterruptedException {
-        String corpId = requireText(openCorpId, "openCorpId 不能为空");
+    public void handleSealVerifyFailed(Long verifyId, String reason) throws InterruptedException {
+        Long verify = requireVerifyId(verifyId);
         String failedReason = truncateFailedReason(reason);
         Thread.sleep(3000);
-        int updated = mapper.updateSealVerifyFailed(corpId, failedReason);
+        int updated = mapper.updateSealVerifyFailed(verify, failedReason);
         if (updated == 0) {
-            log.warn("法大大印章审核不通过回调未匹配到待更新记录（openCorpId 无对应公司、或公司已逻辑删除）：openCorpId={}",
-                    corpId);
+            log.warn("法大大印章审核不通过回调未匹配到待更新记录（印章已被移除、公司已逻辑删除、或 verifyId 未被记录）：verifyId={}",
+                    verify);
             return;
         }
-        log.info("法大大印章审核不通过，已更新公司印章：openCorpId={}, 更新行数={}, 是否携带原因={}",
-                corpId, updated, failedReason != null);
+        log.info("法大大印章审核不通过，已更新公司印章：verifyId={}, 更新行数={}, 是否携带原因={}",
+                verify, updated, failedReason != null);
     }
 
     /** 审核不通过原因：空白转 null；超长按列宽截断，避免整笔回调因列长度报错而白跑。 */
@@ -532,11 +551,6 @@ public class BuyerCompanyApplicationService {
                 && mapper.existsByCreditCode(company.getCreditCode(), excludeId)) {
             throw new BusinessException(ResultCode.BUYER_COMPANY_CREDIT_CODE_DUPLICATE);
         }
-
-        if (company.getOpenCorpId() != null
-                && mapper.existsByOpenCorpId(company.getOpenCorpId(), excludeId)) {
-            throw new BusinessException(ResultCode.BUYER_COMPANY_OPEN_CORPID_DUPLICATE);
-        }
     }
 
     private BusinessException duplicateError(BuyerCompanyPO company) {
@@ -634,6 +648,14 @@ public class BuyerCompanyApplicationService {
             throw new BusinessException(ResultCode.PARAM_ERROR, message);
         }
         return value.trim();
+    }
+
+    /** 回调定位键校验：verifyId 是法大大侧必填的长整型，缺失即报文非法。 */
+    private static Long requireVerifyId(Long verifyId) {
+        if (verifyId == null) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "verifyId 不能为空");
+        }
+        return verifyId;
     }
 
     private static String blankToNull(String value) {
