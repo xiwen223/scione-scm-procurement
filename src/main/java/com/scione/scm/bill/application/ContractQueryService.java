@@ -27,6 +27,11 @@ import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -37,6 +42,11 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class ContractQueryService {
+
+    private static final HttpClient DOWNLOAD_HTTP_CLIENT = HttpClient.newBuilder()
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .connectTimeout(Duration.ofSeconds(15))
+            .build();
 
     private final ContractRepository contractRepository;
     private final ContractFileStore contractFileStore;
@@ -221,9 +231,13 @@ public class ContractQueryService {
     public String getFadadaSignedDownloadUrl(Long contractId) {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new RuntimeException("合同不存在：contractId=" + contractId));
-        if (contract.getStatus() != ContractStatus.EXECUTING && contract.getStatus() != ContractStatus.COMPLETED) {
-            throw new BusinessException(ResultCode.PARAM_ERROR, "合同尚未签署完成，无法下载已签署合同");
+        if (!usesFadadaDocument(contract.getStatus())) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "创建状态合同应下载未盖章原合同");
         }
+        return getFadadaDocumentDownloadUrl(contract);
+    }
+
+    private String getFadadaDocumentDownloadUrl(Contract contract) {
         if (contract.getFadadaTaskId() == null || contract.getFadadaTaskId().isBlank()) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "合同未关联法大大签署任务");
         }
@@ -231,12 +245,44 @@ public class ContractQueryService {
         if (ownerOpenCorpId == null || ownerOpenCorpId.isBlank()) {
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "法大大发起企业 openCorpId 未配置");
         }
+        boolean signing = contract.getStatus() == ContractStatus.SIGNING;
         String downloadUrl = fadadaOpenApiClient.getSignTaskDownloadUrl(
                 new FadadaOpenApiClient.DownloadUrlRequest("corp", ownerOpenCorpId, contract.getFadadaTaskId(),
-                        contract.getContractNo() + "-已签署合同.pdf", false, "download"));
-        log.info("已获取法大大已签署合同下载地址：contractId={}, contractNo={}, signTaskId={}",
-                contractId, contract.getContractNo(), contract.getFadadaTaskId());
+                        contract.getContractNo() + (signing ? "-签署中合同.pdf" : "-已签署合同.pdf"),
+                        false, "download"));
+        log.info("已获取法大大合同下载地址：contractId={}, contractNo={}, status={}, signTaskId={}, documentStage={}",
+                contract.getId(), contract.getContractNo(), contract.getStatus(), contract.getFadadaTaskId(),
+                signing ? "我方已盖章、供方待签" : "双方已盖章");
         return downloadUrl;
+    }
+
+    private boolean usesFadadaDocument(ContractStatus status) {
+        return status == ContractStatus.SIGNING
+                || status == ContractStatus.EXECUTING
+                || status == ContractStatus.COMPLETED;
+    }
+
+    private byte[] downloadFadadaDocument(Contract contract) throws IOException {
+        String downloadUrl = getFadadaDocumentDownloadUrl(contract);
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(downloadUrl))
+                    .GET()
+                    .timeout(Duration.ofSeconds(60))
+                    .build();
+            HttpResponse<byte[]> response = DOWNLOAD_HTTP_CLIENT.send(request,
+                    HttpResponse.BodyHandlers.ofByteArray());
+            if (response.statusCode() < 200 || response.statusCode() >= 300 || response.body().length == 0) {
+                throw new IOException("法大大文件下载失败，HTTP状态=" + response.statusCode());
+            }
+            log.info("法大大合同文件下载成功：contractNo={}, status={}, bytes={}",
+                    contract.getContractNo(), contract.getStatus(), response.body().length);
+            return response.body();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IOException("法大大文件下载被中断", ex);
+        } catch (IllegalArgumentException ex) {
+            throw new IOException("法大大文件下载地址无效", ex);
+        }
     }
 
     public record PageResult<T>(long total, List<T> records) {
@@ -280,15 +326,16 @@ public class ContractQueryService {
 
             for (Contract contract : contracts) {
                 // 仅创建状态需要按当前可编辑数据生成；其他状态直接读取已保存文件。
-                String fileUrl = contract.getSignedPdfUrl();
+                String fileUrl = null;
                 byte[] fileBytes;
-                if (StringUtils.hasText(fileUrl)) {
-                    fileBytes = contractFileStore.download(fileUrl);
-                } else if (contract.getStatus() == ContractStatus.CREATED) {
+                if (contract.getStatus() == ContractStatus.CREATED) {
                     fileBytes = generateLatestContractPdf(contract, "批量下载原始合同");
                     fileUrl = contract.getContractPdfUrl();
+                } else if (usesFadadaDocument(contract.getStatus())) {
+                    fileBytes = downloadFadadaDocument(contract);
                 } else {
-                    fileUrl = contract.getContractPdfUrl();
+                    fileUrl = StringUtils.hasText(contract.getSignedPdfUrl())
+                            ? contract.getSignedPdfUrl() : contract.getContractPdfUrl();
                     if (!StringUtils.hasText(fileUrl)) {
                         throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
                                 "合同文件不存在：contractNo=" + contract.getContractNo());
@@ -307,7 +354,8 @@ public class ContractQueryService {
 
                 // 生成唯一文件名：合同编号.pdf
                 String extension = fileUrl != null && fileUrl.endsWith(".xlsx") ? ".xlsx" : ".pdf";
-                String fileName = uniqueFileName(contract.getContractNo() + extension, fileNames);
+                String stageSuffix = contract.getStatus() == ContractStatus.SIGNING ? "-签署中" : "";
+                String fileName = uniqueFileName(contract.getContractNo() + stageSuffix + extension, fileNames);
 
                 // 写入ZIP
                 zip.putNextEntry(new ZipEntry(fileName));
