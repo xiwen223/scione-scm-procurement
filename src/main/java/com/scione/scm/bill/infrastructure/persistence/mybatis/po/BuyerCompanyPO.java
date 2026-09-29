@@ -39,6 +39,14 @@ public class BuyerCompanyPO {
     private String fadadaFreeSignBusinessId;
     private LocalDateTime fadadaFreeSignExpireTime;
     private String openCorpId;
+    /**
+     * 法大大企业主体 ID：建章时按 {@code company_name} 在 {@code /corp/entity/get-list} 里匹配出的主体，
+     * 与 {@link #sealVerifyId} 在同一步写入（见 {@code BuyerCompanyApplicationService#uploadSeal}）。
+     *
+     * <p>一个 {@code open_corpid} 下可以有多个主体（企业本身 primary / 成员企业 subsidiary），
+     * 「这枚印章归属哪个主体」由该列表达；为空表示建章时未匹配到同名主体，印章按 openCorpId 默认归属。</p>
+     */
+    private String entityId;
     private Integer priority;
     private Integer isActive;
     /** 实名认证状态：1-已认证，0-未认证（由法大大 identStatus 判定） */

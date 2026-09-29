@@ -163,7 +163,8 @@ public class BuyerCompanyApplicationService {
 
     /**
      * 上传印章图片：公司必须已通过法大大实名认证，先把图片落到对象存储并写入库内签章字段，
-     * 再用法大大创建企业印章，最后把法大大返回的 {@code verifyId} 回写到 {@code seal_verify_id}。
+     * 再用法大大创建企业印章，最后把法大大返回的 {@code verifyId} 与本次建章指定的归属主体
+     * {@code entityId} 回写到 {@code seal_verify_id} / {@code entity_id}。
      *
      * <p><b>顺序固定为「对象存储 → 落库 → 法大大 → 回写 verifyId」，不能颠倒。</b>法大大受理建章后会异步回调
      * （{@code seal-verify-successed}），回调按 {@code seal_verify_id} 定位公司并把 {@code seal_flow_status} 置为 1。
@@ -180,7 +181,9 @@ public class BuyerCompanyApplicationService {
      *
      * <p>建章这一步内部是两次法大大调用：先按 {@code openCorpId} 查 {@code /corp/entity/get-list}，
      * 用本行 {@code company_name} 匹配出主体 {@code entityId}，再带着它调 {@code /seal/create-by-image}；
-     * 匹配不到就不传 {@code entityId}。主体查询失败会向上抛，走下面同一条补偿路径。</p>
+     * 匹配不到就不传 {@code entityId}。主体查询失败会向上抛，走下面同一条补偿路径。
+     * 匹配结果由建章调用原样带回（{@code SealCreation.entityId}），与 {@code verifyId} 一起落库 ——
+     * 此时 {@code entity_id} 为空即表示这枚印章按 openCorpId 默认归属，签署阶段据此判断归属主体。</p>
      *
      * <p>该方法刻意<b>不加 {@code @Transactional}</b>：落库必须立即提交，
      * 回调线程才能读到「已持有签章且审核中」的那一行。</p>
@@ -212,19 +215,21 @@ public class BuyerCompanyApplicationService {
 
         // 3. 法大大：用图片创建企业印章（sealImage 为 Base64 字符串）。
         //    传公司名进去，客户端会先查 /corp/entity/get-list 匹配主体 entityId，命中才带上该字段
-        Long verifyId;
+        FadadaOpenApiClient.SealCreation creation;
         try {
-            verifyId = fadadaOpenApiClient.createSealByImage(
+            creation = fadadaOpenApiClient.createSealByImage(
                     openCorpId, company.getCompanyName(), name, Base64.getEncoder().encodeToString(content));
         } catch (RuntimeException exception) {
             compensateFailedSealUpload(id, uploaded.objectKey(), exception);
             throw exception;
         }
 
-        // 4. 回写核验 ID：印章审核结果是异步回调，回调报文只带 verifyId、没有本地主键，
-        //    不落库就无法定位到这一行。此步失败不做落库补偿 —— 法大大侧印章已经创建，
+        // 4. 回写建章结果：核验 ID 是印章审核回调的定位键（回调报文只带 verifyId、没有本地主键，
+        //    不落库就无法定位到这一行）；entityId 是本次建章实际指定的归属主体，签署阶段要用它
+        //    判断印章归属哪个主体，两者同一条语句写入。此步失败不做落库补偿 —— 法大大侧印章已经创建，
         //    清空本地字段只会留下孤儿印章；异常向上抛，由调用方决定重试或人工处理。
-        mapper.updateSealVerifyId(id, verifyId);
+        Long verifyId = creation.verifyId();
+        mapper.updateSealCreateResult(id, verifyId, creation.entityId());
 
         return new BuyerCompanySealUploadResponse(verifyId, toDetail(requireCompany(id)));
     }

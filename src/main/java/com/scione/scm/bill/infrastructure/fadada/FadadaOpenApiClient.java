@@ -529,24 +529,31 @@ public class FadadaOpenApiClient {
      * 返回 data 中的 {@code verifyId} 表示法大大已受理，印章审核为异步流程；创建类接口不做重试，
      * 避免网络异常时重复建章。</p>
      *
-     * <p>{@code verifyId} 是 19 位长整型，因此按 {@code Long} 返回（本地 {@code seal_verify_id} 列同为
+     * <p>{@code verifyId} 是 19 位长整型，因此按 {@code Long} 承载（本地 {@code seal_verify_id} 列同为
      * {@code bigint}）—— 它要在回调里当定位键做等值比较，若以字符串形态落到字符列上，
      * MySQL 会把字符列转成 DOUBLE 再比较，尾数精度不足会让相邻的 verifyId 互相误命中。</p>
+     *
+     * <p>返回值里把本次解析出的 {@code entityId} 一并带出：它只在建章这一刻由
+     * {@link #resolveEntityId} 得到，调用方需要把它和 {@code verifyId} 一起落到
+     * {@code buyer_company}，签署阶段才知道这枚印章归属哪个主体。</p>
      *
      * @param openCorpId       法大大企业 ID
      * @param corpName         企业名称，用于在主体列表中匹配 {@code entityId}；为空则跳过主体查询
      * @param sealName         印章名称
      * @param sealImageBase64  印章图片的 Base64 内容
+     * @return 建章结果：核验 ID + 本次建章指定的归属主体 ID（未匹配到同名主体时为 {@code null}）
      */
-    public Long createSealByImage(String openCorpId, String corpName, String sealName, String sealImageBase64) {
+    public SealCreation createSealByImage(String openCorpId, String corpName, String sealName, String sealImageBase64) {
         String corpId = requireText(openCorpId, "openCorpId");
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("openCorpId", corpId);
-        putIfNotBlank(body, "entityId", resolveEntityId(corpId, corpName));
+        // 主体只解析这一次：结果既作为建章请求字段，也随返回值交给调用方落库
+        String entityId = resolveEntityId(corpId, corpName);
+        putIfNotBlank(body, "entityId", entityId);
         body.put("sealName", requireText(sealName, "sealName"));
         body.put("sealImage", requireText(sealImageBase64, "sealImage"));
         JsonNode data = businessPost(CREATE_SEAL_BY_IMAGE_PATH, body, false).path("data");
-        return requiredLong(data, "verifyId", "创建印章失败");
+        return new SealCreation(requiredLong(data, "verifyId", "创建印章失败"), entityId);
     }
 
     /**
@@ -875,6 +882,20 @@ public class FadadaOpenApiClient {
      */
     public record CorpEntity(String entityId, String entityType, String corpName, String corpIdentNo,
                              String identStatus) {
+    }
+
+    /**
+     * 建章（{@code /seal/create-by-image}）的返回结果。
+     *
+     * <p>两个值一起返回是刻意的：{@code entityId} 只在建章这一刻由 {@link #resolveEntityId} 解析得到，
+     * 调用方需要把它与 {@code verifyId} 一并落到本地 {@code buyer_company.entity_id}，
+     * 签署阶段才知道这枚印章归属哪个主体。</p>
+     *
+     * @param verifyId 法大大受理创章返回的核验 ID（19 位长整型），印章审核结果回调的定位键
+     * @param entityId 本次建章指定的归属主体 ID；未匹配到同名主体时为 {@code null}，
+     *                 表示请求未携带该字段、印章按 {@code openCorpId} 默认归属
+     */
+    public record SealCreation(Long verifyId, String entityId) {
     }
 
     public record UploadUrl(String uploadUrl, String fddFileUrl) {

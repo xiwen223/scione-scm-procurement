@@ -24,6 +24,7 @@
         seal_flow_status,
         seal_failed_reason,
         open_corpid,
+        entity_id,
         priority,
         is_active,
         ident_status,
@@ -126,7 +127,7 @@
       印章审核状态由法大大审核流程决定，这里只做「新章回到审核中 / 移除后清空」的初始化：
       设置签章 → seal_flow_status = 0（审核中）、清空失败原因；移除签章 → 两者一并清空。
       seal_verify_id 必须一并清空：它是回调的定位键，留着上一章的 verifyId 会让法大大重推的旧回调
-      命中这一行，把新章的状态与印章 ID 覆盖成旧章的结果。新值由 updateSealVerifyId 在调完法大大后写入。
+      命中这一行，把新章的状态与印章 ID 覆盖成旧章的结果。新值由 updateSealCreateResult 在调完法大大后写入。
     -->
     <update id="updateSeal">
         UPDATE buyer_company
@@ -149,13 +150,18 @@
     </update>
 
     <!--
-      写入法大大创章返回的核验 ID（POST /seal/create-by-image 的 verifyId）。
+      写回法大大建章结果：核验 ID（POST /seal/create-by-image 的 verifyId）与本次建章指定的归属主体 ID。
       调用时机：上传印章时「落库（updateSeal，状态置 0）→ 调法大大建章」之后立即执行，
-      与 updateSeal 是同一笔业务操作的两个阶段，这里只覆盖 seal_verify_id 一列，不碰审核状态。
+      与 updateSeal 是同一笔业务操作的两个阶段，这里只覆盖 seal_verify_id 与 entity_id 两列，不碰审核状态。
+      entity_id 与 verifyId 同一条语句写入：两者都只在建章这一次调用里解析得到
+      （主体由法大大 /corp/entity/get-list 按公司名匹配），分开写会留下「verifyId 已落库、归属主体还没落」的中间态。
+      entityId 为 NULL 时一并置空 —— 表示本次建章没匹配到同名主体、印章按 openCorpId 默认归属，
+      此时旧的 entity_id 已不再可信，留着会让签署阶段把错误的归属主体带出去。
     -->
-    <update id="updateSealVerifyId">
+    <update id="updateSealCreateResult">
         UPDATE buyer_company
-        SET seal_verify_id = #{verifyId}
+        SET seal_verify_id = #{verifyId},
+            entity_id = #{entityId}
         WHERE id = #{id}
           AND is_deleted = 0
     </update>
@@ -183,7 +189,7 @@
 
     <!--
       法大大印章审核通过回调（X-FASC-Event = seal-verify-successed）：
-      按 seal_verify_id 定位公司（该值是上传印章时由 updateSealVerifyId 写入的法大大 verifyId，法大大侧唯一），
+      按 seal_verify_id 定位公司（该值是上传印章时由 updateSealCreateResult 写入的法大大 verifyId，法大大侧唯一），
       写入法大大印章 ID，并把审核状态置为 1（审核成功）、清空失败原因。
       不再按 open_corpid 定位：open_corpid 允许重复，用它定位会一次命中多行、把结果广播到其它公司。
       过滤条件只有 is_deleted = 0（2026-09-24 起，守卫已移除）：回调被视为审核结果的权威来源，

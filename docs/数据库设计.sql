@@ -53,6 +53,7 @@ CREATE TABLE `buyer_company` (
     `seal_url` varchar(512) DEFAULT NULL COMMENT '电子印章图片URL',
     `seal_base64` mediumtext COMMENT '电子印章Base64字符串',
     `fadada_seal_id` varchar(128) DEFAULT NULL COMMENT '法大大印章ID',
+    `seal_verify_id` bigint DEFAULT NULL COMMENT '印章审核工单ID。审核通过或不通过的结果会在回调事件中会带上该字段；用于回调定位公司（open_corpid 可重复，不能作定位键）',
     `seal_flow_status` tinyint DEFAULT NULL COMMENT '印章审核状态，0：审核中；1：审核成功；2：审核失败',
     `seal_failed_reason` varchar(128) DEFAULT NULL COMMENT '印章审核不通过原因，仅审核失败（seal_flow_status=2）时有值',
     `open_corpid` varchar(50) DEFAULT NULL COMMENT '法大大唯一公司ID',

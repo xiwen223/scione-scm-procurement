@@ -17,15 +17,24 @@ public interface BuyerCompanyMapper {
     int updateSeal(@Param("id") Long id, @Param("sealUrl") String sealUrl, @Param("sealName") String sealName);
 
     /**
-     * 写入法大大创章返回的核验 ID（{@code /seal/create-by-image} 的 {@code verifyId}）。
+     * 写回法大大建章结果：核验 ID（{@code /seal/create-by-image} 的 {@code verifyId}）与本次建章指定的
+     * 归属主体 {@code entityId}。
      *
      * <p>在上传印章的「落库 → 调法大大」之后立即调用：印章审核结果是异步回调，
-     * 回调报文只带 verifyId 而没有本地主键，必须先把它落到公司行上，回调才定位得到。</p>
+     * 回调报文只带 verifyId 而没有本地主键，必须先把它落到公司行上，回调才定位得到。
+     * entityId 与它同一条语句写入 —— 两者都只在建章这一次调用里解析得到，分开写会出现
+     * 「verifyId 已落库、归属主体还没落」的中间态，签署阶段读到空主体便会放行到法大大侧报错。</p>
      *
      * <p>{@code verifyId} 是 19 位长整型，与列 {@code seal_verify_id}（bigint）同类型，
      * 保证回调侧 {@code WHERE seal_verify_id = ?} 是精确的整数比较。</p>
+     *
+     * @param entityId 建章时匹配到的归属主体 ID；为 null 表示未匹配到同名主体，
+     *                 此时把 {@code entity_id} 一并置空，保持与「印章按 openCorpId 默认归属」一致
      */
-    int updateSealVerifyId(@Param("id") Long id, @Param("verifyId") Long verifyId);
+    int updateSealCreateResult(
+            @Param("id") Long id,
+            @Param("verifyId") Long verifyId,
+            @Param("entityId") String entityId);
 
     /**
      * 移除签章：清空 seal_name / seal_url / seal_base64 / fadada_seal_id / seal_verify_id /
