@@ -3,6 +3,7 @@ package com.scione.scm.bill.infrastructure.persistence.mybatis.mapper;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.BuyerCompanyPO;
 import org.apache.ibatis.annotations.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -31,6 +32,22 @@ public interface BuyerCompanyMapper {
      * @return 实际更新的行数，0 表示没有匹配到待更新记录
      */
     int updateSealVerified(@Param("openCorpId") String openCorpId, @Param("sealId") String sealId);
+
+    /**
+     * 法大大印章免验证签授权回调（event = seal-authorize-free-sign）：按 open_corpid 定位公司，
+     * 写入免验证签场景码与授权到期时间。
+     *
+     * <p>两个字段成对覆盖（不做「有值才写」）：回调是授权状态的权威来源，重新授权时旧到期时间必须能刷新。
+     * expireTime 为 null 表示不限期，与签署侧的过期校验口径一致。语句幂等，重复回调结果一致。</p>
+     *
+     * @param businessId 免验证签场景码，写入 fadada_free_sign_business_id
+     * @param expireTime 授权到期时间（已由服务层把毫秒时间戳转换完成），null 表示不限期
+     * @return 实际更新的行数，0 表示没有匹配到待更新记录
+     */
+    int updateFreeSignAuthorization(
+            @Param("openCorpId") String openCorpId,
+            @Param("businessId") String businessId,
+            @Param("expireTime") LocalDateTime expireTime);
 
     /**
      * 法大大印章审核不通过回调（event = seal-verify-failed）：按 open_corpid 定位公司，

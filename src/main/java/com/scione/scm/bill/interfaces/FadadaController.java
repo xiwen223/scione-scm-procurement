@@ -17,6 +17,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.validation.annotation.Validated;
@@ -52,6 +53,7 @@ import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperati
  *   <li>印章移除：按公司的印章审核状态决定是否先清理法大大侧印章，再删除对象存储图片并清空公司签章字段。</li>
  * </ul>
  */
+@Slf4j
 @RestController
 @Validated
 @RequestMapping("/api/v1/fadada")

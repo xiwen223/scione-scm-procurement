@@ -21,6 +21,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
@@ -298,6 +301,58 @@ public class BuyerCompanyApplicationService {
     }
 
     /**
+     * 法大大印章免验证签授权回调（{@code X-FASC-Event = seal-authorize-free-sign}）的落库入口。
+     *
+     * <p>按 {@code open_corpid} 找到对应公司，把回调携带的场景码 {@code businessId} 与授权到期时间
+     * {@code expiresTime} 成对写入 {@code fadada_free_sign_business_id} 与 {@code fadada_free_sign_expire_time}。
+     * 这两个字段会在发起签署前被读取用于判断授权是否可用（见 {@code ContractSignAppService}），
+     * 因此以本回调为权威来源整体覆盖，不做「有值才写」—— 否则重新授权时无法把旧的到期时间刷新。
+     * 更新语句幂等，法大大重复回调结果一致；未匹配到记录（openCorpId 无对应公司、或公司已逻辑删除）时
+     * 只记日志、不抛异常 —— 该场景重试无法修复，且回调方期望 success 应答以停止重推。</p>
+     *
+     * @param openCorpId  法大大唯一公司 ID，对应 {@code buyer_company.open_corpid}
+     * @param businessId  免验证签场景码，写入 {@code buyer_company.fadada_free_sign_business_id}
+     * @param expiresTime 授权到期时间（法大大下发的毫秒级时间戳字符串），可为空表示不限期
+     */
+    @Transactional
+    public void handleSealAuthorizeFreeSign(String openCorpId, String businessId, String expiresTime) {
+        String corpId = requireText(openCorpId, "openCorpId 不能为空");
+        String sceneCode = requireText(businessId, "businessId 不能为空");
+        LocalDateTime expireAt = toFreeSignExpireTime(expiresTime);
+
+        int updated = mapper.updateFreeSignAuthorization(corpId, sceneCode, expireAt);
+        if (updated == 0) {
+            log.warn("法大大免验证签授权回调未匹配到待更新记录（openCorpId 无对应公司、或公司已逻辑删除）：openCorpId={}",
+                    corpId);
+            return;
+        }
+        log.info("法大大免验证签授权已更新公司配置：openCorpId={}, businessId={}, 到期时间={}, 更新行数={}",
+                corpId, sceneCode, expireAt, updated);
+    }
+
+    /**
+     * 毫秒级时间戳字符串转本地时间。
+     *
+     * <p>空白 / {@code 0} / 非正数都表示「不限期」，返回 null —— 与签署侧的过期校验口径一致
+     * （{@code fadada_free_sign_expire_time} 为空时不做过期判断）。无法解析为数字时只记 WARN 并按不限期处理，
+     * 避免一个格式异常的字段让整笔回调白跑。</p>
+     */
+    private static LocalDateTime toFreeSignExpireTime(String expiresTime) {
+        String value = blankToNull(expiresTime);
+        if (value == null) {
+            return null;
+        }
+        long millis;
+        try {
+            millis = Long.parseLong(value.trim());
+        } catch (NumberFormatException exception) {
+            log.warn("法大大免验证签授权回调 expiresTime 不是合法毫秒时间戳，到期时间按不限期处理：expiresTime={}", value);
+            return null;
+        }
+        return millis > 0 ? LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneId.systemDefault()) : null;
+    }
+
+    /**
      * 法大大印章审核不通过回调（{@code X-FASC-Event = seal-verify-failed}）的落库入口。
      *
      * <p>按 {@code open_corpid} 找到对应公司，把 {@code seal_flow_status} 置为
@@ -526,6 +581,7 @@ public class BuyerCompanyApplicationService {
                 po.getSealFlowStatus(),
                 po.getSealFailedReason(),
                 po.getOpenCorpId(),
+                po.getFadadaFreeSignBusinessId(),
                 po.getIdentStatus(),
                 po.getPriority(),
                 isDefault,

@@ -156,6 +156,8 @@
             seal_base64 = NULL,
             fadada_seal_id = NULL,
             seal_flow_status = NULL,
+            fadada_free_sign_business_id = NULL,
+            fadada_free_sign_expire_time = NULL,
             seal_failed_reason = NULL
         WHERE id = #{id}
           AND is_deleted = 0
@@ -173,6 +175,22 @@
         SET fadada_seal_id = #{sealId},
             seal_flow_status = 1,
             seal_failed_reason = NULL
+        WHERE open_corpid = #{openCorpId}
+          AND is_deleted = 0
+    </update>
+
+    <!--
+      法大大印章免验证签授权回调（X-FASC-Event = seal-authorize-free-sign）：
+      按 open_corpid 定位公司（该列有唯一索引 uk_open_corpid），写入免验证签场景码与授权到期时间
+      （expireTime 的毫秒时间戳已由服务层转换完成）。
+      两个字段成对整体覆盖、不做「有值才写」：本回调是授权状态的权威来源，重新授权时旧的到期时间必须能被刷新，
+      否则签署前的过期校验会一直读到旧值。expireTime 为 NULL 表示不限期，与签署侧口径一致。
+      语句幂等：法大大重复回调得到相同结果，update_time 由列上的 ON UPDATE CURRENT_TIMESTAMP 自动维护。
+    -->
+    <update id="updateFreeSignAuthorization">
+        UPDATE buyer_company
+        SET fadada_free_sign_business_id = #{businessId},
+            fadada_free_sign_expire_time = #{expireTime,jdbcType=TIMESTAMP}
         WHERE open_corpid = #{openCorpId}
           AND is_deleted = 0
     </update>

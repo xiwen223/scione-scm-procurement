@@ -41,6 +41,8 @@ import java.util.Map;
  *       把 {@code fadada_seal_id} 与 {@code seal_flow_status = 1} 写入对应公司；</li>
  *   <li>{@code seal-verify-failed}（印章审核不通过）：取 {@code openCorpId} 与 {@code reason}，
  *       把 {@code seal_flow_status = 2} 与 {@code seal_failed_reason = reason} 写入对应公司；</li>
+ *   <li>{@code seal-authorize-free-sign}（印章免验证签授权）：取 {@code openCorpId}、{@code businessId}
+ *       与 {@code expiresTime}，把免验证签场景码与授权到期时间写入对应公司；</li>
  *   <li>其余事件（{@code seal-create} / {@code seal-disable} / {@code seal-delete} / {@code notifyUrlVerify} 等）
  *       暂只记录日志，按需在此扩展。</li>
  * </ul>
@@ -57,6 +59,9 @@ public class FadadaCallBackController {
 
     /** 印章审核不通过事件。 */
     private static final String EVENT_SEAL_VERIFY_FAILED = "seal-verify-failed";
+
+    /** 印章免验证签授权事件。 */
+    private static final String EVENT_SEAL_AUTHORIZE_FREE_SIGN = "seal-authorize-free-sign";
 
     /** 回调验签固定使用 HMAC-SHA256，与官方示例一致（不取请求头的实际值做二次信任）。 */
     private static final String SIGN_TYPE = "HMAC-SHA256";
@@ -92,9 +97,11 @@ public class FadadaCallBackController {
         switch (event == null ? "" : event) {
             case EVENT_SEAL_VERIFY_SUCCESS -> handleSealVerifySuccess(bizContent);
             case EVENT_SEAL_VERIFY_FAILED -> handleSealVerifyFailed(bizContent);
+            case EVENT_SEAL_AUTHORIZE_FREE_SIGN -> handleSealAuthorizeFreeSign(bizContent);
             case "sign-task-signed", "sign-task-finished", "sign-task-sign-failed", "sign-task-sign-rejected",
                     "sign-task-canceled", "sign-task-expire", "sign-task-abolish" ->
                     fadadaContractCallbackService.handleVerifiedEvent(event, bizContent);
+
             default -> log.info("收到法大大未处理事件：event={}", event);
         }
         return CALLBACK_SUCCESS;
@@ -167,6 +174,33 @@ public class FadadaCallBackController {
         }
 
         buyerCompanyApplicationService.handleSealVerifySuccess(openCorpId, sealId);
+    }
+
+    /**
+     * 印章免验证签授权：从 bizContent 取 openCorpId / businessId / expiresTime，写回对应公司的免验证签配置。
+     *
+     * <p>该事件是免验证签授权状态的权威来源 —— 场景码与到期时间成对写入，用于签署前判断授权是否仍有效
+     * （见 {@code ContractSignAppService} 的过期校验）。{@code expiresTime} 是法大大下发的毫秒级时间戳字符串，
+     * 由服务层转换后落库，此处保持原样透传。</p>
+     *
+     * <p>字段缺失时只记日志、不抛异常 —— 报文结构问题重试也无法修复，且返回非 success 会导致法大大反复重推。</p>
+     */
+    private void handleSealAuthorizeFreeSign(String bizContent) {
+        JsonNode payload = parseBizContent(bizContent);
+        if (payload == null) {
+            return;
+        }
+        JsonNode business = businessNode(payload);
+
+        String openCorpId = text(business, "openCorpId");
+        String businessId = text(business, "businessId");
+        if (isBlank(openCorpId) || isBlank(businessId)) {
+            log.error("法大大免验证签授权回调缺少 openCorpId 或 businessId，无法更新公司免验证签配置：event={}",
+                    EVENT_SEAL_AUTHORIZE_FREE_SIGN);
+            return;
+        }
+
+        buyerCompanyApplicationService.handleSealAuthorizeFreeSign(openCorpId, businessId, text(business, "expiresTime"));
     }
 
     /**

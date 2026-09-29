@@ -10,6 +10,9 @@ public record BuyerCompanyDetailResponse(
         Integer sealFlowStatus,
         /** 印章审核不通过的原因，仅审核失败时有值；为空表示没有失败原因，前端不展示 */
         String sealFailedReason,
-        String openCorpId, Integer identStatus,
+        String openCorpId,
+        /** 法大大免验证签场景码，由 seal-authorize-free-sign 回调写入；为空表示当前印章尚未授权自动签署 */
+        String fadadaFreeSignBusinessId,
+        Integer identStatus,
         Integer priority, boolean isDefault, boolean isActive, LocalDateTime createTime, LocalDateTime updateTime) {
 }
