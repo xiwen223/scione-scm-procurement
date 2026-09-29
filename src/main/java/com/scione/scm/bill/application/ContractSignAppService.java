@@ -422,17 +422,42 @@ public class ContractSignAppService {
             throw new BusinessException(ResultCode.PARAM_ERROR, "仅签署中状态的合同可催签");
         }
         if (!StringUtils.hasText(contract.getFadadaTaskId())) {
-            throw new BusinessException(ResultCode.PARAM_ERROR, "合同未关联法大大签署任务，无法催签");
+            throw new BusinessException(ResultCode.PARAM_ERROR, "合同缺少签署任务信息，无法催办");
         }
         log.info("开始法大大催签：contractNo={}, signTaskId={}", contract.getContractNo(), contract.getFadadaTaskId());
         logSignTaskActorsForUrge(contract.getContractNo(), contract.getFadadaTaskId(), "催签前");
-        fadadaOpenApiClient.urgeSignTask(contract.getFadadaTaskId());
+        try {
+            fadadaOpenApiClient.urgeSignTask(contract.getFadadaTaskId());
+        } catch (BusinessException ex) {
+            // 第三方返回内容只留在后台日志；接口响应使用本系统业务文案，避免向用户暴露服务商及业务码。
+            log.warn("催办请求未受理：contractNo={}, signTaskId={}, upstreamReason={}",
+                    contract.getContractNo(), contract.getFadadaTaskId(), ex.getMessage());
+            if (isUrgeTimeLimit(ex.getMessage())) {
+                throw new BusinessException(ResultCode.PARAM_ERROR, "催办时间间隔未到，请稍后再试");
+            }
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "催办暂未成功，请稍后再试");
+        }
         log.info("法大大催签接口已成功受理：contractNo={}, signTaskId={}；短信是否送达由法大大平台按任务状态和频控决定",
                 contract.getContractNo(), contract.getFadadaTaskId());
         logSignTaskActorsForUrge(contract.getContractNo(), contract.getFadadaTaskId(), "催签后");
         String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
         contractRepository.saveOperationLog(ContractOperationLog.ofUrgeSign(
                 contract.getId(), contract.getContractNo(), operator, operator, contract.getFadadaTaskId()));
+    }
+
+    private boolean isUrgeTimeLimit(String message) {
+        if (!StringUtils.hasText(message)) {
+            return false;
+        }
+        String normalized = message.toLowerCase();
+        return normalized.contains("时间")
+                || normalized.contains("小时")
+                || normalized.contains("分钟")
+                || normalized.contains("间隔")
+                || normalized.contains("频率")
+                || normalized.contains("频繁")
+                || normalized.contains("too many")
+                || normalized.contains("rate limit");
     }
 
     private void logSignTaskActorsForUrge(String contractNo, String signTaskId, String scene) {

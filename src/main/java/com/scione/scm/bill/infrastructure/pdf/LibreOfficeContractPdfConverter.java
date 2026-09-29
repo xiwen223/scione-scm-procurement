@@ -17,7 +17,7 @@ import java.util.List;
 @Slf4j
 @Component
 public class LibreOfficeContractPdfConverter implements ContractPdfConverter {
-    @Value("${contract.pdf-converter.command:C:/Program Files/LibreOffice/program/soffice.exe}")
+    @Value("${contract.pdf-converter.command}")
     private String sofficeCommand;
 
     @Override

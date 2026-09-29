@@ -324,7 +324,8 @@ public class FadadaOpenApiClient {
         return Map.of("fieldId", fieldId, "fieldName", fieldId, "fieldType", "date_sign",
                 "moveable", false,
                 "position", Map.of("positionMode", "keyword", "positionKeyword", keyword,
-                        "keywordOffsetX", 70, "keywordOffsetY", 0));
+                        // 日期控件以中心点定位；向右移动到与合同编号、签订地点的值列对齐。
+                        "keywordOffsetX", 185, "keywordOffsetY", 0));
     }
 
     private Map<String, Object> signField(String fieldId, String sealId) {
