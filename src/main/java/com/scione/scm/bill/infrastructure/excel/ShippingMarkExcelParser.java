@@ -5,10 +5,12 @@ import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import org.apache.poi.hssf.usermodel.HSSFClientAnchor;
 import org.apache.poi.hssf.usermodel.HSSFPicture;
+import org.apache.poi.hssf.usermodel.HSSFPictureData;
 import org.apache.poi.hssf.usermodel.HSSFShape;
 import org.apache.poi.hssf.usermodel.HSSFSheet;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.*;
+import org.openxmlformats.schemas.drawingml.x2006.main.CTBlipFillProperties;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.unit.DataSize;
@@ -203,21 +205,37 @@ public class ShippingMarkExcelParser implements ShippingMarkImportParser {
             for (XSSFShape shape : drawing.getShapes()) {
                 if (shape instanceof XSSFPicture picture) {
                     XSSFClientAnchor anchor = picture.getClientAnchor();
-                    if (anchor != null) {
+                    XSSFPictureData pictureData = pictureData(picture);
+                    if (anchor != null && pictureData != null) {
                         result.putIfAbsent(anchor.getRow1(), new ImageData(
-                                picture.getPictureData().getData(), picture.getPictureData().suggestFileExtension()));
+                                pictureData.getData(), pictureData.suggestFileExtension()));
                     }
                 }
             }
         } else if (sheet instanceof HSSFSheet hssfSheet && hssfSheet.getDrawingPatriarch() != null) {
             for (HSSFShape shape : hssfSheet.getDrawingPatriarch().getChildren()) {
                 if (shape instanceof HSSFPicture picture && picture.getAnchor() instanceof HSSFClientAnchor anchor) {
-                    result.putIfAbsent(anchor.getRow1(), new ImageData(
-                            picture.getPictureData().getData(), picture.getPictureData().suggestFileExtension()));
+                    HSSFPictureData pictureData = picture.getPictureData();
+                    if (pictureData != null) {
+                        result.putIfAbsent(anchor.getRow1(), new ImageData(
+                                pictureData.getData(), pictureData.suggestFileExtension()));
+                    }
                 }
             }
         }
         return result;
+    }
+
+    /**
+     * POI 5.3.0 的 {@link XSSFPicture#getPictureData()} 未对缺失的 blip 判空，
+     * 直接调用 {@code getBlip().getEmbed()} 会抛 NPE；这里先校验 blip 是否存在再取图。
+     */
+    private XSSFPictureData pictureData(XSSFPicture picture) {
+        CTBlipFillProperties blipFill = picture.getCTPicture().getBlipFill();
+        if (blipFill == null || blipFill.getBlip() == null) {
+            return null;
+        }
+        return picture.getPictureData();
     }
 
     private ImageData imageForRow(Row row, int rowIndex, Integer imageColumn,
@@ -282,6 +300,8 @@ public class ShippingMarkExcelParser implements ShippingMarkImportParser {
                 }
             }
             return result;
+        } catch (BusinessException exception) {
+            throw exception;
         } catch (Exception ignored) {
             return Map.of();
         }
@@ -295,7 +315,7 @@ public class ShippingMarkExcelParser implements ShippingMarkImportParser {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
                 if (++entryCount > maxWpsZipEntries) {
-                    throw new IOException("Too many XLSX zip entries");
+                    throw new BusinessException(ResultCode.IMPORT_FILE_INVALID, "Excel 结构异常，压缩包内条目过多");
                 }
                 try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
                     byte[] buffer = new byte[8192];
@@ -305,7 +325,7 @@ public class ShippingMarkExcelParser implements ShippingMarkImportParser {
                         entryBytes += read;
                         totalBytes += read;
                         if (entryBytes > maxWpsZipEntryBytes.toBytes() || totalBytes > maxWpsZipTotalBytes.toBytes()) {
-                            throw new IOException("XLSX uncompressed content is too large");
+                            throw new BusinessException(ResultCode.IMPORT_FILE_TOO_LARGE, "Excel 中图片过大，无法解析");
                         }
                         output.write(buffer, 0, read);
                     }

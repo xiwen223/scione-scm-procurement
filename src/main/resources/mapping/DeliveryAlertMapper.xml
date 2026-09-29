@@ -83,14 +83,23 @@
                 OR poi.product_name LIKE CONCAT('%', #{keyword}, '%')
             )
         </if>
-        <if test="supplier != null and supplier != ''">
-            AND po.supplier_name = #{supplier}
+        <if test="suppliers != null and suppliers.size() > 0">
+            AND po.supplier_name IN
+            <foreach collection="suppliers" item="s" open="(" separator="," close=")">
+                #{s}
+            </foreach>
         </if>
-        <if test="buyer != null and buyer != ''">
-            AND po.opt_realname = #{buyer}
+        <if test="buyers != null and buyers.size() > 0">
+            AND po.opt_realname IN
+            <foreach collection="buyers" item="b" open="(" separator="," close=")">
+                #{b}
+            </foreach>
         </if>
-        <if test="warehouse != null and warehouse != ''">
-            AND po.ware_house_name = #{warehouse}
+        <if test="warehouses != null and warehouses.size() > 0">
+            AND po.ware_house_name IN
+            <foreach collection="warehouses" item="w" open="(" separator="," close=")">
+                #{w}
+            </foreach>
         </if>
     </sql>
 
@@ -154,37 +163,50 @@
         GROUP BY t.group_key
     </sql>
 
-    <!-- 商品类型筛选：作用于聚合后的主记录 -->
+    <!-- 商品类型筛选：作用于聚合后的主记录，口径与列表展示一致（合并下单 > 套装 > 单品）。
+         聚合的 type 可能同时含多类（如「单品,合并下单」），列表展示只取优先级最高的一类，
+         此处对每种类型按「不含更高优先级类型」收窄，避免选了单品却带出合并下单。 -->
     <sql id="typeFilter">
-        <if test="type != null and type != ''">
-            <choose>
-                <when test="type == '合并下单'">
-                    AND FIND_IN_SET('合并下单', type) &gt; 0
-                </when>
-                <otherwise>
-                    AND FIND_IN_SET(#{type}, type) &gt; 0
-                </otherwise>
-            </choose>
+        <if test="types != null and types.size() > 0">
+            AND (
+            <foreach collection="types" item="t" separator=" OR ">
+                <choose>
+                    <when test="t == '合并下单'">
+                        FIND_IN_SET('合并下单', type) &gt; 0
+                    </when>
+                    <when test="t == '套装'">
+                        (FIND_IN_SET('套装', type) &gt; 0 AND FIND_IN_SET('合并下单', type) = 0)
+                    </when>
+                    <when test="t == '单品'">
+                        (FIND_IN_SET('合并下单', type) = 0 AND FIND_IN_SET('套装', type) = 0)
+                    </when>
+                </choose>
+            </foreach>
+            )
         </if>
     </sql>
 
-    <!-- 风险等级筛选：作用于聚合后的主记录 -->
+    <!-- 风险等级筛选：作用于聚合后的主记录，多选按 OR 合并 -->
     <sql id="riskLevelFilter">
-        <if test="riskLevel != null and riskLevel != ''">
-            <choose>
-                <when test="riskLevel == 'done'">
-                    AND risk = -1
-                </when>
-                <when test="riskLevel == 'normal'">
-                    AND risk &gt;= 0 AND risk &lt; 240
-                </when>
-                <when test="riskLevel == 'due-soon'">
-                    AND risk &gt;= 240 AND risk &lt; 360
-                </when>
-                <when test="riskLevel == 'overdue'">
-                    AND risk &gt;= 360
-                </when>
-            </choose>
+        <if test="riskLevels != null and riskLevels.size() > 0">
+            AND (
+            <foreach collection="riskLevels" item="r" separator=" OR ">
+                <choose>
+                    <when test="r == 'done'">
+                        risk = -1
+                    </when>
+                    <when test="r == 'normal'">
+                        (risk &gt;= 0 AND risk &lt; 240)
+                    </when>
+                    <when test="r == 'due-soon'">
+                        (risk &gt;= 240 AND risk &lt; 360)
+                    </when>
+                    <when test="r == 'overdue'">
+                        risk &gt;= 360
+                    </when>
+                </choose>
+            </foreach>
+            )
         </if>
     </sql>
 

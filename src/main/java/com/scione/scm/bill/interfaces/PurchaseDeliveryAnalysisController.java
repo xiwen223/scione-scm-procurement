@@ -62,17 +62,17 @@ public class PurchaseDeliveryAnalysisController {
             @RequestParam(required = false) @Size(max = 32) String node,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdStart,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdEnd,
-            @RequestParam(required = false) @Size(max = 100) String buyer,
-            @RequestParam(required = false) @Size(max = 100) String supplier,
-            @RequestParam(required = false) @Size(max = 100) String warehouse,
-            @RequestParam(required = false) @Size(max = 32) String deliveryStatus,
+            @RequestParam(required = false) List<String> buyers,
+            @RequestParam(required = false) List<String> suppliers,
+            @RequestParam(required = false) List<String> warehouses,
+            @RequestParam(required = false) List<String> deliveryStatuses,
             @RequestParam(required = false) @Size(max = 16) String risk,
             @RequestParam(defaultValue = "createdAt") String sortBy,
             @RequestParam(defaultValue = "asc") String sortOrder,
             @RequestParam(defaultValue = "1") @Min(1) @Max(1000000) int pageNum,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize) {
-        PurchaseDeliveryAnalysisQuery query = query(createdStart, createdEnd, keyword, node, buyer, supplier,
-                warehouse, deliveryStatus, risk, sortBy, sortOrder, pageNum, pageSize);
+        PurchaseDeliveryAnalysisQuery query = query(createdStart, createdEnd, keyword, node, buyers, suppliers,
+                warehouses, deliveryStatuses, risk, sortBy, sortOrder, pageNum, pageSize);
         return ApiResponse.success(appService.findPage(query));
     }
 
@@ -82,12 +82,12 @@ public class PurchaseDeliveryAnalysisController {
             @RequestParam(required = false) @Size(max = 32) String node,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdStart,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdEnd,
-            @RequestParam(required = false) @Size(max = 100) String buyer,
-            @RequestParam(required = false) @Size(max = 100) String supplier,
-            @RequestParam(required = false) @Size(max = 100) String warehouse,
-            @RequestParam(required = false) @Size(max = 32) String deliveryStatus) {
-        PurchaseDeliveryAnalysisQuery query = query(createdStart, createdEnd, keyword, node, buyer, supplier,
-                warehouse, deliveryStatus, null, "createdAt", "desc", 1, 1);
+            @RequestParam(required = false) List<String> buyers,
+            @RequestParam(required = false) List<String> suppliers,
+            @RequestParam(required = false) List<String> warehouses,
+            @RequestParam(required = false) List<String> deliveryStatuses) {
+        PurchaseDeliveryAnalysisQuery query = query(createdStart, createdEnd, keyword, node, buyers, suppliers,
+                warehouses, deliveryStatuses, null, "createdAt", "desc", 1, 1);
         return ApiResponse.success(appService.summary(query));
     }
 
@@ -102,12 +102,12 @@ public class PurchaseDeliveryAnalysisController {
     public ApiResponse<List<PurchaseDeliveryOrderDTO>> orders(
             @PathVariable @NotBlank @Size(max = 64) String planSn,
             @RequestParam(required = false) @Size(max = 100) String keyword,
-            @RequestParam(required = false) @Size(max = 100) String buyer,
-            @RequestParam(required = false) @Size(max = 100) String supplier,
-            @RequestParam(required = false) @Size(max = 100) String warehouse,
-            @RequestParam(required = false) @Size(max = 32) String deliveryStatus) {
-        PurchaseDeliveryAnalysisQuery query = query(null, null, keyword, null, buyer, supplier,
-                warehouse, deliveryStatus, null, "createdAt", "asc", 1, 100);
+            @RequestParam(required = false) List<String> buyers,
+            @RequestParam(required = false) List<String> suppliers,
+            @RequestParam(required = false) List<String> warehouses,
+            @RequestParam(required = false) List<String> deliveryStatuses) {
+        PurchaseDeliveryAnalysisQuery query = query(null, null, keyword, null, buyers, suppliers,
+                warehouses, deliveryStatuses, null, "createdAt", "asc", 1, 100);
         return ApiResponse.success(appService.findOrders(planSn.trim(), query));
     }
 
@@ -115,12 +115,12 @@ public class PurchaseDeliveryAnalysisController {
     public ApiResponse<List<PurchaseDeliveryOrderSkuLineDTO>> orderSkuLines(
             @PathVariable @NotBlank @Size(max = 64) String planSn,
             @RequestParam(required = false) @Size(max = 100) String keyword,
-            @RequestParam(required = false) @Size(max = 100) String buyer,
-            @RequestParam(required = false) @Size(max = 100) String supplier,
-            @RequestParam(required = false) @Size(max = 100) String warehouse,
-            @RequestParam(required = false) @Size(max = 32) String deliveryStatus) {
-        PurchaseDeliveryAnalysisQuery query = query(null, null, keyword, null, buyer, supplier,
-                warehouse, deliveryStatus, null, "createdAt", "asc", 1, 100);
+            @RequestParam(required = false) List<String> buyers,
+            @RequestParam(required = false) List<String> suppliers,
+            @RequestParam(required = false) List<String> warehouses,
+            @RequestParam(required = false) List<String> deliveryStatuses) {
+        PurchaseDeliveryAnalysisQuery query = query(null, null, keyword, null, buyers, suppliers,
+                warehouses, deliveryStatuses, null, "createdAt", "asc", 1, 100);
         return ApiResponse.success(appService.findOrderSkuLines(planSn.trim(), query));
     }
 
@@ -146,11 +146,14 @@ public class PurchaseDeliveryAnalysisController {
 
     private PurchaseDeliveryAnalysisQuery query(
             LocalDate createdStart, LocalDate createdEnd,
-            String keyword, String node, String buyer, String supplier, String warehouse,
-            String deliveryStatus, String risk, String sortBy, String sortOrder,
-            int pageNum, int pageSize) {
+            String keyword, String node, List<String> buyers, List<String> suppliers,
+            List<String> warehouses, List<String> deliveryStatuses, String risk,
+            String sortBy, String sortOrder, int pageNum, int pageSize) {
         String normalizedNode = blankToNull(node);
-        String normalizedDeliveryStatus = blankToNull(deliveryStatus);
+        List<String> normalizedBuyers = blankToNull(buyers);
+        List<String> normalizedSuppliers = blankToNull(suppliers);
+        List<String> normalizedWarehouses = blankToNull(warehouses);
+        List<String> normalizedDeliveryStatuses = blankToNull(deliveryStatuses);
         String normalizedRisk = blankToNull(risk);
         String normalizedSortBy = defaultIfBlank(sortBy, "createdAt");
         String normalizedSortOrder = defaultIfBlank(sortOrder, "asc").toLowerCase();
@@ -158,13 +161,13 @@ public class PurchaseDeliveryAnalysisController {
             throw new BusinessException(ResultCode.PARAM_ERROR, "createdStart 不能晚于 createdEnd");
         }
         validateWhitelist("node", normalizedNode, NODES);
-        validateWhitelist("deliveryStatus", normalizedDeliveryStatus, DELIVERY_STATUSES);
+        validateWhitelist("deliveryStatus", normalizedDeliveryStatuses, DELIVERY_STATUSES);
         validateWhitelist("risk", normalizedRisk, RISKS);
         validateWhitelist("sortBy", normalizedSortBy, SORT_FIELDS);
         validateWhitelist("sortOrder", normalizedSortOrder, SORT_ORDERS);
         return new PurchaseDeliveryAnalysisQuery(
                 LocalDateTime.now(REPORT_ZONE), createdStart, createdEnd, blankToNull(keyword), normalizedNode,
-                blankToNull(buyer), blankToNull(supplier), blankToNull(warehouse), normalizedDeliveryStatus,
+                normalizedBuyers, normalizedSuppliers, normalizedWarehouses, normalizedDeliveryStatuses,
                 normalizedRisk, normalizedSortBy, normalizedSortOrder, pageNum, pageSize);
     }
 
@@ -174,8 +177,30 @@ public class PurchaseDeliveryAnalysisController {
         }
     }
 
+    private static void validateWhitelist(String name, List<String> values, Set<String> allowed) {
+        if (values == null) {
+            return;
+        }
+        for (String value : values) {
+            validateWhitelist(name, value, allowed);
+        }
+    }
+
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /** 多选过滤：空集合 / 全空白项归一为 null，避免拼出多余的 IN 条件。 */
+    private static List<String> blankToNull(List<String> values) {
+        if (values == null) {
+            return null;
+        }
+        List<String> trimmed = values.stream()
+                .filter(v -> v != null && !v.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private static String defaultIfBlank(String value, String defaultValue) {
