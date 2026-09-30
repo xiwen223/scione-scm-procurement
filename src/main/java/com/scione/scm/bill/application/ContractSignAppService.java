@@ -14,6 +14,7 @@ import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractItem;
 import com.scione.scm.bill.domain.contract.ContractOperationLog;
 import com.scione.scm.bill.domain.contract.ContractRepository;
+import com.scione.scm.bill.domain.contract.PurchasePriceCalculator;
 import com.scione.scm.bill.domain.contract.ContractStatus;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
 import com.scione.scm.bill.domain.posync.PoSyncRecordItem;
@@ -165,8 +166,9 @@ public class ContractSignAppService {
             }
             String itemPrefix = "商品[" + contractItem.getSku() + "]";
             compare(differences, itemPrefix + "数量", contractItem.getQuantity(), poItem.getQuantityPlan());
-            compare(differences, itemPrefix + "单价", contractItem.getUnitPrice(), poItem.getUnitPrice());
-            compare(differences, itemPrefix + "金额", contractItem.getAmount(), poItem.getAmount());
+            compare(differences, itemPrefix + "单价", contractItem.getUnitPrice(), poItem.getUnitPriceWithoutTax());
+            compare(differences, itemPrefix + "金额", contractItem.getAmount(),
+                    PurchasePriceCalculator.lineAmount(poItem.getUnitPriceWithoutTax(), poItem.getQuantityPlan()));
             compare(differences, itemPrefix + "预计到货日期", contractItem.getDeliveryDate(), poItem.getExpectArriveTime());
         }
         }

@@ -5,6 +5,7 @@ import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient.Purchase
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient.PurchaseOrderItemData;
 import com.scione.scm.bill.domain.contract.ContractOperationLog;
 import com.scione.scm.bill.domain.contract.ContractRepository;
+import com.scione.scm.bill.domain.contract.PurchasePriceCalculator;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
 import com.scione.scm.bill.domain.posync.PoSyncRecordItem;
 import com.scione.scm.bill.domain.posync.PoSyncRepository;
@@ -144,14 +145,14 @@ public class PoSyncAppService {
         if (items != null) {
             List<PoSyncRecordItem> recordItems = new ArrayList<>(items.size());
             for (PurchaseOrderItemData item : items) {
-                recordItems.add(toItem(order.orderSn(), item, syncTime));
+                recordItems.add(toItem(order.orderSn(), order.isTax(), item, syncTime));
             }
             record.setItems(recordItems);
         }
         return record;
     }
 
-    private static PoSyncRecordItem toItem(String orderSn, PurchaseOrderItemData item, LocalDateTime syncTime) {
+    private static PoSyncRecordItem toItem(String orderSn, Integer isTax, PurchaseOrderItemData item, LocalDateTime syncTime) {
         PoSyncRecordItem po = new PoSyncRecordItem();
         po.setPurchaseOrderNo(orderSn);
         po.setLxItemId(item.lxItemId());
@@ -161,7 +162,12 @@ public class PoSyncAppService {
         po.setSku(item.sku());
         po.setFnsku(item.fnsku());
         po.setModel(item.model());
-        po.setUnitPrice(item.price());   // price → unitPrice
+        po.setUnitPrice(item.price());
+        po.setUnitPriceWithoutTax(PurchasePriceCalculator.withoutTax(item.price(), isTax, item.taxRate()));
+        if (Integer.valueOf(1).equals(isTax) && item.price() != null && po.getUnitPriceWithoutTax() == null) {
+            log.warn("含税采购商品缺少有效税率，无法计算不含税单价：poNo={}, sku={}, taxRate={}",
+                    orderSn, item.sku(), item.taxRate());
+        }
         po.setAmount(item.amount());
         po.setQuantityPlan(item.quantityPlan());
         po.setQuantityReal(item.quantityReal());

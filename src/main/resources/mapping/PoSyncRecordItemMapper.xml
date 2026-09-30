@@ -16,13 +16,13 @@
     <insert id="batchInsert">
         INSERT INTO po_sync_record_item
         (purchase_order_no, lx_item_id, plan_sn, product_id, product_name, sku, fnsku, model,
-        unit_price, amount, quantity_plan, quantity_real, quantity_receive,
+        unit_price, unit_price_without_tax, amount, quantity_plan, quantity_real, quantity_receive,
         cases_num, quantity_per_case, pic_url,
         tax_rate, spu, spu_name, warehouse_name, expect_arrive_time, remark, attribute_json, sync_time)
         VALUES
         <foreach collection="items" item="it" separator=",">
             (#{it.purchaseOrderNo}, #{it.lxItemId}, #{it.planSn}, #{it.productId}, #{it.productName}, #{it.sku},
-            #{it.fnsku}, #{it.model}, #{it.unitPrice}, #{it.amount}, #{it.quantityPlan}, #{it.quantityReal},
+            #{it.fnsku}, #{it.model}, #{it.unitPrice}, #{it.unitPriceWithoutTax}, #{it.amount}, #{it.quantityPlan}, #{it.quantityReal},
             #{it.quantityReceive},
             #{it.casesNum}, #{it.quantityPerCase}, #{it.picUrl},
             #{it.taxRate}, #{it.spu}, #{it.spuName}, #{it.warehouseName},

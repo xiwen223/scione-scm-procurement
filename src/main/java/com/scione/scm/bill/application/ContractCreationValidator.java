@@ -71,7 +71,7 @@ public class ContractCreationValidator {
             if (!StringUtils.hasText(item.getSku())) missing.add(label + " SKU");
             if (!StringUtils.hasText(item.getProductName())) missing.add(label + " 品名及规格");
             if (item.getQuantityPlan() == null || item.getQuantityPlan() <= 0) missing.add(label + " 数量");
-            if (item.getUnitPrice() == null || item.getUnitPrice().compareTo(BigDecimal.ZERO) < 0) missing.add(label + " 不含税单价");
+            if (item.getUnitPriceWithoutTax() == null || item.getUnitPriceWithoutTax().compareTo(BigDecimal.ZERO) < 0) missing.add(label + " 不含税单价");
             if (item.getExpectArriveTime() != null) hasDeliveryDate = true;
             validateImage(item, label, missing);
         }

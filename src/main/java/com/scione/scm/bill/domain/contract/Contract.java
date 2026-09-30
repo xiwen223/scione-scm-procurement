@@ -100,9 +100,13 @@ public class Contract {
         c.postCode = buyer.getPostCode();
         c.buyerPhone = buyer.getPhone();
         c.fax = buyer.getFax();
-        c.originalAmount = po.getAmountTotal();
+        // 领星单头金额和明细 amount 是价税合计；合同按不含税单价重新计算原价。
+        c.originalAmount = po.getItems() == null ? BigDecimal.ZERO : po.getItems().stream()
+                .map(item -> PurchasePriceCalculator.lineAmount(item.getUnitPriceWithoutTax(), item.getQuantityPlan()))
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
         c.discountedAmount = null;
-        c.contractAmount = po.getAmountTotal();
+        c.contractAmount = c.originalAmount;
         c.contractDate = LocalDate.now();
         // 自动创建时，从明细中取最早的交货日期
         c.deliveryDate = po.getItems() != null ? po.getItems().stream()
@@ -200,10 +204,11 @@ public class Contract {
         item.setProductId(src.getProductId());
         item.setProductName(src.getProductName());
         item.setSpecification(src.getModel());
-        item.setQuantity(src.getQuantityPlan());
+        // 合同数量取领星“采购量”（实际采购量），对应 quantity_real；不能使用计划采购量 quantity_plan。
+        item.setQuantity(src.getQuantityReal());
         item.setUnit(null);
-        item.setUnitPrice(src.getUnitPrice());
-        item.setAmount(src.getAmount());
+        item.setUnitPrice(src.getUnitPriceWithoutTax());
+        item.setAmount(PurchasePriceCalculator.lineAmount(src.getUnitPriceWithoutTax(), src.getQuantityReal()));
         item.setDeliveryDate(src.getExpectArriveTime());
         item.setWarehouseName(src.getWarehouseName());
         item.setRemark(src.getRemark());

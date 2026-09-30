@@ -384,6 +384,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
                 text(o, "supplier_name"),
                 text(o, "contact_person"),
                 text(o, "contact_number"),
+                intValue(o, "is_tax"),
                 intValue(o, "status"),
                 text(o, "status_text"),
                 intValue(o, "status_shipped"),

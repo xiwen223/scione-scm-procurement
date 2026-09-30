@@ -282,11 +282,16 @@ public class ContractAutoCreateService {
 
         // 2. 优先使用本地已同步的 PO；仅本地缺失时按单号从领星补查旧 PO。
         Optional<PoSyncRecord> poOpt = poSyncRepository.findByPurchaseOrderNo(purchaseOrderNo);
-        if (poOpt.isEmpty()) {
+        boolean oldPriceRecord = poOpt.isPresent() && needsPriceResync(poOpt.get());
+        if (poOpt.isEmpty() || oldPriceRecord) {
+            if (oldPriceRecord) {
+                log.info("本地采购单缺少不含税单价，创建前重新同步：purchaseOrderNo={}", purchaseOrderNo);
+            }
             LingxingPurchaseOrderClient.PurchaseOrderData order = lingxingPurchaseOrderClient
                     .findByOrderNo(purchaseOrderNo)
                     .orElseThrow(() -> new BusinessException(ResultCode.PARAM_ERROR,
-                            "本地和领星均未找到采购单：" + purchaseOrderNo));
+                            oldPriceRecord ? "本地采购单价格口径尚未更新，且领星未查到该采购单：" + purchaseOrderNo
+                                    : "本地和领星均未找到采购单：" + purchaseOrderNo));
             poSyncRepository.save(PoSyncAppService.toRecord(order, LocalDateTime.now()));
             poOpt = poSyncRepository.findByPurchaseOrderNo(purchaseOrderNo);
         }
@@ -356,6 +361,12 @@ public class ContractAutoCreateService {
                 fileUrl,
                 "合同创建成功"
         );
+    }
+
+    /** 旧同步记录没有不含税单价时，仅在首次使用时补查一次领星。 */
+    private boolean needsPriceResync(PoSyncRecord po) {
+        return po.getItems() == null || po.getItems().isEmpty()
+                || po.getItems().stream().anyMatch(item -> item.getUnitPriceWithoutTax() == null);
     }
 
     /**

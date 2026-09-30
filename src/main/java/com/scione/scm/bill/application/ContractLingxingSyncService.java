@@ -10,6 +10,7 @@ import com.scione.scm.bill.domain.contract.ContractItem;
 import com.scione.scm.bill.domain.contract.ContractOperationLog;
 import com.scione.scm.bill.domain.contract.ContractRepository;
 import com.scione.scm.bill.domain.contract.ContractStatus;
+import com.scione.scm.bill.domain.contract.PurchasePriceCalculator;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
 import com.scione.scm.bill.domain.posync.PoSyncRecordItem;
 import lombok.RequiredArgsConstructor;
@@ -155,7 +156,14 @@ public class ContractLingxingSyncService {
             item.setProductName(sourceItem.productName());
             item.setSku(sourceItem.sku());
             item.setModel(sourceItem.model());
+            BigDecimal unitPrice = PurchasePriceCalculator.withoutTax(
+                    sourceItem.price(), source.isTax(), sourceItem.taxRate());
+            if (sourceItem.price() != null && unitPrice == null) {
+                throw new BusinessException(ResultCode.PARAM_ERROR,
+                        "领星采购商品[" + sourceItem.sku() + "]缺少有效税率，无法计算不含税单价");
+            }
             item.setUnitPrice(sourceItem.price());
+            item.setUnitPriceWithoutTax(unitPrice);
             item.setAmount(sourceItem.amount());
             item.setQuantityPlan(sourceItem.quantityPlan());
             item.setWarehouseName(sourceItem.warehouseName());
@@ -215,11 +223,14 @@ public class ContractLingxingSyncService {
             add(fields, keyPrefix + "specification", prefix + "规格", "采购商品", item.getSpecification(), poItem.getModel(), true,
                     value -> findItem(value, item.getId()).setSpecification(poItem.getModel()));
             add(fields, keyPrefix + "quantity", prefix + "数量", "采购商品", item.getQuantity(), poItem.getQuantityPlan(), true,
-                    value -> findItem(value, item.getId()).setQuantity(poItem.getQuantityPlan()));
-            add(fields, keyPrefix + "unitPrice", prefix + "不含税单价", "采购商品", item.getUnitPrice(), poItem.getUnitPrice(), true,
-                    value -> findItem(value, item.getId()).setUnitPrice(poItem.getUnitPrice()));
-            add(fields, keyPrefix + "amount", prefix + "金额", "采购商品", item.getAmount(), poItem.getAmount(), true,
-                    value -> findItem(value, item.getId()).setAmount(poItem.getAmount()));
+                    // 同步到合同明细时也使用领星采购量（实际采购量），与合同初次创建保持一致。
+                    value -> findItem(value, item.getId()).setQuantity(poItem.getQuantityReal()));
+            add(fields, keyPrefix + "unitPrice", prefix + "不含税单价", "采购商品", item.getUnitPrice(), poItem.getUnitPriceWithoutTax(), true,
+                    value -> findItem(value, item.getId()).setUnitPrice(poItem.getUnitPriceWithoutTax()));
+            BigDecimal amountWithoutTax = PurchasePriceCalculator.lineAmount(
+                    poItem.getUnitPriceWithoutTax(), poItem.getQuantityReal());
+            add(fields, keyPrefix + "amount", prefix + "金额", "采购商品", item.getAmount(), amountWithoutTax, true,
+                    value -> findItem(value, item.getId()).setAmount(amountWithoutTax));
             add(fields, keyPrefix + "deliveryDate", prefix + "交货日期", "采购商品", item.getDeliveryDate(), poItem.getExpectArriveTime(), true,
                     value -> findItem(value, item.getId()).setDeliveryDate(poItem.getExpectArriveTime()));
             add(fields, keyPrefix + "warehouseName", prefix + "仓库", "采购商品", item.getWarehouseName(), poItem.getWarehouseName(), true,

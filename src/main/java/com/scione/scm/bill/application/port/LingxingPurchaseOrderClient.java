@@ -34,6 +34,7 @@ public interface LingxingPurchaseOrderClient {
             String supplierName,
             String contactPerson,
             String contactNumber,
+            Integer isTax,
             Integer status,
             String statusText,
             Integer statusShipped,

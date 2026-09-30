@@ -255,7 +255,7 @@ public class PoiContractTemplateService implements ContractTemplateService {
                 setCellValue(row, 6, "箱");                                   // G列：箱
                 setCellValue(row, 7, item.getQuantity());                     // H列：总套数
                 setCellValue(row, 8, "套");                                   // I列：套
-                setCellValue(row, 9, item.getUnitPrice());                    // J列：不含税单价
+                setUnitPriceCell(row, item.getUnitPrice());                   // J列：不含税单价，显示4位小数
                 setCellValue(row, 10, item.getAmount());                      // K列：总价
             }
 
@@ -269,7 +269,15 @@ public class PoiContractTemplateService implements ContractTemplateService {
 
             // 第21行（索引20）：总价合计（K列显示原价）
             int totalRow = 20 + rowOffset;
-            BigDecimal originalAmount = contract.getOriginalAmount();
+            // 底部原价必须以当前合同明细合计为准，避免数量/单价同步后仍沿用旧的合同主表金额。
+            BigDecimal originalAmount = contract.getItems() == null
+                    ? contract.getOriginalAmount()
+                    : contract.getItems().stream()
+                    .map(item -> item.getAmount() == null ? BigDecimal.ZERO : item.getAmount())
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (originalAmount == null) {
+                originalAmount = BigDecimal.ZERO;
+            }
             setCellValue(sheet, totalRow, 10, originalAmount); // K列：原价合计（所有明细的总价）
             log.info("填充原价合计：行号={}, 原价={}", totalRow + 1, originalAmount);
 
@@ -284,7 +292,7 @@ public class PoiContractTemplateService implements ContractTemplateService {
 
             // 第23行（索引22）：金额合计（实际价格 = 原价 - 折扣）
             int amountRow = 22 + rowOffset;
-            BigDecimal finalAmount = contract.getContractAmount(); // 实际合同金额（原价 - 折扣后的金额）
+            BigDecimal finalAmount = originalAmount.subtract(discountAmount); // 实际合同金额（原价 - 折扣后的金额）
             String amountChinese = NumberToChineseUtil.convert(finalAmount);
             setCellValue(sheet, amountRow, 0, "金额合计（大写）：");   // A列：标题
             setCellValue(sheet, amountRow, 2, amountChinese);        // C列：大写金额
@@ -461,6 +469,23 @@ public class PoiContractTemplateService implements ContractTemplateService {
     private void setCellValue(Sheet sheet, int rowIndex, int colIndex, Object value) {
         Row row = getOrCreateRow(sheet, rowIndex);
         setCellValue(row, colIndex, value);
+    }
+
+    /** 保留模板单元格的字体、边框与对齐，仅将不含税单价的显示精度固定为4位。 */
+    private void setUnitPriceCell(Row row, BigDecimal unitPrice) {
+        setCellValue(row, 9, unitPrice);
+        Cell cell = row.getCell(9);
+        Workbook workbook = row.getSheet().getWorkbook();
+        CellStyle style = workbook.createCellStyle();
+        style.cloneStyleFrom(cell.getCellStyle());
+        String originalFormat = cell.getCellStyle().getDataFormatString();
+        String fourDecimalFormat = originalFormat.replaceAll("\\.0{1,3}(?!0)", ".0000");
+        if (fourDecimalFormat.equals(originalFormat) && !originalFormat.contains(".0000")) {
+            fourDecimalFormat = originalFormat.contains("￥") || originalFormat.contains("¥")
+                    ? "\"￥\"#,##0.0000" : "#,##0.0000";
+        }
+        style.setDataFormat(workbook.createDataFormat().getFormat(fourDecimalFormat));
+        cell.setCellStyle(style);
     }
 
     private void setCellValue(Row row, int colIndex, Object value) {

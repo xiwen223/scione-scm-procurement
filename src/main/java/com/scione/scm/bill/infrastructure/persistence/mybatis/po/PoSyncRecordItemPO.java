@@ -22,6 +22,7 @@ public class PoSyncRecordItemPO {
     private String fnsku;
     private String model;
     private BigDecimal unitPrice;
+    private BigDecimal unitPriceWithoutTax;
     private BigDecimal amount;
     private Integer quantityPlan;
     private Integer quantityReal;

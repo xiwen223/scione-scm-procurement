@@ -22,6 +22,8 @@ public class PoSyncRecordItem {
     private String fnsku;
     private String model;
     private BigDecimal unitPrice;
+    /** 同步时根据 is_tax 和 tax_rate 算出的不含税单价。 */
+    private BigDecimal unitPriceWithoutTax;
     private BigDecimal amount;
     private Integer quantityPlan;
     private Integer quantityReal;

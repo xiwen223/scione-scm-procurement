@@ -107,6 +107,7 @@ public class MybatisPoSyncRepository implements PoSyncRepository {
         item.setFnsku(po.getFnsku());
         item.setModel(po.getModel());
         item.setUnitPrice(po.getUnitPrice());
+        item.setUnitPriceWithoutTax(po.getUnitPriceWithoutTax());
         item.setAmount(po.getAmount());
         item.setQuantityPlan(po.getQuantityPlan());
         item.setQuantityReal(po.getQuantityReal());
@@ -157,6 +158,7 @@ public class MybatisPoSyncRepository implements PoSyncRepository {
         po.setFnsku(i.getFnsku());
         po.setModel(i.getModel());
         po.setUnitPrice(i.getUnitPrice());
+        po.setUnitPriceWithoutTax(i.getUnitPriceWithoutTax());
         po.setAmount(i.getAmount());
         po.setQuantityPlan(i.getQuantityPlan());
         po.setQuantityReal(i.getQuantityReal());
