@@ -30,6 +30,7 @@ import java.io.InputStream;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.time.format.DateTimeFormatter;
+import java.util.Optional;
 
 /**
  * Apache POI 实现的合同模板填充服务。
@@ -125,7 +126,6 @@ public class PoiContractTemplateService implements ContractTemplateService {
             log.info("步骤3完成 - 模板下载成功");
             log.info("  - 文件大小: {} 字节 ({} KB)", templateBytes.length, templateBytes.length / 1024);
             log.info("  - 文件来源: S3存储 -> objectKey={}", template.getObjectKey());
-
             // 4. 用下载的模板创建Workbook
             log.info("步骤4：开始填充模板内容");
             try (InputStream templateStream = new ByteArrayInputStream(templateBytes);
@@ -133,6 +133,14 @@ public class PoiContractTemplateService implements ContractTemplateService {
                  ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
 
                 Sheet sheet = workbook.getSheetAt(0);
+
+                // 有占位符的模板按标记定位；无占位符的历史模板继续走原固定坐标逻辑。
+                if (ContractPlaceholderRenderer.hasPlaceholders(workbook)) {
+                    new ContractPlaceholderRenderer().fill((XSSFWorkbook) workbook, contract,
+                            () -> resolvePaymentAccount(contract), this::insertPlaceholderImage);
+                    workbook.write(outputStream);
+                    return outputStream.toByteArray();
+                }
 
             // 填充需方公司信息
             setCellValue(sheet, 0, 0, contract.getBuyerCompanyName());                              // A1：需方公司名称
@@ -214,13 +222,13 @@ public class PoiContractTemplateService implements ContractTemplateService {
                             // 使用像素偏移模式，在A列内部居中显示小图片（40x40像素，约1.06cm x 1.06cm）
                             ClientAnchor anchor = helper.createClientAnchor();
                             anchor.setCol1(0);  // A列
-                            anchor.setDx1(5 * Units.EMU_PER_PIXEL);  // 左边距5像素
+                            anchor.setDx1(2 * Units.EMU_PER_PIXEL);  // 左边距2像素
                             anchor.setRow1(currentRowIndex);  // 当前行
-                            anchor.setDy1(5 * Units.EMU_PER_PIXEL);  // 上边距5像素
+                            anchor.setDy1(2 * Units.EMU_PER_PIXEL);  // 上边距2像素
                             anchor.setCol2(0);  // 仍然在A列（不跨列）
-                            anchor.setDx2(45 * Units.EMU_PER_PIXEL);  // 右边界 = 5 + 40像素
+                            anchor.setDx2(42 * Units.EMU_PER_PIXEL);  // 右边界 = 2 + 40像素
                             anchor.setRow2(currentRowIndex);  // 仍然在当前行（不跨行）
-                            anchor.setDy2(45 * Units.EMU_PER_PIXEL);  // 下边界 = 5 + 40像素
+                            anchor.setDy2(42 * Units.EMU_PER_PIXEL);  // 下边界 = 2 + 40像素
 
                             // 5. 插入图片
                             Picture picture = drawingPatriarch.createPicture(anchor, pictureIdx);
@@ -387,25 +395,57 @@ public class PoiContractTemplateService implements ContractTemplateService {
     private String settlementText(Contract contract) {
         // 固定条款来自合同模板；这里只补充默认收款账户信息，不能擅自改写付款期限。
         String baseText = "到货质检无误入库后，次月月底前支付货款。";
+        return resolvePaymentAccount(contract)
+                .map(account -> baseText + "（收款人：" + account.accountName()
+                        + "；银行账号：" + account.accountId()
+                        + "；开户行：" + account.bankName() + "）")
+                .orElse(baseText);
+    }
+
+    /** 新旧模板共用原收款账户兜底规则，不把最新领星资料覆盖回合同。 */
+    private Optional<LingxingSupplierClient.SupplierPaymentAccount> resolvePaymentAccount(Contract contract) {
         if (org.springframework.util.StringUtils.hasText(contract.getSupplierAccountName())
                 && org.springframework.util.StringUtils.hasText(contract.getSupplierBankAccount())
                 && org.springframework.util.StringUtils.hasText(contract.getSupplierBankName())) {
-            return baseText + "（收款人：" + contract.getSupplierAccountName()
-                    + "；银行账号：" + contract.getSupplierBankAccount()
-                    + "；开户行：" + contract.getSupplierBankName() + "）";
+            return Optional.of(new LingxingSupplierClient.SupplierPaymentAccount(
+                    contract.getSupplierAccountName(), contract.getSupplierBankAccount(), contract.getSupplierBankName()));
         }
         if (contract.getSupplierId() == null) {
-            return baseText;
+            return Optional.empty();
         }
         try {
-            return lingxingSupplierClient.findDefaultPaymentAccount(contract.getSupplierId())
-                    .map(account -> baseText + "（收款人：" + account.accountName()
-                            + "；银行账号：" + account.accountId()
-                            + "；开户行：" + account.bankName() + "）")
-                    .orElse(baseText);
+            return lingxingSupplierClient.findDefaultPaymentAccount(contract.getSupplierId());
         } catch (RuntimeException ex) {
             log.warn("获取供应商默认收款账号失败，使用基础结算说明：supplierId={}", contract.getSupplierId());
-            return baseText;
+            return Optional.empty();
+        }
+    }
+
+    /** 图片来源、大小及失败处理沿用旧模板，仅把固定 A 列改为占位符所在单元格。 */
+    private void insertPlaceholderImage(Cell cell, ContractItem item) {
+        if (item == null || !org.springframework.util.StringUtils.hasText(item.getPicUrl())) return;
+        try {
+            byte[] bytes = restTemplate.getForObject(item.getPicUrl(), byte[].class);
+            if (bytes == null || bytes.length == 0) {
+                log.warn("合同明细图片为空：sku={}", item.getSku());
+                return;
+            }
+            Workbook workbook = cell.getSheet().getWorkbook();
+            int pictureId = workbook.addPicture(bytes, determinePictureType(item.getPicUrl(), bytes));
+            ClientAnchor anchor = workbook.getCreationHelper().createClientAnchor();
+            anchor.setCol1(cell.getColumnIndex());
+            anchor.setCol2(cell.getColumnIndex());
+            anchor.setRow1(cell.getRowIndex());
+            anchor.setRow2(cell.getRowIndex());
+            anchor.setDx1(2 * Units.EMU_PER_PIXEL);
+            anchor.setDy1(2 * Units.EMU_PER_PIXEL);
+            anchor.setDx2(42 * Units.EMU_PER_PIXEL);
+            anchor.setDy2(42 * Units.EMU_PER_PIXEL);
+            cell.getSheet().createDrawingPatriarch().createPicture(anchor, pictureId);
+            // 40px 图片上下各留 2px，明细行至少约 44px（33pt）。
+            cell.getRow().setHeightInPoints(Math.max(33F, cell.getRow().getHeightInPoints()));
+        } catch (Exception ex) {
+            log.error("合同明细图片下载或插入失败（继续处理其他明细）：sku={}", item.getSku(), ex);
         }
     }
 

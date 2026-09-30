@@ -273,8 +273,8 @@ public class FadadaOpenApiClient {
         List<Map<String, Object>> docFields = new ArrayList<>();
         docFields.add(sealField("buyer-seal", "需方\n单位（盖章）"));
         docFields.add(sealField("supplier-seal", "供方\n单位（盖章）"));
-        // 签订日期由最后签署的供方完成签署时写入，避免对已签 PDF 做二次修改而破坏验签。
-        docFields.add(dateSignField("supplier-sign-date", "签订日期："));
+        // 签订日期取需方实际签署时间，由签署平台写入；不以发起时间代替，也不二次修改已签 PDF。
+        docFields.add(dateSignField("buyer-sign-date", "签订日期："));
         if (needsCrossPageSeal) {
             // 骑缝章按法大大规范使用 pixel + positionY；双方使用不同纵向位置，避免控件重叠。
             docFields.add(crossPageSealField("buyer-cross-page-seal", "120"));
@@ -288,10 +288,10 @@ public class FadadaOpenApiClient {
 
         List<Map<String, Object>> buyerSignFields = new ArrayList<>();
         buyerSignFields.add(signField("buyer-seal", request.buyerSealId()));
+        buyerSignFields.add(signField("buyer-sign-date", null));
         if (needsCrossPageSeal) buyerSignFields.add(signField("buyer-cross-page-seal", request.buyerSealId()));
         List<Map<String, Object>> supplierSignFields = new ArrayList<>();
         supplierSignFields.add(signField("supplier-seal", null));
-        supplierSignFields.add(signField("supplier-sign-date", null));
         if (needsCrossPageSeal) supplierSignFields.add(signField("supplier-cross-page-seal", null));
         body.put("actors", List.of(
                 Map.of("actor", buyerActor,
