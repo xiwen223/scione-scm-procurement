@@ -74,6 +74,9 @@ public class FadadaOpenApiClient {
     public static final String SEAL_STATUS_DISABLE = "disable";
     private static final String SIGN_TYPE = "HMAC-SHA256";
     private static final int MAX_REASON_LENGTH = 500;
+    private static final String CONTRACT_SIGN_DATE_FORMAT = "YYYY-MM-DD";
+    /** 法大大日期控件字号单位为 px；13px 最接近合同 HTML 正文默认的 10pt。 */
+    private static final int CONTRACT_SIGN_DATE_FONT_SIZE_PX = 13;
 
     private final FadadaOpenApiProperties properties;
     private final FadadaRequestSigner signer;
@@ -330,6 +333,9 @@ public class FadadaOpenApiClient {
     /** 签署日期控件，关键字定位在模板“签订日期：”标签右侧。 */
     private Map<String, Object> dateSignField(String fieldId, String keyword) {
         return Map.of("fieldId", fieldId, "fieldName", fieldId, "fieldType", "date_sign",
+                // 使用与合同其他日期一致的 yyyy-MM-dd 展示。法大大 FieldDateSign 可设格式和字号，未提供字体类型配置。
+                "fieldDateSign", Map.of("dateFormat", CONTRACT_SIGN_DATE_FORMAT,
+                        "fontSize", CONTRACT_SIGN_DATE_FONT_SIZE_PX),
                 "moveable", false,
                 "position", Map.of("positionMode", "keyword", "positionKeyword", keyword,
                         // date_sign 按控件中心定位，偏移 100 可使日期文字与相邻值列左侧对齐。

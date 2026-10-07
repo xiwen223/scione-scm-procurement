@@ -20,6 +20,13 @@
 
     <dependencies>
 
+        <!-- 在 Java 进程内将合同 XHTML 渲染为 PDF。 -->
+        <dependency>
+            <groupId>com.openhtmltopdf</groupId>
+            <artifactId>openhtmltopdf-pdfbox</artifactId>
+            <version>1.0.10</version>
+        </dependency>
+
         <!-- 企业公共基础组件 -->
         <dependency>
             <groupId>com.scione</groupId>

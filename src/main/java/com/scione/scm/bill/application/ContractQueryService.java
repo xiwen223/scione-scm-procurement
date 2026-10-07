@@ -252,7 +252,8 @@ public class ContractQueryService {
         boolean signing = contract.getStatus() == ContractStatus.SIGNING;
         String downloadUrl = fadadaOpenApiClient.getSignTaskDownloadUrl(
                 new FadadaOpenApiClient.DownloadUrlRequest("corp", ownerOpenCorpId, contract.getFadadaTaskId(),
-                        contract.getContractNo() + (signing ? "-签署中合同.pdf" : "-已签署合同.pdf"),
+                        // 法大大下载接口会根据文档类型补上 .pdf，customName 只传不带扩展名的名称。
+                        contract.getContractNo() + (signing ? "-签署中合同" : "-已签署合同"),
                         false, "download"));
         log.info("已获取法大大合同下载地址：contractId={}, contractNo={}, status={}, signTaskId={}, documentStage={}",
                 contract.getId(), contract.getContractNo(), contract.getStatus(), contract.getFadadaTaskId(),
