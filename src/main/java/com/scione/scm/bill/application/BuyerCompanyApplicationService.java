@@ -511,7 +511,7 @@ public class BuyerCompanyApplicationService {
             throw new BusinessException(ResultCode.PARAM_ERROR, "priority 不能小于 0");
         }
         if (!isDefault && requestedPriority == 1) {
-            throw new BusinessException(ResultCode.PARAM_ERROR, "priority=1 时必须设为默认公司");
+            throw new BusinessException(ResultCode.PARAM_ERROR, "必有一个默认需方");
         }
         if (isDefault && !active) {
             throw new BusinessException(ResultCode.BUYER_COMPANY_DEFAULT_REQUIRED, "默认合同需方必须处于启用状态");
