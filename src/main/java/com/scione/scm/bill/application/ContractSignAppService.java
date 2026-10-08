@@ -17,6 +17,7 @@ import com.scione.scm.bill.domain.contract.ContractStatus;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
 import com.scione.scm.bill.domain.posync.PoSyncRepository;
 import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
+import com.scione.scm.bill.infrastructure.fadada.FadadaAlertContext;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -47,6 +48,7 @@ public class ContractSignAppService {
     private final FadadaOpenApiClient fadadaOpenApiClient;
     private final FadadaOpenApiProperties fadadaProperties;
 
+    @FadadaAlertContext(FadadaAlertContext.Type.CONTRACT)
     public StartSignResult startSign(Long contractId, String operatorEmail, boolean forceConfirm) {
         log.info("开始发起合同签署：contractId={}, forceConfirm={}, operator={}", contractId, forceConfirm, operatorEmail);
         Contract contract = contractRepository.findById(contractId)
@@ -244,6 +246,7 @@ public class ContractSignAppService {
         return generateLatestContractPdfForSigning(contract);
     }
 
+    @FadadaAlertContext(FadadaAlertContext.Type.CONTRACT)
     public void cancel(Long contractId, ContractCancelRequest request, String operatorEmail) {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
@@ -348,6 +351,7 @@ public class ContractSignAppService {
     }
 
     /** 查询法大大签署任务状态，用于合同签署联调与页面展示。 */
+    @FadadaAlertContext(FadadaAlertContext.Type.CONTRACT)
     public SignTaskStatusResult getSignTaskStatus(Long contractId) {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
@@ -405,6 +409,7 @@ public class ContractSignAppService {
     /**
      * 回调未送达时的兜底状态同步：仅当法大大任务已完成时才将合同更新为履行中。
      */
+    @FadadaAlertContext(FadadaAlertContext.Type.CONTRACT)
     public SignTaskSyncResult syncFinishedSignTask(Long contractId, String operatorEmail) {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
@@ -521,6 +526,7 @@ public class ContractSignAppService {
         }
     }
 
+    @FadadaAlertContext(FadadaAlertContext.Type.CONTRACT)
     public void urgeSign(Long contractId, String operatorEmail) {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));

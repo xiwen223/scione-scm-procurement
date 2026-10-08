@@ -14,9 +14,11 @@ import com.scione.scm.bill.domain.contract.ContractPage;
 import com.scione.scm.bill.domain.contract.ContractRepository;
 import com.scione.scm.bill.domain.contract.ContractStatus;
 import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
+import com.scione.scm.bill.infrastructure.fadada.FadadaAlertContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
@@ -55,6 +57,7 @@ public class ContractQueryService {
             .build();
 
     private final ContractRepository contractRepository;
+    private final ObjectProvider<ContractQueryService> selfProvider;
     private final ContractFileStore contractFileStore;
     /** 法大大下载要按合同自己需方公司的 openCorpId 定位任务归属方，不能只依赖全局配置。 */
     private final BuyerCompanyRepository buyerCompanyRepository;
@@ -316,10 +319,17 @@ public class ContractQueryService {
         if (!usesFadadaDocument(contract.getStatus())) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "创建状态合同应下载未盖章原合同");
         }
-        return getFadadaDocumentDownloadUrl(contract);
+        return selfProvider.getObject().getFadadaDocumentDownloadUrl(contract);
     }
 
-    private String getFadadaDocumentDownloadUrl(Contract contract) {
+    /**
+     * 获取法大大合同文档下载地址，并通过注解补充当前合同的告警上下文。
+     * <p>单个及批量下载均通过 selfProvider 获取代理后调用，确保每份合同分别触发切面。</p>
+     * @param contract 已查询的合同对象，直接用于提取公司名称和合同编号
+     * @return 法大大返回的短期文档下载地址
+     */
+    @FadadaAlertContext(FadadaAlertContext.Type.CONTRACT)
+    public String getFadadaDocumentDownloadUrl(Contract contract) {
         if (contract.getFadadaTaskId() == null || contract.getFadadaTaskId().isBlank()) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "合同未关联法大大签署任务");
         }
@@ -408,7 +418,7 @@ public class ContractQueryService {
     }
 
     private byte[] downloadFadadaDocument(Contract contract) throws IOException {
-        String downloadUrl = getFadadaDocumentDownloadUrl(contract);
+        String downloadUrl = selfProvider.getObject().getFadadaDocumentDownloadUrl(contract);
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(downloadUrl))
                     .GET()

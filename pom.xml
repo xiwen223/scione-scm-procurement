@@ -20,6 +20,11 @@
 
     <dependencies>
 
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
         <!-- 在 Java 进程内将合同 XHTML 渲染为 PDF。 -->
         <dependency>
             <groupId>com.openhtmltopdf</groupId>

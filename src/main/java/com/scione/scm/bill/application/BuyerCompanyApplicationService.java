@@ -11,6 +11,7 @@ import com.scione.scm.bill.application.dto.FadadaSealFreeSignUrlResponse;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
+import com.scione.scm.bill.infrastructure.fadada.FadadaAlertContext;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.BuyerCompanyMapper;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.BuyerCompanyPO;
 import lombok.RequiredArgsConstructor;
@@ -89,6 +90,7 @@ public class BuyerCompanyApplicationService {
      * 为公司当前法大大印章和已配置场景码生成免验证签授权页。
      * 该方法不直接授予权限，企业超管仍需在法大大页面确认。
      */
+    @FadadaAlertContext(FadadaAlertContext.Type.COMPANY)
     public FadadaSealFreeSignUrlResponse getSealFreeSignAuthorizationUrl(Long id, String clientUserId) {
         BuyerCompanyPO company = requireCompany(id);
         String openCorpId = requireText(company.getOpenCorpId(), "法大大 openCorpId 为空，请先完成企业授权");
@@ -188,6 +190,7 @@ public class BuyerCompanyApplicationService {
      * <p>该方法刻意<b>不加 {@code @Transactional}</b>：落库必须立即提交，
      * 回调线程才能读到「已持有签章且审核中」的那一行。</p>
      */
+    @FadadaAlertContext(FadadaAlertContext.Type.COMPANY)
     public BuyerCompanySealUploadResponse uploadSeal(Long id, MultipartFile file, String sealName) {
         BuyerCompanyPO company = requireCompany(id);
 
@@ -265,6 +268,7 @@ public class BuyerCompanyApplicationService {
      * 保证失败后可重试。只有法大大侧删除成功后才会删除对象存储文件并清空
      * seal_name / seal_url / seal_base64 / fadada_seal_id / seal_flow_status。</p>
      */
+    @FadadaAlertContext(FadadaAlertContext.Type.COMPANY)
     public BuyerCompanyDetailResponse removeSeal(Long id) {
         BuyerCompanyPO company = requireCompany(id);
         Integer flowStatus = company.getSealFlowStatus();

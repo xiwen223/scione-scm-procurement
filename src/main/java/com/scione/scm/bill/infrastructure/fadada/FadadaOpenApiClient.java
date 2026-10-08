@@ -3,10 +3,15 @@ package com.scione.scm.bill.infrastructure.fadada;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.scione.api.data.client.WeComClient;
+import com.scione.api.data.req.AlertRequest;
+import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.config.FadadaOpenApiProperties;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
@@ -28,6 +33,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.ArrayList;
 import java.util.List;
@@ -95,15 +101,24 @@ public class FadadaOpenApiClient {
     private final RestClient restClient;
     /** 按 appId 缓存 accessToken：不同应用凭据的 token 互不通用。 */
     private final Map<String, CachedToken> cachedTokens = new ConcurrentHashMap<>();
+    private final WeComClient weComClient;
+    private final ObjectProvider<FadadaOpenApiClient> selfProvider;
+    private final FadadaAlertContextHolder contextHolder;
 
     public FadadaOpenApiClient(
             FadadaOpenApiProperties properties,
             FadadaRequestSigner signer,
             ObjectMapper objectMapper,
-            RestClient.Builder restClientBuilder) {
+            RestClient.Builder restClientBuilder,
+            WeComClient weComClient,
+            ObjectProvider<FadadaOpenApiClient> selfProvider,
+            FadadaAlertContextHolder contextHolder) {
         this.properties = properties;
         this.signer = signer;
         this.objectMapper = objectMapper;
+        this.weComClient = weComClient;
+        this.selfProvider = selfProvider;
+        this.contextHolder = contextHolder;
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(properties.getConnectTimeout());
         requestFactory.setReadTimeout(properties.getReadTimeout());
@@ -172,12 +187,17 @@ public class FadadaOpenApiClient {
                     .retrieve()
                     .toBodilessEntity();
             if (response.getStatusCode().value() != 200) {
-                throw fadadaError("文件上传失败：HTTP " + response.getStatusCode().value());
+                String reason = "文件上传失败：HTTP " + response.getStatusCode().value();
+                sendFailureAlert("文件上传", reason, null);
+                throw fadadaError(reason);
             }
         } catch (BusinessException exception) {
             throw exception;
         } catch (RestClientException exception) {
-            throw fadadaError("文件上传失败：" + transportFailureReason(exception));
+            String reason = "文件上传失败：" + transportFailureReason(exception);
+            // 预签名地址含临时凭证，告警仅记录操作名称。
+            sendFailureAlert("文件上传", reason, null);
+            throw fadadaError(reason);
         }
     }
 
@@ -760,6 +780,7 @@ public class FadadaOpenApiClient {
                 continue;
             }
             log.warn("Fadada request was rejected: {}", sanitizeReason(lastReason));
+            sendFailureAlert(path, lastReason, response);
             throw fadadaError(lastReason);
         }
         log.warn("Fadada request was rejected: {}", sanitizeReason(lastReason));
@@ -778,6 +799,7 @@ public class FadadaOpenApiClient {
         if (!SUCCESS_CODE.equals(code)) {
             String reason = businessFailureReason(response);
             log.warn("Fadada request was rejected: {}", sanitizeReason(reason));
+            sendFailureAlert(TOKEN_PATH, reason, response);
             throw fadadaError(reason);
         }
         JsonNode data = response.path("data");
@@ -852,7 +874,9 @@ public class FadadaOpenApiClient {
                 log.warn("法大大接口网络失败：path={}, appId={}, attempt={}, exception={}",
                         path, credential.appId(), attempt, exception.getClass().getSimpleName());
                 if (attempt == attempts) {
-                    throw fadadaError(transportFailureReason(exception));
+                    String reason = transportFailureReason(exception);
+                    sendFailureAlert(path, reason, null);
+                    throw fadadaError(reason);
                 }
                 waitBeforeRetry(attempt);
             }
@@ -884,6 +908,59 @@ public class FadadaOpenApiClient {
             candidates.add(new Credential(app.getAppId(), app.getAppSecret(), subVersion));
         }
         return candidates;
+    }
+
+    /**
+     * 将当前业务上下文与失败原因写入告警请求，再通过 Spring 代理提交发送。
+     * <p>在当前线程完成数据快照，避免异步线程读取不到上下文；任务提交失败只记录日志。</p>
+     * @param path 法大大接口相对路径
+     * @param message 法大大返回的失败原因或网络、HTTP 请求失败原因
+     * @param response 完整 JSON 响应，网络请求失败时为空
+     */
+    private void sendFailureAlert(String path, String message, JsonNode response) {
+        AlertRequest request = new AlertRequest();
+        request.setBusinessType("法大大接口调用");
+        request.setAlertType("接口调用失败");
+        request.setLevel("P1");
+        request.setTitle("接口'" + path + "'调用失败");
+        StringBuilder content = new StringBuilder();
+        FadadaAlertContextHolder.Context context = contextHolder.get();
+        if (context != null) {
+            if (!isBlank(context.companyName())) content.append("公司名称：").append(context.companyName()).append("；");
+            if (!isBlank(context.contractNo())) content.append("合同编号：").append(context.contractNo()).append("；");
+        }
+        content.append("失败原因：").append(message);
+        request.setContent(content.toString());
+        request.setServiceName("scione-scm-procurement");
+        request.setAlarmTime(LocalDateTime.now());
+        request.setRawResponse(response == null ? "null" : response.toString());
+        try {
+            // 从容器获取代理；直接 this 调用不会触发 @Async。
+            selfProvider.getObject().sendFailureAlert(path, request);
+        } catch (RuntimeException exception) {
+            log.warn("法大大接口告警任务提交失败：path={}, exception={}", path,
+                    exception.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * 使用指定线程池调用企业微信告警接口，发送失败只记录日志。
+     * <p>必须经 Spring 代理调用才能异步执行；线程池饱和时按 CallerRunsPolicy 执行。</p>
+     * @param path 法大大接口相对路径，用于定位发送失败日志
+     * @param request 已包含业务信息及原始响应的告警请求
+     */
+    @Async("fadadaAlertExecutor")
+    public void sendFailureAlert(String path, AlertRequest request) {
+        try {
+            ApiResponse<Void> result = weComClient.send(request);
+            if (result == null || !result.isSuccess()) {
+                log.warn("法大大接口告警提交失败：path={}, code={}", path,
+                        result == null ? null : result.getCode());
+            }
+        } catch (Exception exception) {
+            log.warn("法大大接口告警提交异常：path={}, exception={}", path,
+                    exception.getClass().getSimpleName());
+        }
     }
 
     private String serialize(Map<String, Object> body) {
