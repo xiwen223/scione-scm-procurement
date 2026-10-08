@@ -32,6 +32,10 @@ public class ContractCreateRequest {
     @Schema(description = "供方统一社会信用代码（手动合同发起法大大企业签署必填）", example = "913100001234567890")
     private String supplierCreditCode;
 
+    @Schema(description = "供方收款人（领星默认收款账户的账户名称；缺失时合同 PDF 会绕过合同快照去查领星并覆盖手填值）",
+            example = "浙江XXX贸易有限公司")
+    private String supplierAccountName;
+
     @Schema(description = "供方银行账号", example = "6222021000000000000")
     private String supplierBankAccount;
 

@@ -11,6 +11,7 @@ import com.scione.scm.bill.domain.contract.ContractOperationLog;
 import com.scione.scm.bill.domain.contract.ContractRepository;
 import com.scione.scm.bill.domain.contract.ContractStatus;
 import com.scione.scm.bill.domain.contract.PurchasePriceCalculator;
+import com.scione.scm.bill.domain.contract.RatioText;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
 import com.scione.scm.bill.domain.posync.PoSyncRecordItem;
 import lombok.RequiredArgsConstructor;
@@ -67,7 +68,7 @@ public class ContractLingxingSyncService {
             throw new BusinessException(ResultCode.PARAM_ERROR, "领星比对结果已过期，请重新点击同步领星数据后再签署");
         }
         String details = cached.fields().stream()
-                .map(field -> field.label() + "：合同[" + field.currentValue() + "]，领星[" + field.lingxingValue() + "]")
+                .map(this::describe)
                 .reduce("用户未同步领星字段，确认仍按当前合同内容发起签署", (left, right) -> left + "; " + right);
         String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
         contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(
@@ -76,6 +77,72 @@ public class ContractLingxingSyncService {
         comparisonCache.remove(contractId);
         log.info("用户确认领星差异后继续签署：contractNo={}, differenceCount={}",
                 contract.getContractNo(), cached.fields().size());
+    }
+
+    /**
+     * 签署前复核：用**与「同步领星数据」弹窗完全相同**的字段口径生成差异文本（含商品明细全部字段）。
+     *
+     * <p>这里的取值全部来自领星实时接口，价格一律按「含税单价 ÷ (1 + 税率)」折成不含税后再比，
+     * 因为领星只返回含税单价、而合同明细存的是不含税单价；直接比原始价会把每一行都报成差异。
+     * 也不要用本地 po_sync_record_item 的快照：它可能是价格口径升级前的旧数据（unit_price_without_tax 为空）。</p>
+     *
+     * <p>领星查不到采购单时只回一行提示而不抛异常 —— 是否阻断由签署流程自己决定。</p>
+     */
+    public List<String> describeDifferences(Contract contract, LingxingSupplierClient.SupplierProfile supplier) {
+        LingxingPurchaseOrderClient.PurchaseOrderData remotePo;
+        try {
+            remotePo = lingxingPurchaseOrderClient.findByOrderNo(contract.getPurchaseOrderNo()).orElse(null);
+        } catch (RuntimeException exception) {
+            // 该方法只服务于「签署前复核」：领星抖动（超时 / 限流 / IP 白名单）时返回一行说明，
+            // 不能把异常抛给签署流程 —— 用户已经确认过差异，不该因为第二次实时查询失败而签不了。
+            log.warn("签署前领星复核查询采购单失败，跳过逐字段比对：contractNo={}, purchaseOrderNo={}, reason={}",
+                    contract.getContractNo(), contract.getPurchaseOrderNo(), exception.getMessage());
+            return List.of("领星采购单：本次查询失败（网络超时或接口限流），已跳过逐字段比对");
+        }
+        if (remotePo == null) {
+            return List.of("领星采购单：未查询到");
+        }
+        PoSyncRecord po = toPoSnapshot(remotePo);
+        List<String> lines = new ArrayList<>(buildFields(contract, po, supplier).stream().map(this::describe).toList());
+        lines.addAll(describeSkuOnlyOnOneSide(contract, po));
+        return lines;
+    }
+
+    /**
+     * 只在一边存在的商品：buildFields 只比「两边都有的 SKU」，单向存在的会被跳过。
+     * 这类差异**没法同步**（同步只能改字段，不能增删明细），但签署前必须让人看见——
+     * 合同多出来的商品会被盖章，领星多出来的商品则永远进不了合同。
+     */
+    private List<String> describeSkuOnlyOnOneSide(Contract contract, PoSyncRecord po) {
+        Set<String> poSkus = new LinkedHashSet<>();
+        for (PoSyncRecordItem item : po.getItems()) {
+            if (StringUtils.hasText(item.getSku())) {
+                poSkus.add(item.getSku());
+            }
+        }
+        Set<String> contractSkus = new LinkedHashSet<>();
+        for (ContractItem item : contract.getItems()) {
+            if (StringUtils.hasText(item.getSku())) {
+                contractSkus.add(item.getSku());
+            }
+        }
+        List<String> lines = new ArrayList<>();
+        for (String sku : contractSkus) {
+            if (!poSkus.contains(sku)) {
+                lines.add("商品SKU=" + sku + "：合同存在，领星采购单不存在");
+            }
+        }
+        for (String sku : poSkus) {
+            if (!contractSkus.contains(sku)) {
+                lines.add("商品SKU=" + sku + "：领星采购单存在，合同未包含");
+            }
+        }
+        return lines;
+    }
+
+    /** 差异行的统一文本：与弹窗里「字段 / 合同当前值 / 领星最新值」三列同源。 */
+    private String describe(SyncField field) {
+        return field.label() + "：合同[" + field.currentValue() + "]，领星[" + field.lingxingValue() + "]";
     }
 
     @Transactional
@@ -166,6 +233,11 @@ public class ContractLingxingSyncService {
             item.setUnitPriceWithoutTax(unitPrice);
             item.setAmount(sourceItem.amount());
             item.setQuantityPlan(sourceItem.quantityPlan());
+            // 采购量与收货量必须一起带下来：合同明细的数量/金额是「不含税单价 × 实际采购量(quantity_real)」
+            // （见 Contract#toItem），这里漏设会让金额与数量在比对时算成 null，
+            // 表现就是「合同有值、领星最新值为空」的假差异，同步后还会把合同金额清空。
+            item.setQuantityReal(sourceItem.quantityReal());
+            item.setQuantityReceive(sourceItem.quantityReceive());
             item.setWarehouseName(sourceItem.warehouseName());
             item.setExpectArriveTime(sourceItem.expectArriveTime());
             item.setRemark(sourceItem.remark());
@@ -195,8 +267,11 @@ public class ContractLingxingSyncService {
                     value -> value.setSupplierAddress(supplier.address()));
             add(fields, "contract.supplierCreditCode", "供方统一社会信用代码", "供应商", contract.getSupplierCreditCode(), supplier.creditCode(), false,
                     value -> value.setSupplierCreditCode(supplier.creditCode()));
-            add(fields, "contract.prepayPercent", "预付款比例", "供应商", contract.getPrepayPercent(), supplier.prepayPercent(), false,
-                    value -> value.setPrepayPercent(supplier.prepayPercent()));
+            // 预付款比例两边都按「两位小数」规范化后再比：合同存 "0.00"、领星下发 "0" 时是同一个值，
+            // 否则会报一条假差异，用户一点同步就把合同的比例改成另一种写法。
+            add(fields, "contract.prepayPercent", "预付款比例", "供应商",
+                    RatioText.of(contract.getPrepayPercent()), RatioText.of(supplier.prepayPercent()), false,
+                    value -> value.setPrepayPercent(RatioText.of(supplier.prepayPercent())));
             add(fields, "contract.settlementMethod", "结算方式", "供应商", contract.getSettlementMethod(), supplier.settlementMethod(), false,
                     value -> value.setSettlementMethod(supplier.settlementMethod()));
             supplier.defaultPaymentAccount().ifPresent(account -> {
@@ -222,15 +297,24 @@ public class ContractLingxingSyncService {
                     value -> findItem(value, item.getId()).setProductName(poItem.getProductName()));
             add(fields, keyPrefix + "specification", prefix + "规格", "采购商品", item.getSpecification(), poItem.getModel(), true,
                     value -> findItem(value, item.getId()).setSpecification(poItem.getModel()));
-            add(fields, keyPrefix + "quantity", prefix + "数量", "采购商品", item.getQuantity(), poItem.getQuantityPlan(), true,
-                    // 同步到合同明细时也使用领星采购量（实际采购量），与合同初次创建保持一致。
-                    value -> findItem(value, item.getId()).setQuantity(poItem.getQuantityReal()));
+            // 数量与金额统一按领星「实际采购量」(quantity_real) 口径，与 Contract#toItem 建合同时的算法一致；
+            // 领星还没回填实际采购量时退回计划采购量，否则两个字段都算不出值，会生成一条没法同步的空差异。
+            Integer lingxingQuantity = PurchasePriceCalculator.effectiveQuantity(
+                    poItem.getQuantityReal(), poItem.getQuantityPlan());
+            // 领星侧算不出值时整行不展示：数量/金额是**默认勾选**的，如果领星值为空还列成差异，
+            // 用户一点同步就会把合同里已有的数量/金额清成 null。
+            if (lingxingQuantity != null) {
+                add(fields, keyPrefix + "quantity", prefix + "数量", "采购商品", item.getQuantity(), lingxingQuantity, true,
+                        value -> findItem(value, item.getId()).setQuantity(lingxingQuantity));
+            }
             add(fields, keyPrefix + "unitPrice", prefix + "不含税单价", "采购商品", item.getUnitPrice(), poItem.getUnitPriceWithoutTax(), true,
                     value -> findItem(value, item.getId()).setUnitPrice(poItem.getUnitPriceWithoutTax()));
             BigDecimal amountWithoutTax = PurchasePriceCalculator.lineAmount(
-                    poItem.getUnitPriceWithoutTax(), poItem.getQuantityReal());
-            add(fields, keyPrefix + "amount", prefix + "金额", "采购商品", item.getAmount(), amountWithoutTax, true,
-                    value -> findItem(value, item.getId()).setAmount(amountWithoutTax));
+                    poItem.getUnitPriceWithoutTax(), lingxingQuantity);
+            if (amountWithoutTax != null) {
+                add(fields, keyPrefix + "amount", prefix + "金额", "采购商品", item.getAmount(), amountWithoutTax, true,
+                        value -> findItem(value, item.getId()).setAmount(amountWithoutTax));
+            }
             add(fields, keyPrefix + "deliveryDate", prefix + "交货日期", "采购商品", item.getDeliveryDate(), poItem.getExpectArriveTime(), true,
                     value -> findItem(value, item.getId()).setDeliveryDate(poItem.getExpectArriveTime()));
             add(fields, keyPrefix + "warehouseName", prefix + "仓库", "采购商品", item.getWarehouseName(), poItem.getWarehouseName(), true,

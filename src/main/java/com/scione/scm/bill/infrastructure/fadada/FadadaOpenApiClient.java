@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 法大大 V5 OpenAPI 客户端。
@@ -58,6 +59,10 @@ public class FadadaOpenApiClient {
     private static final String URGE_SIGN_TASK_PATH = "/sign-task/urge";
     private static final String CANCEL_SIGN_TASK_PATH = "/sign-task/cancel";
     private static final String ABOLISH_SIGN_TASK_PATH = "/sign-task/abolish";
+    private static final String GET_SIGN_TASK_DETAIL_V5_PATH = "/sign-task/get-detail";
+    private static final String ADD_SIGN_TASK_FIELDS_PATH = "/sign-task/field/add";
+    private static final String GET_SIGN_TASK_FIELDS_PATH = "/sign-task/field/list";
+    private static final String MODIFY_SIGN_TASK_ACTORS_PATH = "/sign-task/actor/modify";
     /** 该查询路径来自本地 Python 示例，供应商标注为旧版；上线前请以租户 V5 文档核验。 */
     private static final String GET_SIGN_TASK_DETAIL_PATH = "/sign-task/app/get-detail";
     private static final String GET_DOWNLOAD_URL_PATH = "/sign-task/owner/get-download-url";
@@ -73,6 +78,12 @@ public class FadadaOpenApiClient {
     /** 印章停用状态值，删除印章前先停用。 */
     public static final String SEAL_STATUS_DISABLE = "disable";
     private static final String SIGN_TYPE = "HMAC-SHA256";
+    /**
+     * 法大大「应用/企业不匹配」家族错误码：遇到这些码时说明当前应用凭据不是任务所属应用，
+     * 客户端会换用 {@code fadada.open-api.apps} 中登记的其他应用自动重试一次。
+     * 210032 企业用户不存在；211150 发起方或者参与方不匹配；211503 作废发起方信息错误。
+     */
+    private static final List<String> APP_MISMATCH_CODES = List.of("210032", "211150", "211503");
     private static final int MAX_REASON_LENGTH = 500;
     private static final String CONTRACT_SIGN_DATE_FORMAT = "YYYY-MM-DD";
     /** 法大大日期控件字号单位为 px；13px 最接近合同 HTML 正文默认的 10pt。 */
@@ -82,7 +93,8 @@ public class FadadaOpenApiClient {
     private final FadadaRequestSigner signer;
     private final ObjectMapper objectMapper;
     private final RestClient restClient;
-    private volatile CachedToken cachedToken;
+    /** 按 appId 缓存 accessToken：不同应用凭据的 token 互不通用。 */
+    private final Map<String, CachedToken> cachedTokens = new ConcurrentHashMap<>();
 
     public FadadaOpenApiClient(
             FadadaOpenApiProperties properties,
@@ -111,22 +123,28 @@ public class FadadaOpenApiClient {
         return data == null || data.isNull() ? Optional.empty() : Optional.of(data);
     }
 
-    /** 获取并缓存法大大 accessToken。 */
+    /** 获取并缓存主应用 accessToken。 */
     public String getAccessToken() {
-        ensureConfigured();
-        CachedToken current = cachedToken;
+        return accessTokenFor(primaryCredential());
+    }
+
+    /** 获取并缓存指定应用凭据的 accessToken。 */
+    private String accessTokenFor(Credential credential) {
+        ensureCredentialConfigured(credential);
+        CachedToken current = cachedTokens.get(credential.appId());
         Instant now = Instant.now();
         if (current != null && current.isValidAt(now)) {
             return current.value();
         }
         synchronized (this) {
-            current = cachedToken;
+            current = cachedTokens.get(credential.appId());
             now = Instant.now();
             if (current != null && current.isValidAt(now)) {
                 return current.value();
             }
-            cachedToken = requestAccessToken(now);
-            return cachedToken.value();
+            CachedToken fresh = requestAccessToken(credential, now);
+            cachedTokens.put(credential.appId(), fresh);
+            return fresh.value();
         }
     }
 
@@ -263,8 +281,7 @@ public class FadadaOpenApiClient {
         body.put("signTaskSubject", requireText(request.taskName(), "taskName"));
         body.put("signDocType", "contract");
         body.put("initiator", Map.of("idType", "corp", "openId", configuredOpenCorpId()));
-        // 与签署方主体保持一致，避免子公司任务被统计到主企业名下。
-        putIfNotBlank(body, "initiatorEntityId", request.buyerEntityId());
+        // 不传 initiatorEntityId：它必须属于上面的发起企业账号；需方子公司通过 actorEntityId 指定。
         body.put("businessNo", requireText(request.businessNo(), "businessNo"));
         body.put("transReferenceId", requireText(request.businessNo(), "businessNo"));
         body.put("businessId", requireText(request.freeSignBusinessId(), "freeSignBusinessId"));
@@ -372,16 +389,108 @@ public class FadadaOpenApiClient {
      * 为已完成的原签署任务发起作废（解除协议）任务。
      * 原任务不会立即作废，需原签署方完成解除协议签署后才会推送 sign-task-abolish 回调。
      */
-    public String abolishSignTask(String signTaskId, String initiatorId, String reason) {
+    public String createAbolishSignTask(String signTaskId, String initiatorId, String reason, String businessId,
+                                        String buyerActorId, String supplierActorId, String supplierPhone) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("signTaskId", requireText(signTaskId, "signTaskId"));
+        // 平台模板作废协议要先保持未提交，等生成文档并补好签章控件和免验证签配置后再启动。
+        body.put("businessId", requireText(businessId, "businessId"));
         body.put("abolishedInitiator", Map.of("initiatorId", requireText(initiatorId, "initiatorId")));
         body.put("docSource", "platform");
-        body.put("reason", requireText(reason, "reason"));
+        String requiredReason = requireText(reason, "reason");
+        if (requiredReason.length() > 200) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "作废原因不能超过200个字符");
+        }
+        body.put("reason", requiredReason);
         body.put("followOriginalConfig", true);
-        body.put("autoStart", true);
+        body.put("autoStart", false);
+        // 法大大文档明确说明：作废任务默认复用原签署方但不发通知。
+        // 首次签署通知必须在 /sign-task/abolish 创建请求的 actors.actor 中指定；
+        // 创建后再调用 actor/modify 只更新参与方配置，不会可靠触发待签短信。
+        Map<String, Object> buyerActor = new LinkedHashMap<>();
+        buyerActor.put("actorId", requireText(buyerActorId, "buyerActorId"));
+        buyerActor.put("sendNotification", false);
+        Map<String, Object> supplierActor = new LinkedHashMap<>();
+        supplierActor.put("actorId", requireText(supplierActorId, "supplierActorId"));
+        supplierActor.put("notifyAddress", requireText(supplierPhone, "supplierPhone"));
+        supplierActor.put("sendNotification", true);
+        supplierActor.put("notifyType", List.of("start"));
+        body.put("actors", List.of(
+                Map.of("actor", buyerActor),
+                Map.of("actor", supplierActor)));
+        log.info("创建法大大作废协议并配置供方首次签署短信：originalTaskId={}, supplierActorId={}, supplierPhonePresent={}, notifyType=start, followOriginalConfig=true",
+                signTaskId, supplierActorId, !isBlank(supplierPhone));
         JsonNode data = businessPost(ABOLISH_SIGN_TASK_PATH, body, false).path("data");
         return requiredText(data, "abolishedSignTaskId", "发起签署任务作废失败");
+    }
+
+    /**
+     * 查询平台生成的解除协议文档标识。必须在作废任务创建后、添加控件前调用。
+     */
+    public String getAbolishTaskDocumentId(String signTaskId) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("signTaskId", requireText(signTaskId, "signTaskId"));
+        body.put("filter", List.of("doc"));
+        JsonNode docs = businessPost(GET_SIGN_TASK_DETAIL_V5_PATH, body, true).path("data").path("docs");
+        if (!docs.isArray() || docs.isEmpty()) {
+            throw fadadaError("查询平台生成的解除协议文档失败：响应中没有文档");
+        }
+        for (JsonNode doc : docs) {
+            String docId = text(doc, "docId");
+            if (!isBlank(docId)) {
+                return docId;
+            }
+        }
+        throw fadadaError("查询平台生成的解除协议文档失败：响应中没有有效的docId");
+    }
+
+    /**
+     * 在法大大生成的解除协议中添加需方企业印章控件。
+     *
+     * <p>解除协议是由法大大在 /sign-task/abolish 之后动态生成的文档，不是模板编辑阶段；
+     * 因此这里使用 pixel 模式。法大大坐标定义为 96 DPI、页面左上角为原点、签章中心点坐标。
+     * 根据用户提供的 A4 已签署解除协议 PDF 中签章控件的 PDF Rect 换算，签章中心约为
+     * 第一页 x=289px、y=268px。</p>
+     */
+    public String addAbolishBuyerSealField(String signTaskId, String docId) {
+        String fieldId = "abolish-buyer-seal";
+        Map<String, Object> position = Map.of(
+                "positionMode", "pixel",
+                "positionPageNo", 1,
+                "positionX", 289,
+                "positionY", 268);
+        Map<String, Object> docField = Map.of(
+                "fieldId", fieldId,
+                "fieldName", fieldId,
+                "fieldType", "corp_seal",
+                "moveable", false,
+                "position", position);
+        Map<String, Object> body = Map.of(
+                "signTaskId", requireText(signTaskId, "signTaskId"),
+                "fields", List.of(Map.of(
+                        "docId", requireText(docId, "docId"),
+                        "docFields", List.of(docField))));
+        // Field.fieldId 由接入方自定义，接口文档没有说添加后会自动改写；
+        // 添加接口成功即以本次提交的控件编码关联参与方，避免依赖控件列表的响应层级。
+        businessPost(ADD_SIGN_TASK_FIELDS_PATH, body, false);
+        return fieldId;
+    }
+
+    /** 将需方签章控件关联至作废协议的需方参与方，并开启免验证签。 */
+    public void configureAbolishBuyerFreeSign(String signTaskId, String buyerActorId, String docId,
+                                               String fieldId, String buyerSealId) {
+        Map<String, Object> signField = new LinkedHashMap<>();
+        signField.put("fieldDocId", requireText(docId, "docId"));
+        signField.put("fieldId", requireText(fieldId, "fieldId"));
+        signField.put("sealId", requireText(buyerSealId, "buyerSealId"));
+        Map<String, Object> buyerActor = new LinkedHashMap<>();
+        buyerActor.put("actorId", requireText(buyerActorId, "buyerActorId"));
+        buyerActor.put("signFields", List.of(signField));
+        buyerActor.put("signConfigInfo", Map.of("requestVerifyFree", true, "resizeSeal", true));
+        // businessId 已在 /abolish 创建任务时设置；法大大规定任务已存在场景码时此处不能重复传。
+        businessPost(MODIFY_SIGN_TASK_ACTORS_PATH, Map.of(
+                "signTaskId", requireText(signTaskId, "signTaskId"),
+                "actors", List.of(buyerActor)), false);
     }
 
     /** 获取参与方签署入口。返回 URL 为短期敏感凭据，调用方不得持久化或写日志。 */
@@ -625,12 +734,52 @@ public class FadadaOpenApiClient {
         return new SignTask(requiredText(data, "signTaskId", "创建签署任务失败"));
     }
 
+    /**
+     * 调用法大大接口，失败且错误码属于「应用不匹配」时自动换用其他已登记应用重试。
+     *
+     * <p>历史合同可能由另一套法大大应用签署（法大大的企业与签署任务都挂在应用之下），
+     * 此时用当前主应用调用会报 210032 / 211150 / 211503。这些码只表示「用错了应用」，
+     * 换成该任务所属应用的凭据即可成功，因此这里按 apps 顺序逐套尝试。</p>
+     */
     private JsonNode businessPost(String path, Map<String, Object> body, boolean retryable) {
-        return signedPost(path, body, getAccessToken(), retryable);
+        List<Credential> credentials = credentialCandidates();
+        String lastReason = null;
+        for (int index = 0; index < credentials.size(); index++) {
+            Credential credential = credentials.get(index);
+            JsonNode response = executePost(credential, path, body, accessTokenFor(credential), retryable);
+            String code = response == null ? "" : response.path("code").asText();
+            if (SUCCESS_CODE.equals(code)) {
+                log.info("法大大接口调用成功：path={}, appId={}, code={}", path, credential.appId(), code);
+                return response;
+            }
+            lastReason = businessFailureReason(response);
+            boolean hasNext = index + 1 < credentials.size();
+            if (hasNext && APP_MISMATCH_CODES.contains(code)) {
+                log.warn("法大大应用不匹配（业务码 {}），改用备用应用重试：path={}, 失败appId={}, 备用appId={}",
+                        code, path, credential.appId(), credentials.get(index + 1).appId());
+                continue;
+            }
+            log.warn("Fadada request was rejected: {}", sanitizeReason(lastReason));
+            throw fadadaError(lastReason);
+        }
+        log.warn("Fadada request was rejected: {}", sanitizeReason(lastReason));
+        throw fadadaError(lastReason == null ? "请求失败" : lastReason);
     }
 
-    private CachedToken requestAccessToken(Instant requestedAt) {
-        JsonNode response = signedPost(TOKEN_PATH, Map.of(), null, true);
+    private String businessFailureReason(JsonNode response) {
+        String code = response == null ? "" : response.path("code").asText();
+        String message = responseMessage(response);
+        return "业务码 " + (code.isBlank() ? "为空" : code) + (message.isBlank() ? "" : "：" + message);
+    }
+
+    private CachedToken requestAccessToken(Credential credential, Instant requestedAt) {
+        JsonNode response = executePost(credential, TOKEN_PATH, Map.of(), null, true);
+        String code = response == null ? "" : response.path("code").asText();
+        if (!SUCCESS_CODE.equals(code)) {
+            String reason = businessFailureReason(response);
+            log.warn("Fadada request was rejected: {}", sanitizeReason(reason));
+            throw fadadaError(reason);
+        }
         JsonNode data = response.path("data");
         String token = requiredText(data, "accessToken", "获取 accessToken 失败");
         Duration ttl = properties.getTokenTtl();
@@ -639,18 +788,20 @@ public class FadadaOpenApiClient {
         return new CachedToken(token, expiresAt);
     }
 
-    private JsonNode signedPost(String path, Map<String, Object> body, String accessToken, boolean retryable) {
-        ensureConfigured();
+    private JsonNode executePost(Credential credential, String path, Map<String, Object> body,
+                                 String accessToken, boolean retryable) {
+        ensureCredentialConfigured(credential);
         final String bizContent = serialize(body);
-        log.info("法大大接口调用开始：path={}, retryable={}, bizContentLength={}", path, retryable, bizContent.length());
+        log.info("法大大接口调用开始：path={}, appId={}, retryable={}, bizContentLength={}",
+                path, credential.appId(), retryable, bizContent.length());
         String timestamp = Long.toString(Instant.now().toEpochMilli());
         String nonce = Long.toString(System.currentTimeMillis() * 1_000L + (System.nanoTime() % 1_000L));
         Map<String, String> signParameters = new LinkedHashMap<>();
-        signParameters.put("X-FASC-App-Id", properties.getAppId());
+        signParameters.put("X-FASC-App-Id", credential.appId());
         signParameters.put("X-FASC-Sign-Type", SIGN_TYPE);
         signParameters.put("X-FASC-Timestamp", timestamp);
         signParameters.put("X-FASC-Nonce", nonce);
-        signParameters.put("X-FASC-Api-SubVersion", properties.getApiSubVersion());
+        signParameters.put("X-FASC-Api-SubVersion", credential.apiSubVersion());
         if (accessToken == null) {
             signParameters.put("X-FASC-Grant-Type", "client_credential");
         } else {
@@ -661,19 +812,19 @@ public class FadadaOpenApiClient {
         }
         String signature;
         try {
-            signature = signer.sign(signParameters, timestamp, properties.getAppSecret());
+            signature = signer.sign(signParameters, timestamp, credential.appSecret());
         } catch (IllegalStateException exception) {
             log.error("Failed to sign Fadada request: {}", sanitizeReason(exception.getMessage()));
             throw fadadaError("请求签名失败");
         }
 
         HttpHeaders headers = new HttpHeaders();
-        headers.set("X-FASC-App-Id", properties.getAppId());
+        headers.set("X-FASC-App-Id", credential.appId());
         headers.set("X-FASC-Sign-Type", SIGN_TYPE);
         headers.set("X-FASC-Sign", signature);
         headers.set("X-FASC-Timestamp", timestamp);
         headers.set("X-FASC-Nonce", nonce);
-        headers.set("X-FASC-Api-SubVersion", properties.getApiSubVersion());
+        headers.set("X-FASC-Api-SubVersion", credential.apiSubVersion());
         if (accessToken == null) {
             headers.set("X-FASC-Grant-Type", "client_credential");
         } else {
@@ -694,14 +845,12 @@ public class FadadaOpenApiClient {
                         .body(form)
                         .retrieve()
                         .body(JsonNode.class);
-                validateResponse(response);
-                log.info("法大大接口调用成功：path={}, attempt={}, code={}", path, attempt, response.path("code").asText());
+                log.info("法大大接口调用完成：path={}, appId={}, attempt={}, code={}",
+                        path, credential.appId(), attempt, response == null ? "<空响应>" : response.path("code").asText());
                 return response;
-            } catch (BusinessException exception) {
-                log.warn("法大大接口业务失败：path={}, attempt={}, reason={}", path, attempt, sanitizeReason(exception.getMessage()));
-                throw exception;
             } catch (RestClientException exception) {
-                log.warn("法大大接口网络失败：path={}, attempt={}, exception={}", path, attempt, exception.getClass().getSimpleName());
+                log.warn("法大大接口网络失败：path={}, appId={}, attempt={}, exception={}",
+                        path, credential.appId(), attempt, exception.getClass().getSimpleName());
                 if (attempt == attempts) {
                     throw fadadaError(transportFailureReason(exception));
                 }
@@ -711,16 +860,30 @@ public class FadadaOpenApiClient {
         throw fadadaError("请求失败");
     }
 
-    private void validateResponse(JsonNode response) {
-        String code = response == null ? "" : response.path("code").asText();
-        if (SUCCESS_CODE.equals(code)) {
-            return;
+    /** 当前主应用凭据。 */
+    private Credential primaryCredential() {
+        return new Credential(properties.getAppId(), properties.getAppSecret(), properties.getApiSubVersion());
+    }
+
+    /** 候选应用凭据：主应用在前，之后依次是 apps 中登记且 appId 不同的备用应用。 */
+    private List<Credential> credentialCandidates() {
+        List<Credential> candidates = new ArrayList<>();
+        Credential primary = primaryCredential();
+        candidates.add(primary);
+        List<FadadaOpenApiProperties.AppCredential> apps = properties.getApps();
+        if (apps == null || apps.isEmpty()) {
+            return candidates;
         }
-        String message = responseMessage(response);
-        String reason = "业务码 " + (code.isBlank() ? "为空" : code)
-                + (message.isBlank() ? "" : "：" + message);
-        log.warn("Fadada request was rejected: {}", sanitizeReason(reason));
-        throw fadadaError(reason);
+        for (FadadaOpenApiProperties.AppCredential app : apps) {
+            if (app == null || isBlank(app.getAppId()) || isBlank(app.getAppSecret())
+                    || app.getAppId().equals(primary.appId())) {
+                continue;
+            }
+            String subVersion = isBlank(app.getApiSubVersion())
+                    ? properties.getApiSubVersion() : app.getApiSubVersion();
+            candidates.add(new Credential(app.getAppId(), app.getAppSecret(), subVersion));
+        }
+        return candidates;
     }
 
     private String serialize(Map<String, Object> body) {
@@ -753,10 +916,17 @@ public class FadadaOpenApiClient {
         return URI.create(base + path);
     }
 
-    private void ensureConfigured() {
-        if (properties.getEndpoint() == null || isBlank(properties.getAppId()) || isBlank(properties.getAppSecret())) {
-            log.error("Fadada OpenAPI credentials are not configured");
-            throw new BusinessException(ResultCode.SYSTEM_ERROR, "法大大 OpenAPI 配置不完整");
+    private void ensureCredentialConfigured(Credential credential) {
+        if (properties.getEndpoint() == null || credential == null
+                || isBlank(credential.appId()) || isBlank(credential.appSecret())) {
+            // 把缺失的键名写进日志与报错：这类问题几乎都是配置中心里 fadada.open-api 整块没生效
+            // （例如 YAML 里 open-api: 那一行被注释掉，键掉到了 fadada.* 下），只报「配置不完整」
+            // 时排查要从零开始，非常费时。
+            log.error("Fadada OpenAPI credentials are not configured: endpoint={}, appIdPresent={}, appSecretPresent={}",
+                    properties.getEndpoint(), credential != null && !isBlank(credential.appId()),
+                    credential != null && !isBlank(credential.appSecret()));
+            throw new BusinessException(ResultCode.SYSTEM_ERROR,
+                    "法大大 OpenAPI 配置不完整：缺少 fadada.open-api.appId / appSecret，请检查配置中心该键是否生效");
         }
     }
 
@@ -846,14 +1016,31 @@ public class FadadaOpenApiClient {
             return "";
         }
         String sanitized = reason.replace('\r', ' ').replace('\n', ' ').trim();
-        if (!isBlank(properties.getAppSecret())) {
-            sanitized = sanitized.replace(properties.getAppSecret(), "***");
+        for (String secret : knownSecrets()) {
+            sanitized = sanitized.replace(secret, "***");
         }
-        CachedToken current = cachedToken;
-        if (current != null && !isBlank(current.value())) {
-            sanitized = sanitized.replace(current.value(), "***");
+        for (CachedToken token : cachedTokens.values()) {
+            if (token != null && !isBlank(token.value())) {
+                sanitized = sanitized.replace(token.value(), "***");
+            }
         }
         return sanitized.length() <= MAX_REASON_LENGTH ? sanitized : sanitized.substring(0, MAX_REASON_LENGTH) + "...";
+    }
+
+    /** 主应用与全部备用应用的 appSecret，用于日志脱敏。 */
+    private List<String> knownSecrets() {
+        List<String> secrets = new ArrayList<>();
+        if (!isBlank(properties.getAppSecret())) {
+            secrets.add(properties.getAppSecret());
+        }
+        if (properties.getApps() != null) {
+            for (FadadaOpenApiProperties.AppCredential app : properties.getApps()) {
+                if (app != null && !isBlank(app.getAppSecret())) {
+                    secrets.add(app.getAppSecret());
+                }
+            }
+        }
+        return secrets;
     }
 
     private static void putIfNotBlank(Map<String, Object> target, String key, String value) {
@@ -956,6 +1143,10 @@ public class FadadaOpenApiClient {
     }
 
     public record SealFreeSignUrl(String freeSignUrl, String freeSignShortUrl) {
+    }
+
+    /** 单次调用使用的应用凭据；同一套凭据共享一个 accessToken 缓存。 */
+    private record Credential(String appId, String appSecret, String apiSubVersion) {
     }
 
     private record CachedToken(String value, Instant expiresAt) {

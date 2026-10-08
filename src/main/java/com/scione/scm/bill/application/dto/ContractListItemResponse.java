@@ -38,7 +38,25 @@ public class ContractListItemResponse {
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime updateTime;
 
-    public static ContractListItemResponse from(Contract contract) {
+    /**
+     * 签署时间：我方（需方）发起签署并自动盖章的时间，取 contract.sign_start_time。
+     * 未发起签署时为空；不是供方签署完成时间（那是 sign_complete_time / status=3 的时间）。
+     */
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private LocalDateTime signStartTime;
+
+    /**
+     * 催办时间：该合同最近一次催办供方签署的时间。
+     * 催办只写操作日志（procurement_operation_log，business_type=1、operation_type=URGE_SIGN）没有独立字段，
+     * 由 ContractQueryService 按当前页合同批量取最大值后回填。
+     */
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private LocalDateTime lastUrgeTime;
+
+    /**
+     * @param lastUrgeTime 最近一次催办时间，来自操作日志的批量查询；无催办记录时传 null
+     */
+    public static ContractListItemResponse from(Contract contract, LocalDateTime lastUrgeTime) {
         ContractListItemResponse dto = new ContractListItemResponse();
         dto.setId(contract.getId());
         dto.setContractNo(contract.getContractNo());
@@ -54,6 +72,8 @@ public class ContractListItemResponse {
         dto.setCreateTypeText(contract.getCreateType() == 1 ? "自动创建" : "手动创建");
         dto.setCreateTime(contract.getCreateTime());
         dto.setUpdateTime(contract.getUpdateTime());
+        dto.setSignStartTime(contract.getSignStartTime());
+        dto.setLastUrgeTime(lastUrgeTime);
         return dto;
     }
 }

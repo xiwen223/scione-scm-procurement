@@ -49,6 +49,31 @@
         AND is_deleted = 0
     </select>
 
+    <select id="findContractNoByFadadaTaskId" resultType="string">
+        SELECT contract_no
+        FROM contract
+        WHERE (fadada_task_id = #{taskId} OR fadada_abolished_task_id = #{taskId})
+          AND is_deleted = 0
+        LIMIT 1
+    </select>
+
+    <select id="findFadadaAbolishedTaskId" resultType="string">
+        SELECT fadada_abolished_task_id
+        FROM contract
+        WHERE id = #{id}
+          AND is_deleted = 0
+        LIMIT 1
+    </select>
+
+    <!-- 合同编号唯一性校验：不带 is_deleted 过滤，因为逻辑删除的行仍占用唯一索引 -->
+    <select id="countByContractNoExcludingId" resultType="int">
+        SELECT COUNT(1)
+        FROM contract
+        WHERE contract_no = #{contractNo}
+          AND id != #{excludeId}
+        LIMIT 1
+    </select>
+
     <update id="updatePdfUrl">
         UPDATE contract
         SET contract_pdf_url = #{pdfUrl},
@@ -112,11 +137,14 @@
             <if test="req.status != null">
                 AND status = #{req.status}
             </if>
+            <!-- 日期范围按「签署时间」过滤：即我方（需方）发起签署并自动盖章的时间 sign_start_time。
+                 它是 DATETIME 而不是 DATE，结束日期必须按「次日 0 点前」比较，否则会漏掉结束当天的全部数据；
+                 未签署（sign_start_time 为 NULL）的合同天然不落在任何签署时间区间内。 -->
             <if test="req.startDate != null">
-                AND contract_date &gt;= #{req.startDate}
+                AND sign_start_time &gt;= #{req.startDate}
             </if>
             <if test="req.endDate != null">
-                AND contract_date &lt;= #{req.endDate}
+                AND sign_start_time &lt; DATE_ADD(#{req.endDate}, INTERVAL 1 DAY)
             </if>
         </where>
     </sql>
@@ -145,7 +173,11 @@
 
     <update id="updateById">
         UPDATE contract
-        SET contract_name = #{contractName},
+        SET contract_no = #{contractNo},
+            contract_name = #{contractName},
+            contract_type = #{contractType},
+            template_id = #{templateId},
+            buyer_company_id = #{buyerCompanyId},
             supplier_name = #{supplierName},
             supplier_phone = #{supplierPhone},
             supplier_credit_code = #{supplierCreditCode},
@@ -170,19 +202,23 @@
         WHERE id = #{id}
     </update>
 
+    <!-- 履行中的作废要走法大大解除协议，状态得等回调才变；用户填的作废原因先在这里落库，
+         否则回调回来后（回调不一定带原因）详情页就看不出为什么作废了。原因是选填，空值不覆盖旧值。 -->
     <update id="markFadadaAbolishPending">
         UPDATE contract
         SET fadada_abolished_task_id = #{abolishedTaskId},
+            cancel_reason = COALESCE(NULLIF(#{cancelReason}, ''), cancel_reason),
             update_time = NOW()
         WHERE id = #{id}
           AND status = 3
           AND is_deleted = 0
     </update>
 
+    <!-- 回调没带原因时保留发起作废时记录的原因，不要用空值覆盖掉 -->
     <update id="markFadadaAbolished">
         UPDATE contract
         SET status = 5,
-            cancel_reason = #{cancelReason},
+            cancel_reason = COALESCE(NULLIF(#{cancelReason}, ''), cancel_reason),
             cancel_time = NOW(),
             is_fadada_abolished = 1,
             fadada_abolished_time = NOW(),

@@ -67,6 +67,9 @@ public class Contract {
     private String fadadaTaskId;
     private LocalDateTime signStartTime;
     private LocalDateTime signCompleteTime;
+    /** 作废原因（可选填写），作废时随状态一起落库，详情页要展示给用户看。 */
+    private String cancelReason;
+    private LocalDateTime cancelTime;
     /** 落库时间，只读（库中 DEFAULT CURRENT_TIMESTAMP），由持久化适配器回填。 */
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
@@ -101,8 +104,11 @@ public class Contract {
         c.buyerPhone = buyer.getPhone();
         c.fax = buyer.getFax();
         // 领星单头金额和明细 amount 是价税合计；合同按不含税单价重新计算原价。
+        // 数量口径必须与明细（toItem，按实际采购量）一致，否则主表原价与 Σ明细金额 会对不上，
+        // 最终导致列表里的合同金额与合同 PDF 底部的合计不一致。
         c.originalAmount = po.getItems() == null ? BigDecimal.ZERO : po.getItems().stream()
-                .map(item -> PurchasePriceCalculator.lineAmount(item.getUnitPriceWithoutTax(), item.getQuantityPlan()))
+                .map(item -> PurchasePriceCalculator.lineAmount(item.getUnitPriceWithoutTax(),
+                        PurchasePriceCalculator.effectiveQuantity(item.getQuantityReal(), item.getQuantityPlan())))
                 .filter(java.util.Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         c.discountedAmount = null;
@@ -144,6 +150,7 @@ public class Contract {
                                      String contractPdfUrl, String signedPdfUrl, String fadadaTaskId,
                                      LocalDateTime signStartTime, LocalDateTime signCompleteTime,
                                      LocalDateTime createTime, LocalDateTime updateTime,
+                                     String cancelReason, LocalDateTime cancelTime,
                                      List<ContractItem> items) {
         Contract c = new Contract();
         c.id = id;
@@ -187,6 +194,8 @@ public class Contract {
         c.signCompleteTime = signCompleteTime;
         c.createTime = createTime;
         c.updateTime = updateTime;
+        c.cancelReason = cancelReason;
+        c.cancelTime = cancelTime;
         if (items != null) {
             c.items.addAll(items);
         }
@@ -205,10 +214,12 @@ public class Contract {
         item.setProductName(src.getProductName());
         item.setSpecification(src.getModel());
         // 合同数量取领星“采购量”（实际采购量），对应 quantity_real；不能使用计划采购量 quantity_plan。
-        item.setQuantity(src.getQuantityReal());
+        // 领星还没回填实际采购量时退回计划采购量：两边都取不到会让数量与金额整列变成 null。
+        Integer quantity = PurchasePriceCalculator.effectiveQuantity(src.getQuantityReal(), src.getQuantityPlan());
+        item.setQuantity(quantity);
         item.setUnit(null);
         item.setUnitPrice(src.getUnitPriceWithoutTax());
-        item.setAmount(PurchasePriceCalculator.lineAmount(src.getUnitPriceWithoutTax(), src.getQuantityReal()));
+        item.setAmount(PurchasePriceCalculator.lineAmount(src.getUnitPriceWithoutTax(), quantity));
         item.setDeliveryDate(src.getExpectArriveTime());
         item.setWarehouseName(src.getWarehouseName());
         item.setRemark(src.getRemark());

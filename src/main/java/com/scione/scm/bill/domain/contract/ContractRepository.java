@@ -1,5 +1,8 @@
 package com.scione.scm.bill.domain.contract;
 
+import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.Map;
 import java.util.Optional;
 import java.util.List;
 
@@ -32,6 +35,31 @@ public interface ContractRepository {
      */
     Optional<Contract> findByContractNo(String contractNo);
 
+    /** 按法大大签署任务 ID 查询合同，兼容原签署任务和解除协议任务回调。 */
+    Optional<Contract> findByFadadaTaskId(String taskId);
+
+    /** 查询合同关联的法大大解除协议任务 ID。 */
+    Optional<String> findFadadaAbolishedTaskId(long contractId);
+
+    /**
+     * 合同编号唯一性校验（排除自身）。
+     * 不过滤逻辑删除的行 —— 它们仍占用唯一索引，复用编号会直接写库失败。
+     *
+     * @param contractNo        待校验的合同编号
+     * @param excludeContractId 排除的合同 ID（自身）
+     * @return true=已被其它合同占用
+     */
+    boolean existsContractNo(String contractNo, long excludeContractId);
+
+    /**
+     * 合同编号变更后同步所有冗余引用：contract_item.contract_no 与
+     * procurement_operation_log.data_name（合同业务）。主表编号本身由 {@link #update} 写入。
+     *
+     * @param contractId 合同 ID
+     * @param contractNo 新的合同编号
+     */
+    void updateContractNoReferences(long contractId, String contractNo);
+
     /**
      * 更新合同的 PDF URL（模板填充后回写）。
      */
@@ -41,8 +69,8 @@ public interface ContractRepository {
 
     void cancel(long contractId, String cancelReason);
 
-    /** 保存法大大解除协议任务，原合同仍待解除协议完成。 */
-    void markFadadaAbolishPending(long contractId, String abolishedTaskId);
+    /** 保存法大大解除协议任务，原合同仍待解除协议完成；作废原因（选填）一并落库，供详情页展示。 */
+    void markFadadaAbolishPending(long contractId, String abolishedTaskId, String cancelReason);
 
     /** 法大大作废回调完成后，标记正式作废并更新业务状态。 */
     void markFadadaAbolished(long contractId, String cancelReason);
@@ -75,6 +103,26 @@ public interface ContractRepository {
     Optional<String> findLatestItemPicUrlBySku(String sku);
 
     /**
+     * 批量版 {@link #findLatestItemPicUrlBySku(String)}：一次查询取回多个 SKU 的最新图片，
+     * 避免详情查询按明细逐条查库。
+     *
+     * @param skus SKU 集合（为空时直接返回空 Map）
+     * @return sku → 图片 URL（查不到或图片为空的 SKU 不在结果里）
+     */
+    Map<String, String> findLatestItemPicUrlsBySkus(Collection<String> skus);
+
+    /**
+     * 详情查询补齐商品图片后回写单条明细的图片 URL。
+     *
+     * <p>只更新 {@code pic_url} 一列，不影响明细其他字段；库内已有图片时不覆盖。
+     * 落库后后续详情查询与合同 PDF 生成可直接复用，不必每次再查一次领星。</p>
+     *
+     * @param itemId 明细 ID
+     * @param picUrl 商品图片 URL
+     */
+    void updateItemPicUrl(long itemId, String picUrl);
+
+    /**
      * 更新合同（合同主表 + 明细）。
      *
      * @param contract 待更新的合同聚合（含明细）
@@ -93,4 +141,13 @@ public interface ContractRepository {
      * @param log 操作日志
      */
     void saveOperationLog(ContractOperationLog log);
+
+    /**
+     * 批量取每个合同「最近一次催办供方签署」的时间，用于列表展示。
+     * 数据来源是操作日志（催办不落合同表字段），没有催办记录的合同不在返回结果里。
+     *
+     * @param contractIds 合同 ID 集合，为空时直接返回空 Map
+     * @return 合同 ID → 最近一次催办时间
+     */
+    Map<Long, LocalDateTime> findLatestUrgeTimes(Collection<Long> contractIds);
 }

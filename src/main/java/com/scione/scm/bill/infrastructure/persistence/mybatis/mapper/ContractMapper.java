@@ -33,6 +33,19 @@ public interface ContractMapper {
      */
     ContractPO findByContractNo(@Param("contractNo") String contractNo);
 
+    String findContractNoByFadadaTaskId(@Param("taskId") String taskId);
+
+    String findFadadaAbolishedTaskId(@Param("id") Long id);
+
+    /**
+     * 合同编号唯一性校验（排除自身）。不过滤 is_deleted —— 逻辑删除的行仍占用唯一索引。
+     *
+     * @param contractNo 待校验的合同编号
+     * @param excludeId  排除的合同 ID（自身）
+     * @return 被其它合同占用返回 1，否则 0
+     */
+    int countByContractNoExcludingId(@Param("contractNo") String contractNo, @Param("excludeId") Long excludeId);
+
     /**
      * 更新合同的 PDF URL。
      *
@@ -46,7 +59,8 @@ public interface ContractMapper {
 
     int cancel(@Param("id") Long id, @Param("cancelReason") String cancelReason);
 
-    int markFadadaAbolishPending(@Param("id") Long id, @Param("abolishedTaskId") String abolishedTaskId);
+    int markFadadaAbolishPending(@Param("id") Long id, @Param("abolishedTaskId") String abolishedTaskId,
+                                 @Param("cancelReason") String cancelReason);
 
     int markFadadaAbolished(@Param("id") Long id, @Param("cancelReason") String cancelReason);
 

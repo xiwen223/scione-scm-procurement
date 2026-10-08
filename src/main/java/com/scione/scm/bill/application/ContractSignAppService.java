@@ -11,13 +11,10 @@ import com.scione.scm.bill.config.FadadaOpenApiProperties;
 import com.scione.scm.bill.domain.company.BuyerCompany;
 import com.scione.scm.bill.domain.company.BuyerCompanyRepository;
 import com.scione.scm.bill.domain.contract.Contract;
-import com.scione.scm.bill.domain.contract.ContractItem;
 import com.scione.scm.bill.domain.contract.ContractOperationLog;
 import com.scione.scm.bill.domain.contract.ContractRepository;
-import com.scione.scm.bill.domain.contract.PurchasePriceCalculator;
 import com.scione.scm.bill.domain.contract.ContractStatus;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
-import com.scione.scm.bill.domain.posync.PoSyncRecordItem;
 import com.scione.scm.bill.domain.posync.PoSyncRepository;
 import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -28,6 +25,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 /** 合同签署阶段操作。 */
@@ -41,6 +39,8 @@ public class ContractSignAppService {
     private final BuyerCompanyRepository buyerCompanyRepository;
     private final PoSyncRepository poSyncRepository;
     private final LingxingSupplierClient lingxingSupplierClient;
+    /** 签署前复核与「同步领星数据」弹窗共用同一套字段口径，避免两处算法漂移。 */
+    private final ContractLingxingSyncService contractLingxingSyncService;
     private final ContractFileStore contractFileStore;
     private final ContractPdfConverter contractPdfConverter;
     private final ContractTemplateService contractTemplateService;
@@ -71,6 +71,11 @@ public class ContractSignAppService {
         LingxingSupplierClient.SupplierProfile latestSupplier = null;
         String signingSupplierPhone;
         String signingSupplierCreditCode;
+        /**
+         * 领星复核因**接口不可用**（超时 / 限流 3001008 / IP 白名单）而降级跳过时写下原因。
+         * 与非空表示「复核未完成」，此时不能再用「查不到」的语义去阻断签署，见下方 forceConfirm 判断。
+         */
+        String lingxingRecheckSkippedReason = null;
         if (manualContract) {
             // 手动合同以保存的合同内容作为法大大签署数据源；领星仅用于差异提示。
             signingSupplierPhone = contract.getSupplierPhone();
@@ -83,27 +88,49 @@ public class ContractSignAppService {
             try {
                 latestSupplier = lingxingSupplierClient.findSupplierProfile(contract.getSupplierId()).orElse(null);
             } catch (RuntimeException exception) {
-                log.error("手动合同签署前领星供应商复核失败：contractNo={}, supplierId={}",
-                        contract.getContractNo(), contract.getSupplierId(), exception);
-                throw new BusinessException(ResultCode.LINGXING_API_ERROR,
-                        "领星供应商信息查询失败，请重新查询后再发起签署");
+                // 领星是**外部依赖且会波动**（实测同一批操作里既有 25s 超时也有 3001008 限流）。
+                // 手动合同的签署数据源本来就是合同自己保存的供方信息，领星只用来提示差异，
+                // 所以这里降级为「跳过复核」并继续签署 —— 否则用户已经同步过领星、也确认过差异，
+                // 却因为第二次实时查询超时而拿不到合同，只能反复点、反复失败。
+                // 降级不会被静默吞掉：原因会写进差异清单、操作日志与日志文件。
+                log.warn("手动合同签署前领星供应商复核失败，跳过领星复核并沿用合同保存的供方信息：contractNo={}, supplierId={}, reason={}",
+                        contract.getContractNo(), contract.getSupplierId(), exception.getMessage());
+                latestSupplier = null;
+                lingxingRecheckSkippedReason = "领星供应商资料：本次查询失败（网络超时或接口限流），已跳过领星复核，"
+                        + "签署使用合同保存的供方信息";
             }
             log.info("手动合同签署使用合同保存的供方信息：contractNo={}", contract.getContractNo());
         } else {
             latestPo = poSyncRepository.findByPurchaseOrderNo(contract.getPurchaseOrderNo())
                     .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "领星采购单不存在"));
-            latestSupplier = lingxingSupplierClient
-                    .findSupplierProfile(contract.getSupplierId())
-                    .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "领星供应商不存在"));
+            try {
+                latestSupplier = lingxingSupplierClient.findSupplierProfile(contract.getSupplierId()).orElse(null);
+            } catch (RuntimeException exception) {
+                // 与手动合同一致：领星**接口不可用**时降级沿用合同保存的供方信息
+                // （自动合同创建时已把领星档案里的电话与统一社会信用代码落库，见 ContractAutoCreateService）。
+                // 注意只兜住「查询失败」，下面「确实查不到该供应商」仍然阻断。
+                log.warn("自动合同签署前领星供应商复核失败，跳过领星复核并沿用合同保存的供方信息：contractNo={}, supplierId={}, reason={}",
+                        contract.getContractNo(), contract.getSupplierId(), exception.getMessage());
+                latestSupplier = null;
+                lingxingRecheckSkippedReason = "领星供应商资料：本次查询失败（网络超时或接口限流），已跳过领星复核，"
+                        + "签署使用合同保存的供方信息";
+            }
+            if (latestSupplier == null) {
+                throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "领星供应商不存在");
+            }
             signingSupplierPhone = latestPo.getSupplierPhone();
             signingSupplierCreditCode = latestSupplier.creditCode();
             log.info("自动合同签署使用领星最新供方信息：contractNo={}", contract.getContractNo());
         }
         validateSigningData(contract, buyer, signingSupplierPhone, signingSupplierCreditCode);
         log.info("签署前需方印章与免验证签配置校验通过：contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
-        List<String> differences = findLingxingDifferences(contract, latestPo, latestSupplier);
-        log.info("领星复核完成：contractNo={}, differenceCount={}", contract.getContractNo(), differences.size());
-        if (manualContract && (latestPo == null || latestSupplier == null) && forceConfirm) {
+        List<String> differences = findLingxingDifferences(contract, latestPo, latestSupplier, lingxingRecheckSkippedReason);
+        log.info("领星复核完成：contractNo={}, differenceCount={}, recheckSkipped={}",
+                contract.getContractNo(), differences.size(), lingxingRecheckSkippedReason != null);
+        // 只有「领星确实查不到采购单/供应商」才阻断；接口本身不可用导致的复核跳过不阻断，
+        // 否则领星一抖动用户就完全签不了（这正是之前「已同步过领星仍然报同步失败」的原因）。
+        if (manualContract && lingxingRecheckSkippedReason == null
+                && (latestPo == null || latestSupplier == null) && forceConfirm) {
             throw new BusinessException(ResultCode.LINGXING_API_ERROR,
                     "领星采购单或供应商信息未查询到，请重新查询后再发起签署");
         }
@@ -147,51 +174,32 @@ public class ContractSignAppService {
         return new StartSignResult(true, false, differences);
     }
 
+    /**
+     * 签署前领星复核。字段比对（含商品明细全量字段、供方扩展字段、默认收款账户）统一交给
+     * {@link ContractLingxingSyncService#describeDifferences}：它取领星实时数据、
+     * 价格按「含税单价 ÷ (1 + 税率)」折成不含税后比对，口径与「同步领星数据」弹窗完全一致。
+     * 这里只补两行「查不到」的提示，并保持与签署流程一致的阻断语义。
+     *
+     * <p>复核失败（{@code skippedReason != null}）时不再补「未查询到」，改为补一行失败说明，
+     * 并且**不再调用领星**：不可用还继续请求，只会把签署按钮多拖 20 多秒重试。</p>
+     */
     private List<String> findLingxingDifferences(Contract contract, PoSyncRecord po,
-                                                 LingxingSupplierClient.SupplierProfile latestSupplier) {
+                                                 LingxingSupplierClient.SupplierProfile latestSupplier,
+                                                 String skippedReason) {
         List<String> differences = new ArrayList<>();
+        if (skippedReason != null) {
+            differences.add(skippedReason);
+            return differences;
+        }
         if (po == null) {
             differences.add("领星采购单：未查询到");
-        } else {
-        compare(differences, "供应商名称", contract.getSupplierName(), po.getSupplierName());
-        compare(differences, "供应商联系人", contract.getContactPerson(), po.getContactPerson());
-        compare(differences, "供应商电话", contract.getSupplierPhone(), po.getSupplierPhone());
-        for (ContractItem contractItem : contract.getItems()) {
-            PoSyncRecordItem poItem = po.getItems().stream()
-                    .filter(item -> contractItem.getSku() != null && contractItem.getSku().equals(item.getSku()))
-                    .findFirst().orElse(null);
-            if (poItem == null) {
-                differences.add("商品SKU=" + contractItem.getSku() + "：合同存在，领星采购单不存在");
-                continue;
-            }
-            String itemPrefix = "商品[" + contractItem.getSku() + "]";
-            compare(differences, itemPrefix + "数量", contractItem.getQuantity(), poItem.getQuantityPlan());
-            compare(differences, itemPrefix + "单价", contractItem.getUnitPrice(), poItem.getUnitPriceWithoutTax());
-            compare(differences, itemPrefix + "金额", contractItem.getAmount(),
-                    PurchasePriceCalculator.lineAmount(poItem.getUnitPriceWithoutTax(), poItem.getQuantityPlan()));
-            compare(differences, itemPrefix + "预计到货日期", contractItem.getDeliveryDate(), poItem.getExpectArriveTime());
-        }
         }
         if (latestSupplier == null) {
             differences.add("领星供应商资料：未查询到");
-        } else {
-                compare(differences, "供应商地址", contract.getSupplierAddress(), latestSupplier.address());
-                compare(differences, "供应商统一社会信用代码", contract.getSupplierCreditCode(), latestSupplier.creditCode());
-                latestSupplier.defaultPaymentAccount().ifPresent(account -> {
-                    compare(differences, "供应商收款账户名称", contract.getSupplierAccountName(), account.accountName());
-                    compare(differences, "供应商银行账号", contract.getSupplierBankAccount(), account.accountId());
-                    compare(differences, "供应商开户行", contract.getSupplierBankName(), account.bankName());
-                });
         }
-        return differences;
-    }
-
-    private void compare(List<String> differences, String field, Object contractValue, Object lingxingValue) {
-        String left = contractValue == null ? "" : String.valueOf(contractValue).trim();
-        String right = lingxingValue == null ? "" : String.valueOf(lingxingValue).trim();
-        if (!left.equals(right)) {
-            differences.add(field + "：合同[" + left + "]，领星[" + right + "]");
-        }
+        differences.addAll(contractLingxingSyncService.describeDifferences(contract, latestSupplier));
+        // 本地快照与领星实时同时查不到时上面会各写一行，去重后再落日志
+        return new ArrayList<>(new LinkedHashSet<>(differences));
     }
 
     private byte[] generateLatestContractPdfForSigning(Contract contract) {
@@ -255,18 +263,76 @@ public class ContractSignAppService {
             if (!StringUtils.hasText(contract.getFadadaTaskId())) {
                 throw new BusinessException(ResultCode.PARAM_ERROR, "履行中合同缺少法大大任务ID，无法发起作废协议");
             }
-            if (!StringUtils.hasText(reason)) {
-                throw new BusinessException(ResultCode.PARAM_ERROR, "履行中合同作废必须填写作废原因");
+            BuyerCompany buyer = buyerCompanyRepository.findById(contract.getBuyerCompanyId())
+                    .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同关联的需方公司不存在"));
+            String businessId = buyer.getFadadaFreeSignBusinessId();
+            if (!StringUtils.hasText(businessId)) {
+                throw new BusinessException(ResultCode.CONTRACT_SIGN_FREE_SIGN_NOT_CONFIGURED,
+                        "合同关联的需方公司未配置法大大免验证签场景码，无法发起作废协议");
             }
-            String abolishedTaskId = fadadaOpenApiClient.abolishSignTask(
-                    contract.getFadadaTaskId(), fadadaProperties.getOpenCorpId(), reason);
-            contractRepository.markFadadaAbolishPending(contractId, abolishedTaskId);
+            if (!StringUtils.hasText(buyer.getFadadaSealId())) {
+                throw new BusinessException(ResultCode.PARAM_ERROR,
+                        "合同关联的需方公司未配置法大大印章，无法发起作废协议");
+            }
+            if (!StringUtils.hasText(buyer.getCompanyName())) {
+                throw new BusinessException(ResultCode.PARAM_ERROR,
+                        "合同关联的需方公司名称为空，无法定位解除协议签章控件");
+            }
+            // 解除协议的发起方必须是原签署任务的发起企业，否则法大大报 211503（非原任务发起方或签署参与方）。
+            // 与发起签署时一致，取合同自己需方公司的 openCorpId，不能取全局配置。
+            if (!StringUtils.hasText(buyer.getOpenCorpId())) {
+                throw new BusinessException(ResultCode.PARAM_ERROR,
+                        "合同关联的需方公司未配置法大大企业标识，无法发起作废协议");
+            }
+            if (buyer.getFadadaFreeSignExpireTime() != null
+                    && !buyer.getFadadaFreeSignExpireTime().isAfter(LocalDateTime.now())) {
+                throw new BusinessException(ResultCode.CONTRACT_SIGN_FREE_SIGN_NOT_CONFIGURED,
+                        "合同关联的需方公司法大大免验证签场景码已过期，无法发起作废协议");
+            }
+            log.info("履行中合同作废使用合同关联需方公司的免验证签配置：contractNo={}, buyerCompanyId={}, businessIdPresent={}, sealIdPresent={}",
+                    contract.getContractNo(), buyer.getId(), StringUtils.hasText(businessId),
+                    StringUtils.hasText(buyer.getFadadaSealId()));
+            // 用户可以不填写作废原因；法大大解除协议仍需要 reason，因此使用明确的默认原因。
+            String trimmedReason = StringUtils.hasText(reason) ? reason.trim() : null;
+            String fadadaReason = trimmedReason == null ? "合同作废" : trimmedReason;
+            String buyerActorId = "BUYER_" + contract.getContractNo();
+            String supplierActorId = "SUPPLIER_" + contract.getContractNo();
+            String abolishedTaskId = fadadaOpenApiClient.createAbolishSignTask(
+                    contract.getFadadaTaskId(), buyer.getOpenCorpId(), fadadaReason, businessId,
+                    buyerActorId, supplierActorId, contract.getSupplierPhone());
+            // 先持久化平台任务 ID。后续任一配置步骤失败时，仍可从合同记录和日志定位未提交任务。
+            // 作废原因一并落库：这个分支要等法大大回调才会变更为「取消」，回调本身不一定带原因，
+            // 详情页要展示用户填的原因，只能在这里先存下来。
+            contractRepository.markFadadaAbolishPending(contractId, abolishedTaskId, trimmedReason);
             String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
+            try {
+                String generatedDocId = fadadaOpenApiClient.getAbolishTaskDocumentId(abolishedTaskId);
+                String buyerSealFieldId = fadadaOpenApiClient.addAbolishBuyerSealField(
+                        abolishedTaskId, generatedDocId);
+                fadadaOpenApiClient.configureAbolishBuyerFreeSign(
+                        abolishedTaskId, buyerActorId, generatedDocId, buyerSealFieldId,
+                        buyer.getFadadaSealId());
+                log.info("法大大作废协议供方首次签署短信已在创建任务时配置：contractNo={}, abolishedTaskId={}, supplierActorId={}, supplierPhonePresent={}, notificationType=start",
+                        contract.getContractNo(), abolishedTaskId, supplierActorId,
+                        StringUtils.hasText(contract.getSupplierPhone()));
+                fadadaOpenApiClient.startSignTask(abolishedTaskId);
+            } catch (RuntimeException ex) {
+                String failureDetail = "原签署任务=" + contract.getFadadaTaskId()
+                        + "；解除协议任务=" + abolishedTaskId
+                        + "；自动配置签章控件或提交任务失败：" + ex.getMessage();
+                contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(
+                        contractId, contract.getContractNo(), operator, operator,
+                        "合同作废协议准备失败", failureDetail));
+                log.error("法大大作废协议任务创建后配置失败，任务尚未确认提交：contractNo={}, originalTaskId={}, abolishedTaskId={}",
+                        contract.getContractNo(), contract.getFadadaTaskId(), abolishedTaskId, ex);
+                throw ex;
+            }
             contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(
                     contractId, contract.getContractNo(), operator, operator,
                     "发起合同作废协议",
                     "原签署任务=" + contract.getFadadaTaskId() + "；解除协议任务=" + abolishedTaskId
-                            + "；作废原因=" + reason + "；待原签署方完成解除协议后合同才会变更为取消"));
+                            + "；作废原因=" + (StringUtils.hasText(reason) ? reason.trim() : "未填写（法大大解除协议使用默认原因：合同作废）")
+                            + "；待原签署方完成解除协议后合同才会变更为取消"));
             log.info("履行中合同已发起法大大作废协议：contractNo={}, originalTaskId={}, abolishedTaskId={}",
                     contract.getContractNo(), contract.getFadadaTaskId(), abolishedTaskId);
             return;
@@ -302,6 +368,31 @@ public class ContractSignAppService {
         }
         return new SignTaskStatusResult(contract.getId(), contract.getContractNo(), contract.getFadadaTaskId(),
                 detail.path("signTaskStatus").asText(), List.copyOf(actors));
+    }
+
+    /** 查询法大大解除协议任务状态，用于排查履行中合同作废进度。 */
+    public SignTaskStatusResult getAbolishTaskStatus(Long contractId) {
+        Contract contract = contractRepository.findById(contractId)
+                .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
+        String taskId = contractRepository.findFadadaAbolishedTaskId(contractId)
+                .orElseThrow(() -> new BusinessException(ResultCode.PARAM_ERROR, "合同尚未发起法大大解除协议任务"));
+        log.info("查询法大大解除协议任务状态：contractNo={}, abolishedTaskId={}", contract.getContractNo(), taskId);
+        JsonNode detail = fadadaOpenApiClient.getSignTaskDetail(taskId);
+        List<SignTaskActorStatus> actors = new ArrayList<>();
+        for (JsonNode actor : detail.path("actors")) {
+            JsonNode info = actor.path("actorInfo");
+            actors.add(new SignTaskActorStatus(
+                    info.path("actorId").asText(), info.path("actorName").asText(),
+                    actor.path("signOrderNo").asInt(), actor.path("joinStatus").asText(),
+                    actor.path("signStatus").asText(), actor.path("signTime").asText(),
+                    actor.path("signFields").isArray() && actor.path("signFields").size() > 0
+                            ? actor.path("signFields").get(0).path("signFieldStatus").asText() : null));
+        }
+        String taskStatus = detail.path("signTaskStatus").asText();
+        log.info("法大大解除协议任务状态查询完成：contractNo={}, abolishedTaskId={}, taskStatus={}, actorCount={}",
+                contract.getContractNo(), taskId, taskStatus, actors.size());
+        return new SignTaskStatusResult(contract.getId(), contract.getContractNo(), taskId,
+                taskStatus, List.copyOf(actors));
     }
 
     public record SignTaskStatusResult(Long contractId, String contractNo, String signTaskId,

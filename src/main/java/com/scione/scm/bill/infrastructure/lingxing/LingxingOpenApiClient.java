@@ -29,11 +29,14 @@ import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.StringJoiner;
 
 /**
@@ -49,6 +52,8 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     private static final String PURCHASE_ORDER_LIST_PATH =
             "/erp/sc/routing/data/local_inventory/purchaseOrderList";
     private static final int PURCHASE_ORDER_PAGE_SIZE = 500;
+    /** batchGetProductInfo 单次请求最多携带的 SKU 数；合同明细超过这个量时自动分批。 */
+    private static final int PRODUCT_BATCH_SIZE = 50;
     private static final DateTimeFormatter LINGXING_DATE_TIME =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter LINGXING_DATE =
@@ -78,8 +83,38 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
 
     @Override
     public Optional<ProductDetail> findBySku(String sku) {
+        if (sku == null || sku.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(findBySkus(List.of(sku)).get(sku));
+    }
+
+    @Override
+    public Map<String, ProductDetail> findBySkus(Collection<String> skus) {
+        if (skus == null || skus.isEmpty()) {
+            return Map.of();
+        }
+        List<String> requested = skus.stream()
+                .filter(sku -> sku != null && !sku.isBlank())
+                .distinct()
+                .toList();
+        if (requested.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, ProductDetail> products = new LinkedHashMap<>();
+        for (int start = 0; start < requested.size(); start += PRODUCT_BATCH_SIZE) {
+            List<String> batch = requested.subList(start, Math.min(start + PRODUCT_BATCH_SIZE, requested.size()));
+            for (ProductDetail detail : requestProductBatch(batch)) {
+                products.put(detail.sku(), detail);
+            }
+        }
+        return products;
+    }
+
+    /** 请求一批 SKU；批内查不到的 SKU 不会出现在返回值里。 */
+    private List<ProductDetail> requestProductBatch(List<String> skus) {
         ensureConfigured();
-        Map<String, Object> body = Map.of("skus", List.of(sku));
+        Map<String, Object> body = Map.of("skus", skus);
         String timestamp = Long.toString(Instant.now().getEpochSecond());
         String accessToken = accessToken();
 
@@ -122,12 +157,16 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
                 log.warn("Lingxing product response is invalid: code={}, reason={}", code, sanitizeReason(reason));
                 throw lingxingError(reason);
             }
+            // 只保留本批请求过的 SKU，避免接口返回多余商品污染结果
+            Set<String> requestedSkus = new HashSet<>(skus);
+            List<ProductDetail> details = new ArrayList<>();
             for (JsonNode item : data) {
-                if (sku.equals(text(item, "sku"))) {
-                    return Optional.of(toProductDetail(item));
+                String itemSku = text(item, "sku");
+                if (itemSku != null && requestedSkus.contains(itemSku)) {
+                    details.add(toProductDetail(item));
                 }
             }
-            return Optional.empty();
+            return details;
         } catch (BusinessException exception) {
             throw exception;
         } catch (RestClientException exception) {
@@ -227,6 +266,18 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         return findSupplierProfile(supplierId).flatMap(SupplierProfile::defaultPaymentAccount);
     }
 
+    /** 银行账号的日志脱敏：只留首尾各两位。户名/账户名称是业务数据，按既有习惯明文记录，便于核对白名单。 */
+    static String maskAccountId(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() <= 4) {
+            return "***";
+        }
+        return trimmed.substring(0, 2) + "***" + trimmed.substring(trimmed.length() - 2);
+    }
+
     @Override
     public Optional<SupplierProfile> findSupplierProfile(long supplierId) {
         return findSupplierById(supplierId).map(supplier -> new SupplierProfile(
@@ -237,30 +288,83 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
                 defaultPaymentAccount(supplier)));
     }
 
+    /**
+     * 取供应商的收款账号，规则只认领星「供应商 - 收款账户」里勾选的那一行。
+     *
+     * <p>取数口径：遍历 {@code payment_account_group}，**只保留 {@code is_default=1} 的行**，
+     * 不取数组第一行（第一行通常是「中国银行」这类开户行名，未必是默认账号）。
+     * 配了多个默认账户时优先取启用的；只剩停用的默认账户也会用，但会告警——付款对象不能悄悄换人。
+     * 一个默认账户都没有时返回空，由调用方按「领星未维护默认收款账户」拦截，
+     * **绝不退回第一行兜底**：收款账户错人比缺字段严重得多。</p>
+     */
     private Optional<SupplierPaymentAccount> defaultPaymentAccount(JsonNode supplier) {
         JsonNode accounts = supplier.path("payment_account_group");
-        if (!accounts.isArray()) {
+        if (!accounts.isArray() || accounts.isEmpty()) {
+            log.warn("领星供应商资料里没有收款账户列表（payment_account_group 缺失或为空）");
             return Optional.empty();
         }
+        SupplierPaymentAccount disabledDefault = null;
+        List<String> candidates = new ArrayList<>();
         for (JsonNode account : accounts) {
-            if (!isDefaultPaymentAccount(account)) {
+            boolean isDefault = isDefaultPaymentAccount(account);
+            // 逐个账户留痕：出问题时能从日志直接看出「哪一行被标成了默认」，不必再去翻接口原文。
+            candidates.add("账户名称=" + dash(text(account, "name"))
+                    + ", 户名=" + dash(text(account, "account_name"))
+                    + ", 默认=" + dash(text(account, "is_default"))
+                    + ", 启用=" + dash(text(account, "is_open")));
+            if (!isDefault) {
                 continue;
             }
             String accountName = text(account, "account_name");
             String accountId = text(account, "account_id");
             String bankName = text(account, "bank_name");
             if (isBlank(accountName) || isBlank(accountId) || isBlank(bankName)) {
-                log.warn("领星供应商默认收款账号字段不完整");
-                return Optional.empty();
+                // 原来是直接 return 空，会把后面「字段完整的默认账户」一起丢掉，这里改成继续往后找。
+                log.warn("领星供应商默认收款账号字段不完整，跳过该行：户名={}, 账号={}, 开户行={}",
+                        accountName, maskAccountId(accountId), bankName);
+                continue;
             }
-            return Optional.of(new SupplierPaymentAccount(accountName, accountId, bankName));
+            SupplierPaymentAccount candidate = new SupplierPaymentAccount(accountName, accountId, bankName);
+            if (isEnabledPaymentAccount(account)) {
+                log.info("使用领星供应商默认收款账户：户名={}, 开户行={}, 账号={}",
+                        accountName, bankName, maskAccountId(accountId));
+                return Optional.of(candidate);
+            }
+            if (disabledDefault == null) {
+                disabledDefault = candidate;
+            }
         }
+        if (disabledDefault != null) {
+            log.warn("领星供应商默认收款账户已停用（is_open=0），仍按勾选的默认账户使用：户名={}",
+                    disabledDefault.accountName());
+            return Optional.of(disabledDefault);
+        }
+        log.warn("领星供应商未维护默认收款账户（无 is_default=1 的行），合同将无法带出收款账户。"
+                + "收款账户共 {} 条：{}", accounts.size(), String.join(" | ", candidates));
         return Optional.empty();
+    }
+
+    /** 日志占位：字段缺失时打 "-"，避免日志里出现 "null"。 */
+    private static String dash(String value) {
+        return value == null || value.isBlank() ? "-" : value;
     }
 
     private static boolean isDefaultPaymentAccount(JsonNode account) {
         JsonNode defaultFlag = account.get("is_default");
-        return defaultFlag != null && (defaultFlag.asInt() == 1 || defaultFlag.asBoolean(false));
+        return defaultFlag != null && !defaultFlag.isNull()
+                && (defaultFlag.asInt() == 1 || defaultFlag.asBoolean(false));
+    }
+
+    /** is_open：1 启用、0 停用；字段缺失时不擅自判定为停用。 */
+    private static boolean isEnabledPaymentAccount(JsonNode account) {
+        JsonNode openFlag = account.get("is_open");
+        if (openFlag == null || openFlag.isNull()) {
+            return true;
+        }
+        if (openFlag.isBoolean()) {
+            return openFlag.asBoolean();
+        }
+        return openFlag.asInt(1) != 0;
     }
 
     @Override

@@ -6,6 +6,8 @@ import com.scione.scm.bill.application.port.ContractPdfConverter;
 import com.scione.scm.bill.application.port.ContractTemplateService;
 import com.scione.scm.bill.application.port.LingxingProductClient;
 import com.scione.scm.bill.config.FadadaOpenApiProperties;
+import com.scione.scm.bill.domain.company.BuyerCompany;
+import com.scione.scm.bill.domain.company.BuyerCompanyRepository;
 import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractItem;
 import com.scione.scm.bill.domain.contract.ContractPage;
@@ -32,7 +34,11 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -50,6 +56,8 @@ public class ContractQueryService {
 
     private final ContractRepository contractRepository;
     private final ContractFileStore contractFileStore;
+    /** 法大大下载要按合同自己需方公司的 openCorpId 定位任务归属方，不能只依赖全局配置。 */
+    private final BuyerCompanyRepository buyerCompanyRepository;
     private final ContractTemplateService contractTemplateService;
     private final ContractPdfConverter contractPdfConverter;
     private final FadadaOpenApiClient fadadaOpenApiClient;
@@ -70,9 +78,13 @@ public class ContractQueryService {
         // 查询数据库
         ContractPage page = contractRepository.findByPage(request);
 
+        // 催办时间不落合同表（只写操作日志），列表展示时按当前页合同批量取最近一次催办时间
+        Map<Long, LocalDateTime> lastUrgeTimes = contractRepository.findLatestUrgeTimes(
+                page.records().stream().map(Contract::getId).toList());
+
         // Domain 转 DTO
         List<ContractListItemResponse> items = page.records().stream()
-                .map(ContractListItemResponse::from)
+                .map(contract -> ContractListItemResponse.from(contract, lastUrgeTimes.get(contract.getId())))
                 .collect(Collectors.toList());
 
         log.info("查询合同列表成功：total={}, records={}", page.total(), items.size());
@@ -85,8 +97,11 @@ public class ContractQueryService {
     public ContractDetailResponse getContractDetail(Long contractId) {
         log.info("查询合同详情：contractId={}", contractId);
 
+        // 合同不存在属于业务上的「资源不存在」，必须抛 BusinessException，
+        // 否则会被 GlobalExceptionHandler 归类为系统异常，前端拿到 HTTP 500 而非 404。
         Contract contract = contractRepository.findById(contractId)
-                .orElseThrow(() -> new RuntimeException("合同不存在：contractId=" + contractId));
+                .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
+                        "合同不存在：contractId=" + contractId));
 
         fillMissingItemImages(contract);
         ContractDetailResponse response = ContractDetailResponse.from(contract);
@@ -97,41 +112,99 @@ public class ContractQueryService {
 
     /**
      * 新合同创建时会将领星商品图片保存到 contract_item。历史合同可能没有保存图片，
-     * 详情查询时按同一 SKU 查询逻辑补齐展示数据，不修改合同明细本身。
+     * 详情查询时按同一 SKU 查询逻辑补齐展示数据，并**把补到的图片回写 contract_item**，
+     * 这样后续详情查询、下载与 PDF 生成都能直接复用，不必每次再查一次领星。
+     *
+     * <p><b>取数一律走批量</b>：先把整单缺图的 SKU 一次性查库（复用历史合同同 SKU 图片），
+     * 仍未命中的 SKU 再一次批量请求领星。按明细逐条查会变成 2N 次调用（N 次 SQL + N 次 HTTP），
+     * 既慢又容易触发领星限流。</p>
+     *
+     * <p>详情查询本身是只读语义，因此回写失败只记日志，绝不影响详情返回。</p>
      */
     private void fillMissingItemImages(Contract contract) {
         if (contract.getItems() == null || contract.getItems().isEmpty()) {
             return;
         }
-        int queried = 0;
-        int filled = 0;
-        for (ContractItem item : contract.getItems()) {
-            if (StringUtils.hasText(item.getPicUrl()) || !StringUtils.hasText(item.getSku())) {
-                continue;
+        List<ContractItem> missing = contract.getItems().stream()
+                .filter(item -> !StringUtils.hasText(item.getPicUrl()) && StringUtils.hasText(item.getSku()))
+                .toList();
+        if (missing.isEmpty()) {
+            return;
+        }
+        Set<String> skus = missing.stream()
+                .map(ContractItem::getSku)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        // 1. 一次查库：复用历史合同已保存的同 SKU 图片
+        Map<String, String> resolvedPicUrls = new LinkedHashMap<>();
+        List<String> needRemote = new ArrayList<>();
+        Map<String, String> cachedPicUrls = Map.of();
+        try {
+            cachedPicUrls = contractRepository.findLatestItemPicUrlsBySkus(skus);
+        } catch (Exception e) {
+            // 补图失败绝不能影响合同详情主流程：查库失败就全部退化为查领星
+            log.warn("合同明细图片缓存查询失败（改为直接查领星）：contractNo={}", contract.getContractNo(), e);
+        }
+        for (String sku : skus) {
+            String cached = cachedPicUrls.get(sku);
+            if (StringUtils.hasText(cached)) {
+                resolvedPicUrls.put(sku, cached);
+            } else {
+                needRemote.add(sku);
             }
-            queried++;
+        }
+
+        // 2. 一次请求：仍未命中的 SKU 批量查领星（接口本身支持 skus 数组）
+        if (!needRemote.isEmpty()) {
             try {
-                var cachedPicUrl = contractRepository.findLatestItemPicUrlBySku(item.getSku());
-                if (cachedPicUrl.isPresent()) {
-                    item.setPicUrl(cachedPicUrl.get());
-                    filled++;
-                    continue;
-                }
-                var product = lingxingProductClient.findBySku(item.getSku());
-                if (product.isPresent() && StringUtils.hasText(product.get().picUrl())) {
-                    item.setPicUrl(product.get().picUrl());
-                    filled++;
-                }
+                lingxingProductClient.findBySkus(needRemote).forEach((sku, product) -> {
+                    if (product != null && StringUtils.hasText(product.picUrl())) {
+                        resolvedPicUrls.put(sku, product.picUrl());
+                    }
+                });
             } catch (Exception e) {
                 // 图片展示失败不影响合同详情主流程；下次查询仍会尝试补齐。
-                log.warn("合同明细图片查询失败：contractNo={}, sku={}",
-                        contract.getContractNo(), item.getSku(), e);
+                log.warn("合同明细图片批量查询失败：contractNo={}, 待查 SKU 数={}",
+                        contract.getContractNo(), needRemote.size(), e);
             }
         }
-        if (queried > 0) {
-            log.info("合同详情明细图片补齐完成：contractNo={}, queried={}, filled={}",
-                    contract.getContractNo(), queried, filled);
+
+        // 3. 回填内存对象并落库
+        List<ContractItem> filledItems = new ArrayList<>();
+        for (ContractItem item : missing) {
+            String picUrl = resolvedPicUrls.get(item.getSku());
+            if (StringUtils.hasText(picUrl)) {
+                item.setPicUrl(picUrl);
+                filledItems.add(item);
+            }
         }
+        persistResolvedItemImages(contract, filledItems);
+        log.info("合同详情明细图片补齐完成：contractNo={}, 缺图={}, 补齐={}, 领星查询={}",
+                contract.getContractNo(), missing.size(), filledItems.size(), needRemote.size());
+    }
+
+    /**
+     * 把补齐的图片回写 contract_item（只更新 pic_url 一列），失败不影响详情返回。
+     */
+    private void persistResolvedItemImages(Contract contract, List<ContractItem> resolved) {
+        if (resolved.isEmpty()) {
+            return;
+        }
+        int persisted = 0;
+        for (ContractItem item : resolved) {
+            if (item.getId() == null) {
+                continue;
+            }
+            try {
+                contractRepository.updateItemPicUrl(item.getId(), item.getPicUrl());
+                persisted++;
+            } catch (Exception e) {
+                log.warn("合同明细图片落库失败（不影响详情展示）：contractNo={}, itemId={}",
+                        contract.getContractNo(), item.getId(), e);
+            }
+        }
+        log.info("合同详情明细图片落库：contractNo={}, 补齐={}, 落库={}",
+                contract.getContractNo(), resolved.size(), persisted);
     }
 
     /**
@@ -145,7 +218,8 @@ public class ContractQueryService {
         log.info("下载合同文件：contractId={}, type={}", contractId, type);
 
         Contract contract = contractRepository.findById(contractId)
-                .orElseThrow(() -> new RuntimeException("合同不存在：contractId=" + contractId));
+                .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
+                        "合同不存在：contractId=" + contractId));
 
         // 仅创建状态允许编辑，因此只对创建状态按当前数据库数据即时生成。
         // 签署中及之后直接读取已保存文件，避免下载时重复模板填充、PDF 转换及存储上传。
@@ -160,7 +234,9 @@ public class ContractQueryService {
             }
             String fileUrl = getOriginalPdfUrl(contract);
             if (!StringUtils.hasText(fileUrl)) {
-                throw new RuntimeException("合同文件不存在，无法下载：contractId=" + contractId);
+                // 合同本身存在、但未保存过合同文件：属于「文件资源不存在」，给 404 而不是系统异常
+                throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
+                        "合同文件不存在，无法下载：contractNo=" + contract.getContractNo());
             }
             byte[] fileBytes = contractFileStore.download(fileUrl);
             log.info("下载非创建状态合同，直接使用已保存文件：contractNo={}, status={}, fileUrl={}",
@@ -171,7 +247,8 @@ public class ContractQueryService {
         String fileUrl = getSignedPdfUrl(contract);
 
         if (fileUrl == null || fileUrl.isEmpty()) {
-            throw new RuntimeException("合同文件不存在：type=" + type);
+            throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
+                    "合同文件不存在，无法下载：contractNo=" + contract.getContractNo() + ", type=" + type);
         }
 
         // 从 S3 下载文件
@@ -234,7 +311,8 @@ public class ContractQueryService {
     /** 获取法大大已签署合同的短期下载地址；该 URL 不落库。 */
     public String getFadadaSignedDownloadUrl(Long contractId) {
         Contract contract = contractRepository.findById(contractId)
-                .orElseThrow(() -> new RuntimeException("合同不存在：contractId=" + contractId));
+                .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
+                        "合同不存在：contractId=" + contractId));
         if (!usesFadadaDocument(contract.getStatus())) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "创建状态合同应下载未盖章原合同");
         }
@@ -245,16 +323,24 @@ public class ContractQueryService {
         if (contract.getFadadaTaskId() == null || contract.getFadadaTaskId().isBlank()) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "合同未关联法大大签署任务");
         }
-        String ownerOpenCorpId = fadadaOpenApiProperties.getOpenCorpId();
-        if (ownerOpenCorpId == null || ownerOpenCorpId.isBlank()) {
-            throw new BusinessException(ResultCode.SYSTEM_ERROR, "法大大发起企业 openCorpId 未配置");
-        }
+        // 归属方必须与签署任务实际发起的企业一致：法大大按「应用 + openId」校验任务归属，
+        // 用当前配置的企业去查另一个企业签出的任务，会分别报 210032（企业用户不存在，
+        // 该企业在当前应用下没有）与 211150（发起方或者参与方不匹配）。
+        // 历史数据里需方公司存在多个 openCorpId，所以这里取合同自己需方公司的 openCorpId；
+        // 该企业所属应用的凭据由客户端按 fadada.open-api.apps 自动选用（见 FadadaOpenApiClient）。
+        String ownerOpenCorpId = resolveFadadaOwnerOpenCorpId(contract);
         boolean signing = contract.getStatus() == ContractStatus.SIGNING;
-        String downloadUrl = fadadaOpenApiClient.getSignTaskDownloadUrl(
-                new FadadaOpenApiClient.DownloadUrlRequest("corp", ownerOpenCorpId, contract.getFadadaTaskId(),
-                        // 法大大下载接口会根据文档类型补上 .pdf，customName 只传不带扩展名的名称。
-                        contract.getContractNo() + (signing ? "-签署中合同" : "-已签署合同"),
-                        false, "download"));
+        // 法大大下载接口会根据文档类型补上 .pdf，customName 只传不带扩展名的名称。
+        String customName = contract.getContractNo() + (signing ? "-签署中合同" : "-已签署合同");
+        String downloadUrl;
+        try {
+            downloadUrl = fadadaOpenApiClient.getSignTaskDownloadUrl(
+                    new FadadaOpenApiClient.DownloadUrlRequest("corp", ownerOpenCorpId,
+                            contract.getFadadaTaskId(), customName, false, "download"));
+        } catch (BusinessException exception) {
+            throw new BusinessException(ResultCode.FADADA_API_ERROR,
+                    exception.getMessage() + describeOwnerMismatch(contract, ownerOpenCorpId));
+        }
         log.info("已获取法大大合同下载地址：contractId={}, contractNo={}, status={}, signTaskId={}, documentStage={}",
                 contract.getId(), contract.getContractNo(), contract.getStatus(), contract.getFadadaTaskId(),
                 signing ? "我方已盖章、供方待签" : "双方已盖章");
@@ -265,6 +351,60 @@ public class ContractQueryService {
         return status == ContractStatus.SIGNING
                 || status == ContractStatus.EXECUTING
                 || status == ContractStatus.COMPLETED;
+    }
+
+    /**
+     * 解析签署任务的归属企业：取合同关联需方公司的 openCorpId。
+     *
+     * <p>需方公司未做企业授权时无法定位归属方，这里直接给出可操作的业务提示，
+     * 避免把法大大底层的 210032 / 211150 抛给用户。</p>
+     */
+    private String resolveFadadaOwnerOpenCorpId(Contract contract) {
+        BuyerCompany buyer = buyerCompanyRepository.findById(contract.getBuyerCompanyId())
+                .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
+                        "合同关联的需方公司不存在，无法下载法大大签署文件"));
+        if (!StringUtils.hasText(buyer.getOpenCorpId())) {
+            throw new BusinessException(ResultCode.PARAM_ERROR,
+                    "需方公司「" + buyer.getCompanyName() + "」未配置法大大企业标识，无法下载签署文件，请先完成企业授权");
+        }
+        return buyer.getOpenCorpId();
+    }
+
+    /**
+     * 需方企业未登记任何应用凭据时补充可操作提示。
+     *
+     * <p>法大大的企业挂在应用（appId）之下，客户端遇到「应用不匹配」错误码时会自动换用
+     * {@code fadada.open-api.apps} 中登记的其他应用重试。因此只有该企业完全没登记时
+     * 才会走到这里，此时必须补配置或重新授权。</p>
+     */
+    private String describeOwnerMismatch(Contract contract, String ownerOpenCorpId) {
+        String configuredOpenCorpId = fadadaOpenApiProperties.getOpenCorpId();
+        boolean isConfiguredPrimary = StringUtils.hasText(configuredOpenCorpId)
+                && configuredOpenCorpId.equals(ownerOpenCorpId);
+        if (isConfiguredPrimary || isRegisteredInApps(ownerOpenCorpId)) {
+            return "";
+        }
+        log.warn("法大大任务归属企业未登记任何应用凭据，下载会失败：contractNo={}, signTaskId={}, buyerOpenCorpId={}, appId={}",
+                contract.getContractNo(), contract.getFadadaTaskId(), maskId(ownerOpenCorpId),
+                fadadaOpenApiProperties.getAppId());
+        return "；该合同需方公司使用的法大大企业（openCorpId=" + maskId(ownerOpenCorpId)
+                + "）未登记任何应用凭据，请在 fadada.open-api.apps 中补充该企业所属应用的 appId/appSecret，"
+                + "或把需方公司重新授权到当前应用（appId=" + fadadaOpenApiProperties.getAppId() + "）";
+    }
+
+    private boolean isRegisteredInApps(String openCorpId) {
+        if (!StringUtils.hasText(openCorpId) || fadadaOpenApiProperties.getApps() == null) {
+            return false;
+        }
+        return fadadaOpenApiProperties.getApps().stream()
+                .anyMatch(app -> app != null && openCorpId.equals(app.getOpenCorpId()));
+    }
+
+    private String maskId(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "<empty>";
+        }
+        return value.length() <= 4 ? "****" : "****" + value.substring(value.length() - 4);
     }
 
     private byte[] downloadFadadaDocument(Contract contract) throws IOException {

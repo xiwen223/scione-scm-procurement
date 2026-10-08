@@ -80,6 +80,24 @@ public class ContractController {
         }
     }
 
+    /**
+     * 手动创建弹窗的领星预填。用户填完采购单号后调用，把领星侧的供方档案、结算约定、
+     * 默认收款账户和交货日期回填到表单，避免手工录入十余个字段。
+     */
+    @GetMapping("/manual/po-prefill")
+    @Operation(summary = "查询手动创建领星预填数据")
+    public ApiResponse<ContractAutoCreateService.ManualPoPrefill> loadManualPoPrefill(
+            @RequestParam("purchaseOrderNo") String purchaseOrderNo) {
+        try {
+            return ApiResponse.success(contractAutoCreateService.loadManualPoPrefill(purchaseOrderNo));
+        } catch (BusinessException ex) {
+            return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
+        } catch (RuntimeException ex) {
+            log.error("手动创建领星预填失败：purchaseOrderNo={}", purchaseOrderNo, ex);
+            return ApiResponse.fail(ResultCode.SYSTEM_ERROR.getCode(), ResultCode.SYSTEM_ERROR.getMessage());
+        }
+    }
+
     @PostMapping("/create")
     @Operation(summary = "手动创建合同",
             description = "指定采购单号创建合同，用于测试或补建合同；可选 progressKey 用于配合 /create/progress 展示创建步骤")
@@ -195,6 +213,15 @@ public class ContractController {
                     contractUpdateService.updateContract(contractId, request, userEmail);
             return ApiResponse.success(response);
 
+        } catch (com.scione.scm.bill.common.BusinessException ex) {
+            // 业务校验（编号占用、类型非法、状态不允许等）要把原因原样返回给用户
+            log.warn("修改合同校验未通过：contractId={}, reason={}", contractId, ex.getMessage());
+            return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
+
+        } catch (IllegalArgumentException | IllegalStateException ex) {
+            log.warn("修改合同参数非法：contractId={}, reason={}", contractId, ex.getMessage());
+            return ApiResponse.fail(ResultCode.PARAM_ERROR.getCode(), ex.getMessage());
+
         } catch (RuntimeException ex) {
             log.error("修改合同发生未处理异常：contractId={}", contractId, ex);
             return ApiResponse.fail(ResultCode.SYSTEM_ERROR.getCode(), ResultCode.SYSTEM_ERROR.getMessage());
@@ -210,8 +237,14 @@ public class ContractController {
             @RequestHeader("X-User-Email") String userEmail) {
         try {
             return ApiResponse.success(contractUpdateService.updateContractItem(contractId, itemId, request, userEmail));
+        } catch (BusinessException ex) {
+            // 业务校验（合同/明细不存在、状态不允许修改等）把原因原样返回给用户
+            log.warn("修改合同明细校验未通过：contractId={}, itemId={}, reason={}", contractId, itemId, ex.getMessage());
+            return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
+        } catch (IllegalArgumentException | IllegalStateException ex) {
+            log.warn("修改合同明细参数非法：contractId={}, itemId={}, reason={}", contractId, itemId, ex.getMessage());
+            return ApiResponse.fail(ResultCode.PARAM_ERROR.getCode(), ex.getMessage());
         } catch (RuntimeException ex) {
-            log.error("修改合同明细失败：contractId={}, itemId={}", contractId, itemId, ex);
             log.error("修改合同明细发生未处理异常：contractId={}, itemId={}", contractId, itemId, ex);
             return ApiResponse.fail(ResultCode.SYSTEM_ERROR.getCode(), ResultCode.SYSTEM_ERROR.getMessage());
         }
@@ -271,6 +304,17 @@ public class ContractController {
     public ApiResponse<ContractSignAppService.SignTaskStatusResult> getSignTaskStatus(@PathVariable Long contractId) {
         try {
             return ApiResponse.success(contractSignAppService.getSignTaskStatus(contractId));
+        } catch (BusinessException ex) {
+            return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
+        }
+    }
+
+    @GetMapping("/{contractId}/abolish-task-status")
+    @Operation(summary = "查询法大大解除协议任务状态", description = "查询履行中合同作废流程的解除协议任务及参与方状态")
+    public ApiResponse<ContractSignAppService.SignTaskStatusResult> getAbolishTaskStatus(
+            @PathVariable Long contractId) {
+        try {
+            return ApiResponse.success(contractSignAppService.getAbolishTaskStatus(contractId));
         } catch (BusinessException ex) {
             return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
         }

@@ -13,6 +13,18 @@ import java.util.List;
 @Schema(description = "合同修改请求")
 public class ContractUpdateRequest {
 
+    @Schema(description = "合同编号；修改后会同步更新明细与操作日志中的冗余编号", example = "HT202609301234")
+    private String contractNo;
+
+    @Schema(description = "合同名称", example = "采购合同-供应商-PO单号")
+    private String contractName;
+
+    @Schema(description = "合同类型：1-采购合同 2-购销合同 3-框架合同 4-人事合同；切换类型时会同时切换到该类型的默认模板", example = "1")
+    private Integer contractType;
+
+    @Schema(description = "需方公司ID；选择公司后，名称、地址、信用代码等信息由公司档案带入", example = "27")
+    private Long buyerCompanyId;
+
     // ========== 供方信息 ==========
 
     @Schema(description = "供方名称", example = "浙江XXX供应商有限公司")

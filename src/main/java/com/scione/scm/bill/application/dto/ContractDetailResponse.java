@@ -63,6 +63,12 @@ public class ContractDetailResponse {
     private Integer status;
     private String statusText;
 
+    // 作废信息（选填的原因 + 作废时间），详情页在状态为「取消」时展示
+    private String cancelReason;
+
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private LocalDateTime cancelTime;
+
     // 签署信息
     private String fadadaTaskId;
 
@@ -128,6 +134,8 @@ public class ContractDetailResponse {
 
         dto.setStatus(contract.getStatus().getCode());
         dto.setStatusText(contract.getStatus().getDesc());
+        dto.setCancelReason(contract.getCancelReason());
+        dto.setCancelTime(contract.getCancelTime());
 
         // 签署信息
         dto.setFadadaTaskId(contract.getFadadaTaskId());

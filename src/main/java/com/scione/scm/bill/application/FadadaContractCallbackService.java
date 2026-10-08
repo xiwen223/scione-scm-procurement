@@ -35,25 +35,23 @@ public class FadadaContractCallbackService {
         if (!signer.sign(params, timestamp, properties.getAppSecret()).equalsIgnoreCase(signature)) throw new IllegalArgumentException("法大大回调验签失败");
         JsonNode body = businessNode(objectMapper.readTree(bizContent));
         String contractNo = contractNo(body);
-        if (contractNo.isBlank()) {
+        Contract contract = findContract(body, contractNo);
+        if (contract == null) {
             log.warn("法大大合同回调无法关联合同：event={}, transReferenceIdPresent={}, businessNoPresent={}",
                     event, body.hasNonNull("transReferenceId"), body.hasNonNull("businessNo"));
             return;
         }
-        Contract contract = contractRepository.findByContractNo(contractNo).orElse(null);
-        if (contract == null) {
-            log.warn("法大大合同回调未找到对应合同：event={}, contractNo={}", event, contractNo);
-            return;
-        }
+        contractNo = contract.getContractNo();
         log.info("法大大合同回调已关联合同：event={}, contractId={}, contractNo={}, currentStatus={}",
                 event, contract.getId(), contractNo, contract.getStatus());
         String details = "法大大事件=" + event + "；任务ID=" + body.path("signTaskId").asText()
                 + "；事件时间=" + body.path("eventTime").asText();
         String reason = firstText(body, "signFailedReason", "signRejectReason", "terminationNote", "reason");
         if (!reason.isBlank()) details += "；原因=" + reason;
-        if ("sign-task-finished".equals(event) && contract.getStatus() == ContractStatus.SIGNING) {
+        if (isSignTaskFinished(event, body) && contract.getStatus() == ContractStatus.SIGNING) {
             contractRepository.markExecuting(contract.getId());
-            log.info("法大大签署完成，合同已更新为履行中：contractId={}, contractNo={}", contract.getId(), contractNo);
+            log.info("法大大签署完成，合同已更新为履行中：contractId={}, contractNo={}, event={}, taskStatus={}",
+                    contract.getId(), contractNo, event, body.path("signTaskStatus").asText());
             details += "；合同状态：签署中 → 履行中";
         }
         if ("sign-task-abolish".equals(event) && contract.getStatus() == ContractStatus.EXECUTING) {
@@ -74,24 +72,23 @@ public class FadadaContractCallbackService {
         headers.put("X-FASC-Event", event);
         JsonNode body = businessNode(objectMapper.readTree(bizContent));
         String contractNo = contractNo(body);
-        if (contractNo.isBlank()) {
+        Contract contract = findContract(body, contractNo);
+        if (contract == null) {
             log.warn("法大大合同回调无法关联合同：event={}, transReferenceIdPresent={}, businessNoPresent={}",
                     event, body.hasNonNull("transReferenceId"), body.hasNonNull("businessNo"));
             return;
         }
-        Contract contract = contractRepository.findByContractNo(contractNo).orElse(null);
-        if (contract == null) {
-            log.warn("法大大合同回调未找到对应合同：event={}, contractNo={}", event, contractNo);
-            return;
-        }
+        contractNo = contract.getContractNo();
         log.info("法大大合同回调已关联合同：event={}, contractId={}, contractNo={}, currentStatus={}",
                 event, contract.getId(), contractNo, contract.getStatus());
         String details = "法大大事件=" + event + "；任务ID=" + body.path("signTaskId").asText()
                 + "；事件时间=" + body.path("eventTime").asText();
         String reason = firstText(body, "signFailedReason", "signRejectReason", "terminationNote", "reason");
         if (!reason.isBlank()) details += "；原因=" + reason;
-        if ("sign-task-finished".equals(event) && contract.getStatus() == ContractStatus.SIGNING) {
+        if (isSignTaskFinished(event, body) && contract.getStatus() == ContractStatus.SIGNING) {
             contractRepository.markExecuting(contract.getId());
+            log.info("法大大签署完成，合同已更新为履行中：contractId={}, contractNo={}, event={}, taskStatus={}",
+                    contract.getId(), contractNo, event, body.path("signTaskStatus").asText());
             details += "；合同状态：签署中 → 履行中";
         }
         if ("sign-task-abolish".equals(event) && contract.getStatus() == ContractStatus.EXECUTING) {
@@ -111,6 +108,16 @@ public class FadadaContractCallbackService {
         return "";
     }
 
+    /**
+     * 部分法大大任务只推送最后一方的 sign-task-signed，且该事件已经携带 task_finished；
+     * 不能只依赖可能未单独推送的 sign-task-finished 事件。
+     */
+    private boolean isSignTaskFinished(String event, JsonNode body) {
+        return "sign-task-finished".equals(event)
+                || ("sign-task-signed".equals(event)
+                && "task_finished".equals(body.path("signTaskStatus").asText()));
+    }
+
     private static JsonNode businessNode(JsonNode body) {
         return body.hasNonNull("data") && body.path("data").isObject() ? body.path("data") : body;
     }
@@ -118,5 +125,20 @@ public class FadadaContractCallbackService {
     private static String contractNo(JsonNode body) {
         String transReferenceId = body.path("transReferenceId").asText();
         return transReferenceId.isBlank() ? body.path("businessNo").asText() : transReferenceId;
+    }
+
+    private Contract findContract(JsonNode body, String contractNo) {
+        if (contractNo != null && !contractNo.isBlank()) {
+            Contract byContractNo = contractRepository.findByContractNo(contractNo).orElse(null);
+            if (byContractNo != null) return byContractNo;
+        }
+        for (String field : new String[]{"signTaskId", "abolishedSignTaskId", "originalSignTaskId",
+                "transReferenceId", "businessNo"}) {
+            String taskId = body.path(field).asText();
+            if (taskId == null || taskId.isBlank()) continue;
+            Contract byTaskId = contractRepository.findByFadadaTaskId(taskId).orElse(null);
+            if (byTaskId != null) return byTaskId;
+        }
+        return null;
     }
 }

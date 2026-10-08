@@ -23,6 +23,7 @@ import org.apache.poi.xssf.usermodel.XSSFFont;
 import org.apache.poi.xssf.usermodel.XSSFRichTextString;
 import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTBooleanProperty;
 
 import java.math.BigDecimal;
 import java.time.format.DateTimeFormatter;
@@ -53,6 +54,12 @@ final class ContractPlaceholderRenderer {
             "items.productName", "items.specification", "items.quantity", "items.unit", "items.unitPrice",
             "items.unitPriceWithoutTax", "items.amount", "items.casesNum", "items.quantityPerCase");
     private static final Set<String> ACCOUNT_KEYS = Set.of("supplierAccountName", "supplierBankAccount", "supplierBankName");
+
+    /**
+     * 填充进来的值统一不加粗，去掉加粗后的字体按「模板原字体」缓存复用，
+     * 避免明细多时每个单元格都新建一个字体。渲染器每次填充都是新实例，缓存与单个工作簿同生命周期。
+     */
+    private final Map<XSSFFont, XSSFFont> plainFonts = new HashMap<>();
 
     static boolean hasPlaceholders(Workbook workbook) {
         for (Sheet sheet : workbook) {
@@ -111,7 +118,7 @@ final class ContractPlaceholderRenderer {
                         cell.setBlank();
                         if (item != null) imageWriter.accept(cell, item);
                     } else {
-                        replace(cell, rowValues);
+                        replace(cell, rowValues, styles);
                         styleAndFit(cell, original, styles);
                     }
                 }
@@ -256,17 +263,20 @@ final class ContractPlaceholderRenderer {
         }
     }
 
-    private void replace(Cell cell, Map<String, Object> values) {
+    private void replace(Cell cell, Map<String, Object> values, Map<String, CellStyle> styles) {
         String text = cell.getStringCellValue();
         Matcher matcher = TOKEN.matcher(text);
         if (matcher.matches()) {
             Object value = values.get(matcher.group(1));
             if (value instanceof Number number) {
                 cell.setCellValue(number.doubleValue());
+                // 数字占位符整格取值，字体只能由单元格样式决定：换成去粗体的样式副本，
+                // 否则模板里加粗的单元格会让金额、数量这类填充值也带粗体。
+                cell.setCellStyle(plainStyle(cell, styles));
                 return;
             }
         }
-        // 按原富文本片段替换，保留条款中红字/加粗等局部格式，而非整格降级为普通文本。
+        // 按原富文本片段替换，保留条款中红字等局部格式，而非整格降级为普通文本。
         XSSFRichTextString source = (XSSFRichTextString) cell.getRichStringCellValue();
         StringBuilder result = new StringBuilder();
         List<StyledSpan> spans = new ArrayList<>();
@@ -279,7 +289,8 @@ final class ContractPlaceholderRenderer {
             String replacement = value == null ? "" : value instanceof BigDecimal decimal ? decimal.toPlainString() : value.toString();
             int start = result.length();
             result.append(replacement);
-            spans.add(new StyledSpan(start, result.length(), fontAt(source, matcher.start())));
+            // 占位符原文的字体只用来定字号与颜色，加粗一律去掉：模板对占位符常见的加粗会原样带到填充值上。
+            spans.add(new StyledSpan(start, result.length(), plainFont(cell, fontAt(source, matcher.start()))));
             offset = matcher.end();
         }
         appendSource(source, offset, text.length(), result, spans);
@@ -307,6 +318,40 @@ final class ContractPlaceholderRenderer {
             font = source.getFontOfFormattingRun(i);
         }
         return font;
+    }
+
+    /** 占位符没有独立富文本片段时，字号与颜色由单元格样式字体决定。 */
+    private XSSFFont cellStyleFont(Cell cell) {
+        return ((XSSFWorkbook) cell.getSheet().getWorkbook()).getFontAt(cell.getCellStyle().getFontIndex());
+    }
+
+    /**
+     * 填充值一律不加粗：完整复制模板原字体的名称、字号、颜色、斜体、下划线等属性，只清掉加粗。
+     * 原字体本来就不粗（或取不到）时原样返回，顺带避免产生多余的字体对象。
+     */
+    private XSSFFont plainFont(Cell cell, XSSFFont source) {
+        XSSFFont base = source != null ? source : cellStyleFont(cell);
+        if (base == null || !base.getBold()) return base;
+        return plainFonts.computeIfAbsent(base, bold -> {
+            XSSFFont font = ((XSSFWorkbook) cell.getSheet().getWorkbook()).createFont();
+            // CTFont 中加粗是 <b/> 元素：整体复制后清空该元素即取消加粗，其余属性保持模板原样。
+            font.getCTFont().set(bold.getCTFont());
+            font.getCTFont().setBArray(new CTBooleanProperty[0]);
+            return font;
+        });
+    }
+
+    /** 数字占位符是整格取值，字体只能由单元格样式决定，这里换成去粗体的样式副本，与文本填充保持一致。 */
+    private CellStyle plainStyle(Cell cell, Map<String, CellStyle> styles) {
+        CellStyle current = cell.getCellStyle();
+        XSSFFont styleFont = cellStyleFont(cell);
+        if (styleFont == null || !styleFont.getBold()) return current;
+        return styles.computeIfAbsent("plain:" + current.getIndex(), ignored -> {
+            CellStyle copy = cell.getSheet().getWorkbook().createCellStyle();
+            copy.cloneStyleFrom(current);
+            copy.setFont(plainFont(cell, styleFont));
+            return copy;
+        });
     }
 
     private void styleAndFit(Cell cell, String original, Map<String, CellStyle> styles) {

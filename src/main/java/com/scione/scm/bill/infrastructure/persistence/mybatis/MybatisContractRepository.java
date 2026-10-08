@@ -17,8 +17,13 @@ import org.springframework.stereotype.Repository;
 import com.scione.scm.bill.domain.contract.ContractPage;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * 基于 MyBatis 的合同仓储适配器。
@@ -82,6 +87,19 @@ public class MybatisContractRepository implements ContractRepository {
     }
 
     @Override
+    public boolean existsContractNo(String contractNo, long excludeContractId) {
+        return contractMapper.countByContractNoExcludingId(contractNo, excludeContractId) > 0;
+    }
+
+    @Override
+    public void updateContractNoReferences(long contractId, String contractNo) {
+        int itemRows = itemMapper.updateContractNoByContractId(contractId, contractNo);
+        int logRows = logMapper.updateDataNameByContractId(contractId, contractNo);
+        log.info("合同编号引用已同步：contractId={}, newContractNo={}, contractItemRows={}, operationLogRows={}",
+                contractId, contractNo, itemRows, logRows);
+    }
+
+    @Override
     public Optional<Contract> findByContractNo(String contractNo) {
         ContractPO po = contractMapper.findByContractNo(contractNo);
         if (po == null) {
@@ -103,8 +121,24 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
                 po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
+                po.getCancelReason(), po.getCancelTime(),
                 items
         ));
+    }
+
+    @Override
+    public Optional<Contract> findByFadadaTaskId(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return Optional.empty();
+        }
+        String contractNo = contractMapper.findContractNoByFadadaTaskId(taskId);
+        return contractNo == null ? Optional.empty() : findByContractNo(contractNo);
+    }
+
+    @Override
+    public Optional<String> findFadadaAbolishedTaskId(long contractId) {
+        return Optional.ofNullable(contractMapper.findFadadaAbolishedTaskId(contractId))
+                .filter(taskId -> !taskId.isBlank());
     }
 
     @Override
@@ -323,6 +357,7 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
                 po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
+                po.getCancelReason(), po.getCancelTime(),
                 items
         ));
     }
@@ -334,6 +369,40 @@ public class MybatisContractRepository implements ContractRepository {
         }
         return Optional.ofNullable(itemMapper.selectLatestPicUrlBySku(sku))
                 .filter(value -> !value.isBlank());
+    }
+
+    @Override
+    public void updateItemPicUrl(long itemId, String picUrl) {
+        if (picUrl == null || picUrl.isBlank()) {
+            return;
+        }
+        int updated = itemMapper.updatePicUrl(itemId, picUrl);
+        if (updated > 0) {
+            log.info("合同明细图片已落库：itemId={}", itemId);
+        } else {
+            log.debug("合同明细已有图片或明细不存在，跳过落库：itemId={}", itemId);
+        }
+    }
+
+    @Override
+    public Map<String, String> findLatestItemPicUrlsBySkus(Collection<String> skus) {
+        if (skus == null || skus.isEmpty()) {
+            return Map.of();
+        }
+        List<String> normalized = skus.stream()
+                .filter(sku -> sku != null && !sku.isBlank())
+                .distinct()
+                .toList();
+        if (normalized.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> picUrlsBySku = new LinkedHashMap<>();
+        for (ContractItemPO row : itemMapper.selectLatestPicUrlsBySkus(normalized)) {
+            if (row.getSku() != null && row.getPicUrl() != null && !row.getPicUrl().isBlank()) {
+                picUrlsBySku.putIfAbsent(row.getSku(), row.getPicUrl());
+            }
+        }
+        return picUrlsBySku;
     }
 
     /**
@@ -354,6 +423,7 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
                 po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
+                po.getCancelReason(), po.getCancelTime(),
                 null  // items=null
         );
     }
@@ -379,8 +449,8 @@ public class MybatisContractRepository implements ContractRepository {
     }
 
     @Override
-    public void markFadadaAbolishPending(long contractId, String abolishedTaskId) {
-        if (contractMapper.markFadadaAbolishPending(contractId, abolishedTaskId) != 1) {
+    public void markFadadaAbolishPending(long contractId, String abolishedTaskId, String cancelReason) {
+        if (contractMapper.markFadadaAbolishPending(contractId, abolishedTaskId, cancelReason) != 1) {
             throw new IllegalStateException("合同状态已变更，无法保存法大大解除协议任务");
         }
     }
@@ -414,5 +484,17 @@ public class MybatisContractRepository implements ContractRepository {
         logMapper.insert(toLogPO(operationLog));
         log.info("操作日志保存成功：contractId={}, operationType={}",
                 operationLog.getContractId(), operationLog.getOperationType());
+    }
+
+    @Override
+    public Map<Long, LocalDateTime> findLatestUrgeTimes(Collection<Long> contractIds) {
+        if (contractIds == null || contractIds.isEmpty()) {
+            return Map.of();
+        }
+        // 一次聚合查询覆盖整页合同（催办次数很少，结果集最多 = 页大小），比在列表 SQL 里做逐行子查询更省。
+        return logMapper.selectLatestUrgeTimes(contractIds).stream()
+                .filter(row -> row.getDataId() != null && row.getCreateTime() != null)
+                .collect(Collectors.toMap(ProcurementOperationLogPO::getDataId,
+                        ProcurementOperationLogPO::getCreateTime, (left, right) -> left));
     }
 }

@@ -38,6 +38,11 @@ public enum ResultCode {
      * 前端按该业务码弹出阻断提示弹窗，而不是只给一条容易忽略的轻提示。
      */
     CONTRACT_SIGN_FREE_SIGN_NOT_CONFIGURED(1013005, "我司未配置免验证签场景码，无法发起签署"),
+    /**
+     * 合同当前状态不允许该操作（如签署中/履行中不允许修改）。
+     * 与 PARAM_ERROR 区分开：调用方参数本身没错，是合同状态与本次操作冲突。
+     */
+    CONTRACT_STATUS_NOT_ALLOWED(1013006, "合同当前状态不允许该操作"),
     STORAGE_API_ERROR(1014001, "文件存储服务调用失败"),
     PROCUREMENT_OPERATION_LOG_BUSINESS_TYPE_INVALID(1015001, "供应链操作日志业务类型无效"),
     CONTRACT_TEMPLATE_FILL_FAILED(1013001, "合同模板填充失败"),

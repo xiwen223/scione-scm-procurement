@@ -23,11 +23,16 @@ public class ContractListQueryRequest {
     /** 合同状态：1-创建 2-签署中 3-履行中 4-完成 5-取消 */
     private Integer status;
 
-    /** 合同日期开始 */
+    /**
+     * 签署时间开始：按我方（需方）签署时间过滤，即 contract.sign_start_time（发起签署并自动盖章的时间）。
+     * 未签署的合同不落在任何签署时间区间内。
+     */
     @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
     private LocalDate startDate;
 
-    /** 合同日期结束 */
+    /**
+     * 签署时间结束：含当天（SQL 里按次日 0 点前比较）。同上，按 sign_start_time 过滤。
+     */
     @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
     private LocalDate endDate;
 

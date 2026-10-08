@@ -39,4 +39,13 @@ public final class PurchasePriceCalculator {
         return unitPrice == null || quantity == null ? null
                 : unitPrice.multiply(BigDecimal.valueOf(quantity)).setScale(2, RoundingMode.HALF_UP);
     }
+
+    /**
+     * 合同明细的数量口径：优先用领星「实际采购量」(quantity_real)，为空时退回「计划采购量」(quantity_plan)。
+     * 建合同时 (Contract#toItem) 用的是实际情况，领星尚未回填实际采购量时不能算作「领星无值」，
+     * 否则比对会生成一条领星侧为空、同步后把合同数量/金额清空的假差异。签署前复核与字段同步共用此规则。
+     */
+    public static Integer effectiveQuantity(Integer quantityReal, Integer quantityPlan) {
+        return quantityReal != null ? quantityReal : quantityPlan;
+    }
 }

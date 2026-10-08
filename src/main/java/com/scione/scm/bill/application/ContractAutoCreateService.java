@@ -15,7 +15,10 @@ import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractItem;
 import com.scione.scm.bill.domain.contract.ContractOperationLog;
 import com.scione.scm.bill.domain.contract.ContractRepository;
+import com.scione.scm.bill.domain.contract.PurchasePriceCalculator;
+import com.scione.scm.bill.domain.contract.RatioText;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
+import com.scione.scm.bill.domain.posync.PoSyncRecordItem;
 import com.scione.scm.bill.domain.posync.PoSyncRepository;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
@@ -25,9 +28,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
@@ -72,6 +77,137 @@ public class ContractAutoCreateService {
     }
 
     public record ManualPoStatus(Integer status, String statusText, boolean pendingOrder) {
+    }
+
+    /**
+     * 手动创建弹窗的领星预填。用户在弹窗里填完采购单号后立即调用：
+     * 从领星供应商档案带出供方地址、统一社会信用代码、预付款比例、结算方式，
+     * 以及默认收款账户的收款人 / 银行账号 / 开户行，再带上交货日期与合同金额。
+     * 只读查询 + 按需补齐本地 PO 缓存，不创建合同、不写操作日志。
+     */
+    public ManualPoPrefill loadManualPoPrefill(String purchaseOrderNo) {
+        if (!StringUtils.hasText(purchaseOrderNo)) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "采购单号不能为空");
+        }
+        String orderNo = purchaseOrderNo.trim();
+        PoSyncRecord po = loadManualPo(orderNo);
+        LingxingSupplierClient.SupplierProfile profile = loadSupplierProfile(po.getSupplierId());
+
+        String supplierAddress = profile == null ? null : profile.address();
+        String supplierCreditCode = profile == null ? null : profile.creditCode();
+        // 预付款比例按统一口径（两位小数）回填，前端输入框里看到的就是最终入库的样子。
+        String prepayPercent = profile == null ? null : RatioText.of(profile.prepayPercent());
+        String settlementMethod = profile == null ? null : profile.settlementMethod();
+        LingxingSupplierClient.SupplierPaymentAccount account = profile == null
+                ? null : profile.defaultPaymentAccount().orElse(null);
+
+        LocalDate deliveryDate = po.getItems() == null ? null : po.getItems().stream()
+                .filter(item -> item.getExpectArriveTime() != null)
+                .map(PoSyncRecordItem::getExpectArriveTime)
+                .min(LocalDate::compareTo)
+                .orElse(null);
+        BigDecimal contractAmount = originalAmountOf(po);
+
+        // 领星没维护的字段要在前端明确提示，否则用户会以为是系统没带出来。
+        List<String> missing = new ArrayList<>();
+        if (!StringUtils.hasText(po.getSupplierName())) missing.add("供方名称");
+        if (!StringUtils.hasText(po.getSupplierPhone())) missing.add("供方电话");
+        if (!StringUtils.hasText(po.getContactPerson())) missing.add("供方联系人");
+        if (!StringUtils.hasText(supplierAddress)) missing.add("供方地址");
+        if (!StringUtils.hasText(supplierCreditCode)) missing.add("统一社会信用代码");
+        if (!StringUtils.hasText(prepayPercent)) missing.add("预付款比例");
+        if (!StringUtils.hasText(settlementMethod)) missing.add("结算方式");
+        if (!StringUtils.hasText(account == null ? null : account.accountName())) missing.add("收款人");
+        if (!StringUtils.hasText(account == null ? null : account.accountId())) missing.add("银行账号");
+        if (!StringUtils.hasText(account == null ? null : account.bankName())) missing.add("开户行");
+        if (deliveryDate == null) missing.add("交货日期");
+
+        log.info("手动创建领星预填完成：purchaseOrderNo={}, supplierId={}, 未带出字段={}",
+                orderNo, po.getSupplierId(), missing.isEmpty() ? "无" : String.join("、", missing));
+
+        return new ManualPoPrefill(
+                orderNo,
+                po.getSupplierName(),
+                po.getSupplierPhone(),
+                po.getContactPerson(),
+                supplierAddress,
+                supplierCreditCode,
+                prepayPercent,
+                settlementMethod,
+                account == null ? null : account.accountName(),
+                account == null ? null : account.accountId(),
+                account == null ? null : account.bankName(),
+                deliveryDate == null ? null : deliveryDate.toString(),
+                contractAmount,
+                List.copyOf(missing));
+    }
+
+    /** 预填用的 PO：本地缺失或价格口径过期时按单号从领星补同步，与手动创建走同一套兜底。 */
+    private PoSyncRecord loadManualPo(String orderNo) {
+        Optional<PoSyncRecord> local = poSyncRepository.findByPurchaseOrderNo(orderNo);
+        boolean stalePrice = local.isPresent() && needsPriceResync(local.get());
+        if (local.isPresent() && !stalePrice) {
+            return local.get();
+        }
+        if (stalePrice) {
+            log.info("本地采购单缺少不含税单价，预填前重新同步：purchaseOrderNo={}", orderNo);
+        }
+        LingxingPurchaseOrderClient.PurchaseOrderData order = lingxingPurchaseOrderClient.findByOrderNo(orderNo)
+                .orElseThrow(() -> new BusinessException(ResultCode.PARAM_ERROR,
+                        stalePrice ? "本地采购单价格口径尚未更新，且领星未查到该采购单：" + orderNo
+                                : "本地和领星均未找到采购单：" + orderNo));
+        poSyncRepository.save(PoSyncAppService.toRecord(order, LocalDateTime.now()));
+        return poSyncRepository.findByPurchaseOrderNo(orderNo)
+                .orElseThrow(() -> new BusinessException(ResultCode.SYSTEM_ERROR,
+                        "采购单补充同步后读取失败：" + orderNo));
+    }
+
+    /** 领星远端波动不该阻断预填：拿不到档案就让对应字段留空，由前端提示人工补。 */
+    private LingxingSupplierClient.SupplierProfile loadSupplierProfile(Long supplierId) {
+        if (supplierId == null) {
+            return null;
+        }
+        try {
+            return lingxingSupplierClient.findSupplierProfile(supplierId).orElse(null);
+        } catch (RuntimeException ex) {
+            log.warn("领星预填：查询供应商档案失败，供方扩展字段留空：supplierId={}", supplierId, ex);
+            return null;
+        }
+    }
+
+    private BigDecimal originalAmountOf(PoSyncRecord po) {
+        if (po.getItems() == null || po.getItems().isEmpty()) {
+            return null;
+        }
+        // 与建合同时的口径保持一致（数量取实际采购量，缺失退回计划采购量），
+        // 否则创建表单里提示的合同金额会和真正建出来的合同金额不一致。
+        BigDecimal total = po.getItems().stream()
+                .map(item -> PurchasePriceCalculator.lineAmount(item.getUnitPriceWithoutTax(),
+                        PurchasePriceCalculator.effectiveQuantity(item.getQuantityReal(), item.getQuantityPlan())))
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return total.signum() > 0 ? total : null;
+    }
+
+    /**
+     * 手动创建表单的领星预填结果。
+     * missingFields 列出领星侧没维护、需要人工补录的字段名，前端据此给出提示。
+     */
+    public record ManualPoPrefill(
+            String purchaseOrderNo,
+            String supplierName,
+            String supplierPhone,
+            String contactPerson,
+            String supplierAddress,
+            String supplierCreditCode,
+            String prepaymentRatio,
+            String paymentMethod,
+            String supplierAccountName,
+            String supplierBankAccount,
+            String supplierBankName,
+            String deliveryDate,
+            BigDecimal contractAmount,
+            List<String> missingFields) {
     }
 
     /**
@@ -389,7 +525,8 @@ public class ContractAutoCreateService {
 
     private void applyManualOverrides(Contract contract, ContractCreateRequest request) {
         if (request.getPrepaymentRatio() != null) {
-            contract.setPrepayPercent(request.getPrepaymentRatio().stripTrailingZeros().toPlainString());
+            // 统一保留两位小数入库：填 0 存 "0.00"，填 0.3 存 "0.30"。
+            contract.setPrepayPercent(RatioText.of(request.getPrepaymentRatio()));
         }
         if (StringUtils.hasText(request.getPaymentMethod())) {
             contract.setSettlementMethod(request.getPaymentMethod());
@@ -414,6 +551,10 @@ public class ContractAutoCreateService {
         if (StringUtils.hasText(request.getSupplierCreditCode())) {
             contract.setSupplierCreditCode(request.getSupplierCreditCode());
             log.info("手动填写供方统一社会信用代码：contractNo={}", contract.getContractNo());
+        }
+        if (StringUtils.hasText(request.getSupplierAccountName())) {
+            contract.setSupplierAccountName(request.getSupplierAccountName());
+            log.info("手动覆盖供方收款人：contractNo={}", contract.getContractNo());
         }
         if (StringUtils.hasText(request.getSupplierBankAccount())) {
             contract.setSupplierBankAccount(request.getSupplierBankAccount());
@@ -474,6 +615,8 @@ public class ContractAutoCreateService {
         if (!StringUtils.hasText(contract.getBuyerAddress())) missing.add("签订地点");
         if (!StringUtils.hasText(contract.getSupplierBankAccount())) missing.add("供方银行账户");
         if (!StringUtils.hasText(contract.getSupplierBankName())) missing.add("供方开户行");
+        // 收款人缺失时合同 PDF 会整段省略收款账户信息，因此与账号、开户行同为必填。
+        if (!StringUtils.hasText(contract.getSupplierAccountName())) missing.add("供方收款人");
         if (!StringUtils.hasText(contract.getPrepayPercent())) missing.add("预付款");
         if (!StringUtils.hasText(contract.getSettlementMethod())) missing.add("结算方式");
         if (contract.getDeliveryDate() == null) missing.add("交付日期");
@@ -634,7 +777,9 @@ public class ContractAutoCreateService {
             lingxingSupplierClient.findSupplierProfile(contract.getSupplierId()).ifPresent(profile -> {
                 if (StringUtils.hasText(profile.address())) contract.setSupplierAddress(profile.address());
                 if (StringUtils.hasText(profile.creditCode())) contract.setSupplierCreditCode(profile.creditCode());
-                if (StringUtils.hasText(profile.prepayPercent())) contract.setPrepayPercent(profile.prepayPercent());
+                if (StringUtils.hasText(profile.prepayPercent())) {
+                    contract.setPrepayPercent(RatioText.of(profile.prepayPercent()));
+                }
                 if (StringUtils.hasText(profile.settlementMethod())) contract.setSettlementMethod(profile.settlementMethod());
                 profile.defaultPaymentAccount().ifPresent(account -> {
                     contract.setSupplierAccountName(account.accountName());
