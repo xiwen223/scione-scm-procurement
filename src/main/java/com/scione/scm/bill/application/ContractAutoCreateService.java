@@ -34,6 +34,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -302,9 +303,9 @@ public class ContractAutoCreateService {
             return false;
         }
 
-        List<String> missingFields = contractCreationValidator.validate(po, buyer);
-        if (!missingFields.isEmpty()) {
-            String reason = "PO=" + poNo + "，缺失/不满足字段：" + String.join("、", missingFields);
+        ContractCreationValidator.ValidationResult validation = contractCreationValidator.validate(po, buyer);
+        if (!validation.missingFields().isEmpty()) {
+            String reason = "PO=" + poNo + "，缺失/不满足字段：" + String.join("、", validation.missingFields());
             contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
             log.warn("跳过建合同：{}", reason);
             return false;
@@ -355,8 +356,8 @@ public class ContractAutoCreateService {
         contract.setTemplateId(contractTemplateService.resolveDefaultTemplateId(contract.getContractType()));
         enrichSupplierAddress(contract);
 
-        // 从领星API获取并填充商品图片URL
-        enrichContractItemsWithImages(contract);
+        // 从领星API获取并填充商品图片URL（复用校验阶段已查回的结果，不再重复查领星）
+        enrichContractItemsWithImages(contract, validation.picUrlsBySku());
 
         // 原子保存：合同主表 + 明细 + CREATE 日志
         long contractId = contractRepository.create(contract);
@@ -462,7 +463,8 @@ public class ContractAutoCreateService {
         applyManualOverrides(contract, request);
 
         // 8. 从领星API获取并填充商品图片URL（最慢的一步，进度按 SKU 逐个上报）
-        enrichContractItemsWithImages(contract, progressKey);
+        //    手动创建没有前置校验阶段的结果可复用，传空 Map。
+        enrichContractItemsWithImages(contract, progressKey, Map.of());
 
         contractCreateProgressTracker.advance(progressKey, ContractCreateProgressTracker.STEP_SAVE,
                 "正在校验必填字段并保存合同");
@@ -671,12 +673,13 @@ public class ContractAutoCreateService {
     }
 
     /**
-     * 从领星API获取商品图片并填充到合同明细中
+     * 从领星API获取商品图片并填充到合同明细中（自动创建：无进度上报）。
      *
-     * @param contract 合同聚合根
+     * @param preResolvedPicUrls 校验阶段已批量查回的图片（sku → URL），可为 null；
+     *                           命中的 SKU 不再重复查询，省掉一次对领星的重复调用
      */
-    private void enrichContractItemsWithImages(Contract contract) {
-        enrichContractItemsWithImages(contract, null);
+    private void enrichContractItemsWithImages(Contract contract, Map<String, String> preResolvedPicUrls) {
+        enrichContractItemsWithImages(contract, null, preResolvedPicUrls);
     }
 
     /**
@@ -684,9 +687,11 @@ public class ContractAutoCreateService {
      *
      * <p>这里是创建合同最慢的一段（未命中缓存时每个 SKU 一次领星请求），
      * 所以按明细逐条上报进度（{@code 正在获取商品图片（3/12）}），
-     * 让前端能看出是在推进而不是卡死。{@code progressKey} 为 null 时不上报。
+     * 让前端能看出是在推进而不是卡死。{@code progressKey} 为 null 时不上报。</p>
+     *
+     * @param preResolvedPicUrls 校验阶段已批量查回的图片（sku → URL），可为 null
      */
-    private void enrichContractItemsWithImages(Contract contract, String progressKey) {
+    private void enrichContractItemsWithImages(Contract contract, String progressKey, Map<String, String> preResolvedPicUrls) {
         String poNo = contract.getPurchaseOrderNo();
         log.info("开始从领星API获取商品图片：contractNo={}, poNo={}", contract.getContractNo(), poNo);
 
@@ -698,6 +703,7 @@ public class ContractAutoCreateService {
             }
 
             int total = contractItems.size();
+            int preResolvedCount = 0;
             int cacheHitCount = 0;
             int imageFoundCount = 0;
             int imageNotFoundCount = 0;
@@ -717,6 +723,15 @@ public class ContractAutoCreateService {
                 if (sku == null || sku.isBlank()) {
                     log.warn("合同明细SKU为空，跳过图片获取：contractNo={}", contract.getContractNo());
                     imageNotFoundCount++;
+                    continue;
+                }
+
+                // 校验阶段已经查回来过，直接用，避免对领星重复调用
+                String preResolved = preResolvedPicUrls == null ? null : preResolvedPicUrls.get(sku);
+                if (StringUtils.hasText(preResolved)) {
+                    contractItem.setPicUrl(preResolved);
+                    preResolvedCount++;
+                    log.debug("复用校验阶段查回的商品图片：sku={}", sku);
                     continue;
                 }
 
@@ -759,8 +774,8 @@ public class ContractAutoCreateService {
                 }
             }
 
-            log.info("合同明细图片处理完成：contractNo={}, 本地缓存={}, 领星查询成功={}, 未找到={}, 失败={}",
-                    contract.getContractNo(), cacheHitCount, imageFoundCount, imageNotFoundCount, imageErrorCount);
+            log.info("合同明细图片处理完成：contractNo={}, 校验阶段复用={}, 本地缓存={}, 领星查询成功={}, 未找到={}, 失败={}",
+                    contract.getContractNo(), preResolvedCount, cacheHitCount, imageFoundCount, imageNotFoundCount, imageErrorCount);
 
         } catch (Exception ex) {
             // 整体失败也不影响合同创建
