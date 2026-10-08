@@ -43,6 +43,7 @@ public enum ResultCode {
      * 与 PARAM_ERROR 区分开：调用方参数本身没错，是合同状态与本次操作冲突。
      */
     CONTRACT_STATUS_NOT_ALLOWED(1013006, "合同当前状态不允许该操作"),
+    CONTRACT_PURCHASE_ORDER_ALREADY_EXISTS(1013007, "该采购单已存在未取消的合同，不能重复创建"),
     STORAGE_API_ERROR(1014001, "文件存储服务调用失败"),
     PROCUREMENT_OPERATION_LOG_BUSINESS_TYPE_INVALID(1015001, "供应链操作日志业务类型无效"),
     CONTRACT_TEMPLATE_FILL_FAILED(1013001, "合同模板填充失败"),

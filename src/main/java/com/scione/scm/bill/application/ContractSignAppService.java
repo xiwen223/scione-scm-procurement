@@ -67,79 +67,14 @@ public class ContractSignAppService {
         // 免验证签场景码是法大大建任务的必填项：缺失/过期时必须在任何外部调用之前拦下来，
         // 否则后续领星复核、PDF 生成、文件上传都会白跑一遍，最后仍以法大大报错收场。
         assertFreeSignBusinessIdConfigured(contract, buyer, operatorEmail);
-        boolean manualContract = contract.getCreateType() != null
-                && contract.getCreateType() == Contract.CREATE_TYPE_MANUAL;
-        PoSyncRecord latestPo = null;
-        LingxingSupplierClient.SupplierProfile latestSupplier = null;
-        String signingSupplierPhone;
-        String signingSupplierCreditCode;
-        /**
-         * 领星复核因**接口不可用**（超时 / 限流 3001008 / IP 白名单）而降级跳过时写下原因。
-         * 与非空表示「复核未完成」，此时不能再用「查不到」的语义去阻断签署，见下方 forceConfirm 判断。
-         */
-        String lingxingRecheckSkippedReason = null;
-        if (manualContract) {
-            // 手动合同以保存的合同内容作为法大大签署数据源；领星仅用于差异提示。
-            signingSupplierPhone = contract.getSupplierPhone();
-            signingSupplierCreditCode = contract.getSupplierCreditCode();
-            latestPo = poSyncRepository.findByPurchaseOrderNo(contract.getPurchaseOrderNo()).orElse(null);
-            if (contract.getSupplierId() == null) {
-                throw new BusinessException(ResultCode.PARAM_ERROR,
-                        "合同缺少供应商ID，无法完成领星复核，请重新查询后再发起签署");
-            }
-            try {
-                latestSupplier = lingxingSupplierClient.findSupplierProfile(contract.getSupplierId()).orElse(null);
-            } catch (RuntimeException exception) {
-                // 领星是**外部依赖且会波动**（实测同一批操作里既有 25s 超时也有 3001008 限流）。
-                // 手动合同的签署数据源本来就是合同自己保存的供方信息，领星只用来提示差异，
-                // 所以这里降级为「跳过复核」并继续签署 —— 否则用户已经同步过领星、也确认过差异，
-                // 却因为第二次实时查询超时而拿不到合同，只能反复点、反复失败。
-                // 降级不会被静默吞掉：原因会写进差异清单、操作日志与日志文件。
-                log.warn("手动合同签署前领星供应商复核失败，跳过领星复核并沿用合同保存的供方信息：contractNo={}, supplierId={}, reason={}",
-                        contract.getContractNo(), contract.getSupplierId(), exception.getMessage());
-                latestSupplier = null;
-                lingxingRecheckSkippedReason = "领星供应商资料：本次查询失败（网络超时或接口限流），已跳过领星复核，"
-                        + "签署使用合同保存的供方信息";
-            }
-            log.info("手动合同签署使用合同保存的供方信息：contractNo={}", contract.getContractNo());
-        } else {
-            latestPo = poSyncRepository.findByPurchaseOrderNo(contract.getPurchaseOrderNo())
-                    .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "领星采购单不存在"));
-            try {
-                latestSupplier = lingxingSupplierClient.findSupplierProfile(contract.getSupplierId()).orElse(null);
-            } catch (RuntimeException exception) {
-                // 与手动合同一致：领星**接口不可用**时降级沿用合同保存的供方信息
-                // （自动合同创建时已把领星档案里的电话与统一社会信用代码落库，见 ContractAutoCreateService）。
-                // 注意只兜住「查询失败」，下面「确实查不到该供应商」仍然阻断。
-                log.warn("自动合同签署前领星供应商复核失败，跳过领星复核并沿用合同保存的供方信息：contractNo={}, supplierId={}, reason={}",
-                        contract.getContractNo(), contract.getSupplierId(), exception.getMessage());
-                latestSupplier = null;
-                lingxingRecheckSkippedReason = "领星供应商资料：本次查询失败（网络超时或接口限流），已跳过领星复核，"
-                        + "签署使用合同保存的供方信息";
-            }
-            if (latestSupplier == null) {
-                throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "领星供应商不存在");
-            }
-            signingSupplierPhone = latestPo.getSupplierPhone();
-            signingSupplierCreditCode = latestSupplier.creditCode();
-            log.info("自动合同签署使用领星最新供方信息：contractNo={}", contract.getContractNo());
-        }
+        // 合同创建/编辑时已完成信息回填并持久化；点击开始签署时不再实时查询或复核领星，
+        // 统一使用本合同快照，避免签署结果受领星接口状态或 PO 后续变化影响。
+        String signingSupplierPhone = contract.getSupplierPhone();
+        String signingSupplierCreditCode = contract.getSupplierCreditCode();
+        log.info("签署使用合同已保存的供方信息，跳过领星复核：contractNo={}", contract.getContractNo());
         validateSigningData(contract, buyer, signingSupplierPhone, signingSupplierCreditCode);
         log.info("签署前需方印章与免验证签配置校验通过：contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
-        List<String> differences = findLingxingDifferences(contract, latestPo, latestSupplier, lingxingRecheckSkippedReason);
-        log.info("领星复核完成：contractNo={}, differenceCount={}, recheckSkipped={}",
-                contract.getContractNo(), differences.size(), lingxingRecheckSkippedReason != null);
-        // 只有「领星确实查不到采购单/供应商」才阻断；接口本身不可用导致的复核跳过不阻断，
-        // 否则领星一抖动用户就完全签不了（这正是之前「已同步过领星仍然报同步失败」的原因）。
-        if (manualContract && lingxingRecheckSkippedReason == null
-                && (latestPo == null || latestSupplier == null) && forceConfirm) {
-            throw new BusinessException(ResultCode.LINGXING_API_ERROR,
-                    "领星采购单或供应商信息未查询到，请重新查询后再发起签署");
-        }
-        if (!differences.isEmpty() && !forceConfirm) {
-            log.warn("合同与领星存在差异，等待用户确认：contractNo={}, differences={}", contract.getContractNo(), differences);
-            return new StartSignResult(false, true, differences);
-        }
+        List<String> differences = List.of();
 
         // 签署前始终依据当前合同数据生成新文件，确保折扣等延迟保存的金额已进入法大大签署文档。
         byte[] fileBytes = loadOrGenerateContractPdfForSigning(contract);

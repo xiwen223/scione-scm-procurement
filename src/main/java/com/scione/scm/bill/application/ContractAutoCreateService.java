@@ -443,7 +443,7 @@ public class ContractAutoCreateService {
 
         // 4. 唯一性检查。手动字段将在合同组装后统一校验，允许补齐领星缺失数据。
         if (contractRepository.existsActiveByPurchaseOrderNo(purchaseOrderNo)) {
-            throw new RuntimeException("该采购单已存在合同（非取消状态）");
+            throw new BusinessException(ResultCode.CONTRACT_PURCHASE_ORDER_ALREADY_EXISTS);
         }
 
         contractCreateProgressTracker.advance(progressKey, ContractCreateProgressTracker.STEP_ASSEMBLE,
