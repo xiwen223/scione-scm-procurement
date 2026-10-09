@@ -721,6 +721,7 @@ CREATE TABLE IF NOT EXISTS `lx_pp_po_sku_ass`
     `create_time` datetime    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     PRIMARY KEY (`id`),
     KEY `idx_pp_po_sku` (`plan_sn`,`order_sn`,`sku`) USING BTREE,
-    KEY `uk_order_sn` (`order_sn`) USING BTREE
+    KEY `uk_order_sn` (`order_sn`) USING BTREE,
+    KEY `idx_order_sku_plan` (`order_sn`,`sku`,`plan_sn`) USING BTREE
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4 COMMENT ='采购计划-采购单关系';
