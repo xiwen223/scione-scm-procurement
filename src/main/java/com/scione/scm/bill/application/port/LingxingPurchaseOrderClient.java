@@ -26,6 +26,9 @@ public interface LingxingPurchaseOrderClient {
     /** 通过领星 purchaseOrderList 的 order_sn 精确筛选，实时查询单个采购单。 */
     Optional<PurchaseOrderData> findByOrderNo(String orderNo);
 
+    /** 按 order_sn 批量精确查询，一次最多 500 个单号；无数据返回空列表。 */
+    List<PurchaseOrderData> findByOrderNos(List<String> orderNos);
+
     /** 采购单单头（对应领星 data[]）。 */
     record PurchaseOrderData(
             String orderSn,

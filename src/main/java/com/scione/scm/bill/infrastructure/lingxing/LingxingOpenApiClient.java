@@ -401,22 +401,40 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         if (orderNo == null || orderNo.isBlank()) {
             return Optional.empty();
         }
+        return findByOrderNos(List.of(orderNo)).stream().findFirst();
+    }
+
+    @Override
+    public List<PurchaseOrderData> findByOrderNos(List<String> orderNos) {
+        if (orderNos == null || orderNos.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalized = orderNos.stream()
+                .filter(no -> no != null && !no.isBlank()).map(String::trim).distinct().toList();
+        if (normalized.isEmpty()) {
+            return List.of();
+        }
+        if (normalized.size() > PURCHASE_ORDER_PAGE_SIZE) {
+            throw new IllegalArgumentException("采购单批量查询一次最多 500 个单号");
+        }
         ensureConfigured();
         // order_sn 为精确筛选条件；时间范围仅满足领星列表接口的必传约束。
         JsonNode response = callPurchaseOrderList(
                 LocalDateTime.of(2000, 1, 1, 0, 0), LocalDateTime.now(), "create_time", 0,
-                List.of(orderNo.trim()));
+                normalized);
         JsonNode data = response == null ? null : response.get("data");
         if (data == null || !data.isArray()) {
-            return Optional.empty();
+            return List.of();
         }
+        Map<String, PurchaseOrderData> matched = new LinkedHashMap<>();
+        Set<String> requested = new HashSet<>(normalized);
         for (JsonNode order : data) {
             PurchaseOrderData result = toPurchaseOrderData(order);
-            if (orderNo.trim().equals(result.orderSn())) {
-                return Optional.of(result);
+            if (requested.contains(result.orderSn())) {
+                matched.putIfAbsent(result.orderSn(), result);
             }
         }
-        return Optional.empty();
+        return new ArrayList<>(matched.values());
     }
 
     /** 发一页请求：签名/query 拼接与 findBySku 一致，只是换了 path 和 body。 */
