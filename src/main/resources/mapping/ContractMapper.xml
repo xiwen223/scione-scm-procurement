@@ -10,6 +10,7 @@
         post_code, buyer_phone, fax,
         original_amount, discounted_amount, contract_amount, contract_date, delivery_date, template_id,
         status, cancel_reason, cancel_time, fadada_contract_id, fadada_task_id,
+        (status = 3 AND NULLIF(TRIM(fadada_abolished_task_id), '') IS NOT NULL) AS abolish_pending,
         contract_pdf_url, signed_pdf_url, sign_start_time, sign_complete_time, complete_time,
         error_message, sign_launch_state, sign_launch_error, creator_id, creator_name, create_type, create_time, update_time, is_deleted
     </sql>
@@ -136,10 +137,13 @@
     <update id="markCompleted">
         UPDATE contract SET status = 4, complete_time = NOW(), update_time = NOW()
         WHERE id = #{id} AND status = 3 AND is_deleted = 0
+          AND NULLIF(TRIM(fadada_abolished_task_id), '') IS NULL
     </update>
     <select id="selectExecutingContracts" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ContractPO">
         SELECT <include refid="columns"/> FROM contract
-        WHERE status = 3 AND is_deleted = 0 ORDER BY id ASC
+        WHERE status = 3 AND is_deleted = 0
+          AND NULLIF(TRIM(fadada_abolished_task_id), '') IS NULL
+        ORDER BY id ASC
     </select>
 
     <update id="updateSignedPdfUrl">

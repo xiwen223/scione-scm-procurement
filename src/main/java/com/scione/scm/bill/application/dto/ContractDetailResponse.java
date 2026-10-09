@@ -65,6 +65,7 @@ public class ContractDetailResponse {
     private String statusText;
     private String signLaunchState;
     private String signLaunchError;
+    private boolean abolishPending;
 
     // 作废信息（选填的原因 + 作废时间），详情页在状态为「取消」时展示
     private String cancelReason;
@@ -140,6 +141,7 @@ public class ContractDetailResponse {
         dto.setStatusText(contract.getStatus().getDesc());
         dto.setSignLaunchState(contract.getSignLaunchState());
         dto.setSignLaunchError(contract.getSignLaunchError());
+        dto.setAbolishPending(contract.isAbolishPending());
         dto.setCancelReason(contract.getCancelReason());
         dto.setCancelTime(contract.getCancelTime());
 

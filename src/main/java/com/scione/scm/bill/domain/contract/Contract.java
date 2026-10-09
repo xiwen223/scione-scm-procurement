@@ -60,6 +60,8 @@ public class Contract {
     private ContractStatus status;
     private String signLaunchState;
     private String signLaunchError;
+    /** 已关联解除协议且尚未确认作废完成，主状态仍保持履行中。 */
+    private boolean abolishPending;
 
     public boolean isSignLaunching() {
         return "QUEUED".equals(signLaunchState) || "RUNNING".equals(signLaunchState) || "WAIT_CALLBACK".equals(signLaunchState)
@@ -157,7 +159,7 @@ public class Contract {
                                      String contractPdfUrl, String signedPdfUrl, String fadadaTaskId,
                                      LocalDateTime signStartTime, LocalDateTime signCompleteTime,
                                      LocalDateTime createTime, LocalDateTime updateTime,
-                                     String cancelReason, LocalDateTime cancelTime, String signLaunchState, String signLaunchError,
+                                     String cancelReason, LocalDateTime cancelTime, String signLaunchState, String signLaunchError, boolean abolishPending,
                                      List<ContractItem> items) {
         Contract c = new Contract();
         c.id = id;
@@ -205,6 +207,7 @@ public class Contract {
         c.cancelTime = cancelTime;
         c.signLaunchState = signLaunchState;
         c.signLaunchError = signLaunchError;
+        c.abolishPending = abolishPending;
         if (items != null) {
             c.items.addAll(items);
         }

@@ -134,7 +134,7 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
                 po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
-                po.getCancelReason(), po.getCancelTime(), po.getSignLaunchState(), po.getSignLaunchError(),
+                po.getCancelReason(), po.getCancelTime(), po.getSignLaunchState(), po.getSignLaunchError(), po.isAbolishPending(),
                 items
         ));
     }
@@ -374,7 +374,7 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
                 po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
-                po.getCancelReason(), po.getCancelTime(), po.getSignLaunchState(), po.getSignLaunchError(),
+                po.getCancelReason(), po.getCancelTime(), po.getSignLaunchState(), po.getSignLaunchError(), po.isAbolishPending(),
                 items
         ));
     }
@@ -440,7 +440,7 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
                 po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
-                po.getCancelReason(), po.getCancelTime(), po.getSignLaunchState(), po.getSignLaunchError(),
+                po.getCancelReason(), po.getCancelTime(), po.getSignLaunchState(), po.getSignLaunchError(), po.isAbolishPending(),
                 null  // items=null
         );
     }

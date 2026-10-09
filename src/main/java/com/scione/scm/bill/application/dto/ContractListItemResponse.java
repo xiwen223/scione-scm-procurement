@@ -29,6 +29,7 @@ public class ContractListItemResponse {
     private String statusText;
     private String signLaunchState;
     private String signLaunchError;
+    private boolean abolishPending;
 
     private Integer createType;
     private String createTypeText;
@@ -72,6 +73,7 @@ public class ContractListItemResponse {
         dto.setStatusText(contract.getStatus().getDesc());
         dto.setSignLaunchState(contract.getSignLaunchState());
         dto.setSignLaunchError(contract.getSignLaunchError());
+        dto.setAbolishPending(contract.isAbolishPending());
         dto.setCreateType(contract.getCreateType());
         dto.setCreateTypeText(contract.getCreateType() == 1 ? "自动创建" : "手动创建");
         dto.setCreateTime(contract.getCreateTime());

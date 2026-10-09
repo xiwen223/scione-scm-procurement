@@ -13,6 +13,7 @@ import java.time.LocalDateTime;
 public class ContractPO {
     private String signLaunchState;
     private String signLaunchError;
+    private boolean abolishPending;
     private Long id;
     private String contractNo;
     private String contractName;

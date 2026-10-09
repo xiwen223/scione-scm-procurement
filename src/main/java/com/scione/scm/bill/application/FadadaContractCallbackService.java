@@ -61,7 +61,15 @@ public class FadadaContractCallbackService {
                     contract.getId(), contractNo, event, body.path("signTaskStatus").asText());
             details += "；合同状态：签署中 → 履行中";
         }
-        if ("sign-task-abolish".equals(event) && contract.getStatus() == ContractStatus.EXECUTING) {
+        // 解除协议完成事件必须匹配本合同的解除协议任务，不能将原合同完成事件当成作废。
+        String callbackTaskId = body.path("signTaskId").asText("");
+        boolean abolishAgreementFinished = contract.isAbolishPending()
+                && isSignTaskFinished(event, body)
+                && !callbackTaskId.isBlank()
+                && contractRepository.findFadadaAbolishedTaskId(contract.getId())
+                    .filter(callbackTaskId::equals).isPresent();
+        if (("sign-task-abolish".equals(event) || abolishAgreementFinished)
+                && contract.getStatus() == ContractStatus.EXECUTING) {
             contractRepository.markFadadaAbolished(contract.getId(), reason);
             details += "；解除协议已完成；合同状态：履行中 → 取消";
             log.info("法大大作废协议已完成，合同已更新为取消：contractId={}, contractNo={}", contract.getId(), contractNo);
