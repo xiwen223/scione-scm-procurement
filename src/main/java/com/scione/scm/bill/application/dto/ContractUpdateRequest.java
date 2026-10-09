@@ -2,6 +2,7 @@ package com.scione.scm.bill.application.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
+import jakarta.validation.constraints.Pattern;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -51,7 +52,8 @@ public class ContractUpdateRequest {
     @Schema(description = "预付款比例", example = "0.3")
     private String prepayPercent;
 
-    @Schema(description = "结算方式", example = "月结")
+    @Schema(description = "结算方式：现结、月结、其他", example = "月结")
+    @Pattern(regexp = "现结|月结|其他", message = "结算方式只能为现结、月结、其他")
     private String settlementMethod;
 
     // ========== 需方信息 ==========

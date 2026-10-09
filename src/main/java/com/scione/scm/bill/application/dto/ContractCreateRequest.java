@@ -2,6 +2,7 @@ package com.scione.scm.bill.application.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
+import jakarta.validation.constraints.Pattern;
 
 import java.math.BigDecimal;
 
@@ -67,7 +68,8 @@ public class ContractCreateRequest {
     @Schema(description = "预付款比例（可选，如 0.3 表示30%）", example = "0.0")
     private BigDecimal prepaymentRatio;
 
-    @Schema(description = "结算方式（可选）", example = "交付即结")
+    @Schema(description = "结算方式：现结、月结、其他", example = "现结")
+    @Pattern(regexp = "现结|月结|其他", message = "结算方式只能为现结、月结、其他")
     private String paymentMethod;
 
     @Schema(description = "签署日期（可选，格式 yyyy-MM-dd，不传则使用今天）", example = "2026-12-01")
