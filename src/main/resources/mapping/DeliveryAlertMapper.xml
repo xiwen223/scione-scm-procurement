@@ -55,8 +55,10 @@
             END AS risk
         FROM lx_purchase_order_item poi
         INNER JOIN lx_purchase_order po ON po.order_sn = poi.order_sn
-        LEFT JOIN JSON_TABLE(poi.relation_purchase_plan, '$[*]' COLUMNS (plan_sn VARCHAR(100) PATH '$')) AS j
-                   ON j.plan_sn IS NOT NULL AND j.plan_sn &lt;&gt; ''
+        <!-- PP-PO 关系统一走 lx_pp_po_sku_ass（由同步任务从 relation_purchase_plan 展开落表），
+             避免 JSON_TABLE 逐行解析无法走索引。关联键为 (order_sn, sku)。 -->
+        LEFT JOIN lx_pp_po_sku_ass j
+                   ON j.order_sn = poi.order_sn AND j.sku = poi.sku
         LEFT JOIN lx_purchase_plan pp ON pp.plan_sn = j.plan_sn
         WHERE poi.is_delete = 0
           AND po.status NOT IN (-1, 124)
@@ -361,8 +363,8 @@
             ) AS risk
         FROM lx_purchase_order_item poi
         INNER JOIN lx_purchase_order po ON po.order_sn = poi.order_sn
-        LEFT JOIN JSON_TABLE(poi.relation_purchase_plan, '$[*]' COLUMNS (plan_sn VARCHAR(100) PATH '$')) AS j
-                   ON j.plan_sn IS NOT NULL AND j.plan_sn &lt;&gt; ''
+        LEFT JOIN lx_pp_po_sku_ass j
+                   ON j.order_sn = poi.order_sn AND j.sku = poi.sku
         LEFT JOIN lx_purchase_plan pp ON pp.plan_sn = j.plan_sn
         WHERE poi.is_delete = 0
           AND po.status NOT IN (-1, 124)
@@ -396,8 +398,8 @@
             ) AS product_name
         FROM lx_purchase_order_item poi
         INNER JOIN lx_purchase_order po ON po.order_sn = poi.order_sn
-        LEFT JOIN JSON_TABLE(poi.relation_purchase_plan, '$[*]' COLUMNS (plan_sn VARCHAR(100) PATH '$')) AS j
-                   ON j.plan_sn IS NOT NULL AND j.plan_sn &lt;&gt; ''
+        LEFT JOIN lx_pp_po_sku_ass j
+                   ON j.order_sn = poi.order_sn AND j.sku = poi.sku
         LEFT JOIN lx_purchase_plan pp ON pp.plan_sn = j.plan_sn
         WHERE poi.is_delete = 0
           AND po.status NOT IN (-1, 124)
@@ -436,8 +438,8 @@
             ) AS risk
         FROM lx_purchase_order_item poi
         INNER JOIN lx_purchase_order po ON po.order_sn = poi.order_sn
-        LEFT JOIN JSON_TABLE(poi.relation_purchase_plan, '$[*]' COLUMNS (plan_sn VARCHAR(100) PATH '$')) AS j
-                   ON j.plan_sn IS NOT NULL AND j.plan_sn &lt;&gt; ''
+        LEFT JOIN lx_pp_po_sku_ass j
+                   ON j.order_sn = poi.order_sn AND j.sku = poi.sku
         LEFT JOIN lx_purchase_plan pp ON pp.plan_sn = j.plan_sn
         WHERE poi.id = #{componentId}
           AND poi.is_delete = 0
@@ -460,8 +462,8 @@
             SELECT DISTINCT poi.order_sn
             FROM lx_purchase_order_item poi
             INNER JOIN lx_purchase_order po ON po.order_sn = poi.order_sn
-            LEFT JOIN JSON_TABLE(poi.relation_purchase_plan, '$[*]' COLUMNS (plan_sn VARCHAR(100) PATH '$')) AS j
-                       ON j.plan_sn IS NOT NULL AND j.plan_sn &lt;&gt; ''
+            LEFT JOIN lx_pp_po_sku_ass j
+                       ON j.order_sn = poi.order_sn AND j.sku = poi.sku
             LEFT JOIN lx_purchase_plan pp ON pp.plan_sn = j.plan_sn
             WHERE poi.is_delete = 0
               AND po.status NOT IN (-1, 124)
