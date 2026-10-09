@@ -17,7 +17,7 @@ final class ExcelContractHtmlExporter {
             html.append("body{margin:0;font-family:ContractChinese;font-size:10pt;} table{border-collapse:collapse;table-layout:fixed;width:100%;} ")
                     .append("td{padding:0;word-wrap:break-word;vertical-align:middle;} tr{page-break-inside:avoid;} ")
                     .append(".cell{position:relative;} .text{padding:1px 2px;line-height:1.2;} .picture{position:absolute;} ")
-                    .append("thead{display:table-header-group;} .sheet{page-break-before:always;} .sheet:first-child{page-break-before:auto;} ");
+                    .append("thead{display:table-header-group;} ");
             for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
                 XSSFSheet sheet = workbook.getSheetAt(i);
                 double[] page = pageSize(sheet);
@@ -69,10 +69,9 @@ final class ExcelContractHtmlExporter {
             if (!sheet.isColumnHidden(c)) out.append("<col style=\"width:").append(columnWidths.get(c)).append("pt;\"/>");
         }
         out.append("</colgroup><tbody>");
-        // 手动分页符前的尾部空行不显示内容，却会把这一页撑出额外一页空白，先整体剔除。
-        Set<Integer> pageBreakGaps = blankRowsBeforePageBreaks(sheet, area, firstRow, lastRow, pictures);
+        // 连续输出模板内容，保留内部留白，不应用 Excel 手动分页符。
+        // 超过纸张高度时由 PDF 引擎自然换页，正文、签章区和箱唛不强制另起一页。
         for (int r = firstRow; r <= lastRow; r++) {
-            if (pageBreakGaps.contains(r)) continue;
             Row row = sheet.getRow(r);
             if (row != null && row.getZeroHeight()) continue;
             boolean productImage = false;
@@ -81,9 +80,7 @@ final class ExcelContractHtmlExporter {
                         .anyMatch(p -> Math.abs(p.width() - 40) < 0.1 && Math.abs(p.height() - 40) < 0.1)) productImage = true;
             }
             double rowHeight = productImage ? 33 : (row == null ? sheet.getDefaultRowHeightInPoints() : row.getHeightInPoints()) * contentScale;
-            out.append("<tr style=\"");
-            if (r > firstRow && sheet.isRowBroken(r - 1)) out.append("page-break-before:always;");
-            out.append("\">");
+            out.append("<tr>");
             for (int c = area.getFirstColumn(); c <= area.getLastColumn(); c++) {
                 if (sheet.isColumnHidden(c)) continue;
                 CellRangeAddress merge = merged(sheet, r, c);
@@ -300,41 +297,6 @@ final class ExcelContractHtmlExporter {
             }
         }
         return Math.min(last, area.getLastRow());
-    }
-
-    /**
-     * 找出「手动分页符之前的连续空行」并整行剔除。
-     *
-     * <p>模板常在正文末尾与附页之间留一行空行做间隔。正文排满一整页时，这行空行会落到下一页，
-     * 生成一页只有页脚的空白页；紧随其后的分页符又把附页推到再下一页，于是多出中间那一页。
-     * 空行本身不承载任何内容，与末尾空行的处理保持一致直接裁掉，正文末尾即成为该页最后一行。</p>
-     */
-    private Set<Integer> blankRowsBeforePageBreaks(XSSFSheet sheet, CellRangeAddress area,
-                                                   int firstRow, int lastRow, Map<String, List<Image>> pictures) {
-        Set<Integer> trimmed = new HashSet<>();
-        for (int r = firstRow + 1; r <= lastRow; r++) {
-            if (!sheet.isRowBroken(r - 1)) continue;
-            for (int blank = r - 1; blank >= firstRow && blankRow(sheet, area, blank, pictures); blank--) {
-                trimmed.add(blank);
-            }
-        }
-        return trimmed;
-    }
-
-    /** 该行在打印区域内没有文字、没有图片锚点，也不是跨行合并的一部分。 */
-    private boolean blankRow(XSSFSheet sheet, CellRangeAddress area, int r, Map<String, List<Image>> pictures) {
-        Row row = sheet.getRow(r);
-        if (row != null && row.getZeroHeight()) return true;
-        for (int c = area.getFirstColumn(); c <= area.getLastColumn(); c++) {
-            if (pictures.containsKey(r + ":" + c)) return false;
-            Cell cell = row == null ? null : row.getCell(c);
-            if (cell != null && cell.getCellType() != CellType.BLANK
-                    && !(cell.getCellType() == CellType.STRING && cell.getStringCellValue().isEmpty())) return false;
-            CellRangeAddress merge = merged(sheet, r, c);
-            // 跨行合并即使本行为空也要保留，否则 rowspan 会被拆断。
-            if (merge != null && merge.getFirstRow() != merge.getLastRow()) return false;
-        }
-        return true;
     }
 
     private int overflowEnd(XSSFSheet sheet, Row row, XSSFCell cell, int r, int c,
