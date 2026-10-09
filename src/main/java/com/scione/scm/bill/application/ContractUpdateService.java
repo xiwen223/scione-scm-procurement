@@ -69,6 +69,7 @@ public class ContractUpdateService {
                 && !StringUtils.hasText(request.getContactPerson())
                 && !StringUtils.hasText(request.getSupplierPhone())
                 && !StringUtils.hasText(request.getSupplierCreditCode())
+                && !StringUtils.hasText(request.getSupplierAccountName())
                 && !StringUtils.hasText(request.getSupplierBankAccount())
                 && !StringUtils.hasText(request.getSupplierBankName())
                 && !StringUtils.hasText(request.getPrepayPercent())
@@ -247,6 +248,13 @@ public class ContractUpdateService {
             changeDetails.add("供方统一社会信用代码：" + contract.getSupplierCreditCode()
                     + " → " + request.getSupplierCreditCode());
             contract.setSupplierCreditCode(request.getSupplierCreditCode());
+        }
+
+        if (StringUtils.hasText(request.getSupplierAccountName())
+                && !request.getSupplierAccountName().equals(contract.getSupplierAccountName())) {
+            changeDetails.add("供方收款人：" + contract.getSupplierAccountName()
+                    + " → " + request.getSupplierAccountName());
+            contract.setSupplierAccountName(request.getSupplierAccountName());
         }
 
         if (StringUtils.hasText(request.getSupplierBankAccount())

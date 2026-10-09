@@ -30,6 +30,7 @@ public class ContractDetailResponse {
     private String supplierAddress;
     private String contactPerson;
     private String supplierCreditCode;
+    private String supplierAccountName;
     private String supplierBankAccount;
     private String supplierBankName;
 
@@ -114,6 +115,7 @@ public class ContractDetailResponse {
         dto.setSupplierAddress(contract.getSupplierAddress());
         dto.setContactPerson(contract.getContactPerson());
         dto.setSupplierCreditCode(contract.getSupplierCreditCode());
+        dto.setSupplierAccountName(contract.getSupplierAccountName());
         dto.setSupplierBankAccount(contract.getSupplierBankAccount());
         dto.setSupplierBankName(contract.getSupplierBankName());
 

@@ -43,6 +43,9 @@ public class ContractUpdateRequest {
     @Schema(description = "供方统一社会信用代码", example = "913100001234567890")
     private String supplierCreditCode;
 
+    @Schema(description = "供方收款人")
+    private String supplierAccountName;
+
     @Schema(description = "供方银行账号", example = "6222021000000000000")
     private String supplierBankAccount;
 
