@@ -44,6 +44,9 @@ public class PoiContractTemplateService implements ContractTemplateService {
     @Resource
     private ContractTemplateMapper contractTemplateMapper;
 
+    @Resource
+    private com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractMapper contractMapper;
+
     @Autowired
     @Qualifier("com.scione.api.data.client.S3Client")
     private S3Client s3Client;
@@ -53,6 +56,12 @@ public class PoiContractTemplateService implements ContractTemplateService {
 
     @Resource
     private LingxingSupplierClient lingxingSupplierClient;
+
+    @Resource
+    private ContractImageDownloader contractImageDownloader;
+
+    @Resource
+    private ContractImageCompressor contractImageCompressor;
 
     @Override
     public Long resolveDefaultTemplateId(Integer contractType) {
@@ -70,11 +79,12 @@ public class PoiContractTemplateService implements ContractTemplateService {
                 contract.getContractNo(), contract.getContractType(), contract.getSupplierName());
 
         try {
-            // 1. 根据合同类型查询默认模板
-            log.info("步骤1：查询默认合同模板 - contractType={}", contract.getContractType());
-            log.info("步骤1完成 - 找到默认模板：");
-            // 合同一经创建即固定关联模板；填充时必须使用该 template_id，不能被后续默认模板变更影响。
+            // 1. 校验绑定模板；不符合要求时按合同类型重新绑定启用默认模板。
+            log.info("步骤1：查询合同模板 - contractNo={}, templateId={}, contractType={}",
+                    contract.getContractNo(), contract.getTemplateId(), contract.getContractType());
+            // 填充使用校验后的模板，替换时先回写合同模板关联。
             ContractTemplatePO template = resolveTemplateForContract(contract);
+            log.info("步骤1完成 - 找到合同模板：");
             log.info("  - 模板ID: {}", template.getId());
             log.info("  - 模板名称: {}", template.getTemplateName());
             log.info("  - S3对象键: {}", template.getObjectKey());
@@ -133,11 +143,19 @@ public class PoiContractTemplateService implements ContractTemplateService {
                  ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
 
                 Sheet sheet = workbook.getSheetAt(0);
+                // 每次生成独立缓存，所有合同的实际下载任务共用同一个受限线程池。
+                // 下载后立即压缩：商品图在表格里只显示 40×40 像素，原图（常见 0.5MB/张）会把 PDF 顶到近 10MB，
+                // 而 PDF 还要跨境上传 S3。两条填充分支（占位符 / 固定坐标）共用这份缓存，压一次两条都受益。
+                java.util.Map<String, byte[]> downloadedImages = contractImageCompressor.compressAll(
+                        contract.getContractNo(),
+                        contractImageDownloader.download(contract.getContractNo(),
+                                contract.getItems().stream().map(ContractItem::getPicUrl).toList()));
 
                 // 有占位符的模板按标记定位；无占位符的历史模板继续走原固定坐标逻辑。
                 if (ContractPlaceholderRenderer.hasPlaceholders(workbook)) {
                     new ContractPlaceholderRenderer().fill((XSSFWorkbook) workbook, contract,
-                            () -> resolvePaymentAccount(contract), this::insertPlaceholderImage);
+                            () -> resolvePaymentAccount(contract),
+                            (cell, item) -> insertPlaceholderImage(cell, item, downloadedImages));
                     workbook.write(outputStream);
                     return outputStream.toByteArray();
                 }
@@ -205,11 +223,10 @@ public class PoiContractTemplateService implements ContractTemplateService {
                 // A列：图片
                 if (item.getPicUrl() != null && !item.getPicUrl().isEmpty()) {
                     try {
-                        log.info("开始下载商品图片：rowIndex={}, sku={}, picUrl={}",
-                                currentRowIndex, item.getSku(), item.getPicUrl());
+                        log.debug("从本次下载缓存插入商品图片：rowIndex={}, sku={}", currentRowIndex, item.getSku());
 
-                        // 1. 下载图片
-                        byte[] imageBytes = restTemplate.getForObject(item.getPicUrl(), byte[].class);
+                        // 1. 读取去重并发下载结果
+                        byte[] imageBytes = downloadedImages.get(item.getPicUrl());
 
                         if (imageBytes != null && imageBytes.length > 0) {
                             // 2. 判断图片类型(根据URL或内容)
@@ -369,27 +386,42 @@ public class PoiContractTemplateService implements ContractTemplateService {
     }
 
     /**
-     * 合同创建时已经确定 template_id。填充、重新生成、下载都必须沿用这一模板，
-     * 避免同类型默认模板被调整后，历史合同的版式被意外替换。
+     * 生成 PDF 前校验默认、启用、未删除及类型匹配；不合格时按类型重新选择并回写模板。
      */
     private ContractTemplatePO resolveTemplateForContract(Contract contract) {
-        if (contract.getTemplateId() == null) {
-            return contractTemplateMapper.findPage(null, contract.getContractType(), 1, true, 0, 1).stream()
-                    .findFirst()
-                    .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
-                            "未找到合同类型对应的启用默认模板：" + contract.getContractType()));
-        }
-
-        ContractTemplatePO template = contractTemplateMapper.findById(contract.getTemplateId())
-                .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
-                        "合同关联模板不存在或已删除：templateId=" + contract.getTemplateId()));
-        if (!java.util.Objects.equals(template.getContractType(), contract.getContractType())
-                || !Integer.valueOf(1).equals(template.getIsDefault())
-                || !Integer.valueOf(1).equals(template.getIsActive())) {
+        if (contract.getContractType() == null) {
             throw new BusinessException(ResultCode.PARAM_ERROR,
-                    "合同关联模板不符合当前合同类型的启用默认模板要求：templateId=" + contract.getTemplateId());
+                    "合同类型未填写，无法选择模板：contractNo=" + contract.getContractNo());
         }
-        return template;
+        Long oldTemplateId = contract.getTemplateId();
+        ContractTemplatePO template = oldTemplateId == null ? null
+                : contractTemplateMapper.findById(oldTemplateId).orElse(null);
+        if (isUsableDefaultTemplate(template, contract.getContractType())) {
+            return template;
+        }
+        ContractTemplatePO replacement = contractTemplateMapper
+                .findPage(null, contract.getContractType(), 1, true, 0, 1).stream()
+                .filter(candidate -> isUsableDefaultTemplate(candidate, contract.getContractType()))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
+                        "未找到该合同类型未删除且启用的默认模板：contractNo=" + contract.getContractNo()
+                                + ", contractType=" + contract.getContractType()));
+        if (contract.getId() != null && contractMapper.rebindDefaultTemplate(contract.getId(),
+                contract.getContractType(), oldTemplateId, replacement.getId()) != 1) {
+            throw new BusinessException(ResultCode.PARAM_ERROR,
+                    "合同或默认模板已变化，模板更新失败，请刷新后重试：contractNo=" + contract.getContractNo());
+        }
+        contract.setTemplateId(replacement.getId());
+        log.info("合同模板校验未通过，已按类型重新绑定默认模板：contractId={}, contractNo={}, contractType={}, oldTemplateId={}, newTemplateId={}",
+                contract.getId(), contract.getContractNo(), contract.getContractType(), oldTemplateId, replacement.getId());
+        return replacement;
+    }
+
+    private boolean isUsableDefaultTemplate(ContractTemplatePO template, Integer contractType) {
+        return template != null && java.util.Objects.equals(template.getContractType(), contractType)
+                && Integer.valueOf(0).equals(template.getIsDeleted())
+                && Integer.valueOf(1).equals(template.getIsActive())
+                && Integer.valueOf(1).equals(template.getIsDefault());
     }
 
     private String settlementText(Contract contract) {
@@ -422,10 +454,10 @@ public class PoiContractTemplateService implements ContractTemplateService {
     }
 
     /** 图片来源、大小及失败处理沿用旧模板，仅把固定 A 列改为占位符所在单元格。 */
-    private void insertPlaceholderImage(Cell cell, ContractItem item) {
+    private void insertPlaceholderImage(Cell cell, ContractItem item, java.util.Map<String, byte[]> downloadedImages) {
         if (item == null || !org.springframework.util.StringUtils.hasText(item.getPicUrl())) return;
         try {
-            byte[] bytes = restTemplate.getForObject(item.getPicUrl(), byte[].class);
+            byte[] bytes = downloadedImages.get(item.getPicUrl());
             if (bytes == null || bytes.length == 0) {
                 log.warn("合同明细图片为空：sku={}", item.getSku());
                 return;
@@ -613,28 +645,29 @@ public class PoiContractTemplateService implements ContractTemplateService {
      * @return POI图片类型常量
      */
     private int determinePictureType(String picUrl, byte[] imageBytes) {
+        // 先看真实内容：嵌入前会把商品图统一转成 JPEG，此时 URL 后缀已经不可信
+        // （例如 .png 的外链压缩后是 JPEG 字节，按后缀判定会让 POI 写出损坏的图片）。
+        if (imageBytes != null && imageBytes.length >= 3) {
+            // PNG文件头: 89 50 4E 47
+            if (imageBytes.length >= 4 && (imageBytes[0] & 0xFF) == 0x89 && (imageBytes[1] & 0xFF) == 0x50
+                    && (imageBytes[2] & 0xFF) == 0x4E && (imageBytes[3] & 0xFF) == 0x47) {
+                return Workbook.PICTURE_TYPE_PNG;
+            }
+            // JPEG文件头: FF D8 FF
+            if ((imageBytes[0] & 0xFF) == 0xFF && (imageBytes[1] & 0xFF) == 0xD8
+                    && (imageBytes[2] & 0xFF) == 0xFF) {
+                return Workbook.PICTURE_TYPE_JPEG;
+            }
+        }
+
         String url = picUrl.toLowerCase();
 
-        // 优先从URL扩展名判断
+        // 内容无法识别时回退到URL扩展名
         if (url.endsWith(".png") || url.contains(".png?")) {
             return Workbook.PICTURE_TYPE_PNG;
         } else if (url.endsWith(".jpg") || url.endsWith(".jpeg") ||
                 url.contains(".jpg?") || url.contains(".jpeg?")) {
             return Workbook.PICTURE_TYPE_JPEG;
-        }
-
-        // 如果无法从URL判断,检查文件头
-        if (imageBytes.length >= 8) {
-            // PNG文件头: 89 50 4E 47 0D 0A 1A 0A
-            if (imageBytes[0] == (byte) 0x89 && imageBytes[1] == 0x50 &&
-                    imageBytes[2] == 0x4E && imageBytes[3] == 0x47) {
-                return Workbook.PICTURE_TYPE_PNG;
-            }
-            // JPEG文件头: FF D8 FF
-            if (imageBytes[0] == (byte) 0xFF && imageBytes[1] == (byte) 0xD8 &&
-                    imageBytes[2] == (byte) 0xFF) {
-                return Workbook.PICTURE_TYPE_JPEG;
-            }
         }
 
         // 默认返回JPEG（POI 5.x 主要支持 PNG 和 JPEG）

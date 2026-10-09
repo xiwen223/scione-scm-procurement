@@ -12,6 +12,7 @@ import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractItem;
 import com.scione.scm.bill.domain.contract.ContractPage;
 import com.scione.scm.bill.domain.contract.ContractRepository;
+import com.scione.scm.bill.domain.contract.ContractOperationLog;
 import com.scione.scm.bill.domain.contract.ContractStatus;
 import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
 import com.scione.scm.bill.infrastructure.fadada.FadadaAlertContext;
@@ -51,10 +52,18 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ContractQueryService {
 
-    private static final HttpClient DOWNLOAD_HTTP_CLIENT = HttpClient.newBuilder()
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .connectTimeout(Duration.ofSeconds(15))
-            .build();
+    private volatile HttpClient downloadHttpClient;
+
+    private HttpClient downloadHttpClient() {
+        if (downloadHttpClient == null) {
+            synchronized (this) {
+                if (downloadHttpClient == null) downloadHttpClient = HttpClient.newBuilder()
+                        .followRedirects(HttpClient.Redirect.NORMAL)
+                        .connectTimeout(fadadaOpenApiProperties.getFileConnectTimeout()).build();
+            }
+        }
+        return downloadHttpClient;
+    }
 
     private final ContractRepository contractRepository;
     private final ObjectProvider<ContractQueryService> selfProvider;
@@ -224,6 +233,14 @@ public class ContractQueryService {
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
                         "合同不存在：contractId=" + contractId));
 
+        try {
+            return downloadContractFileContent(contract, type);
+        } catch (Exception ex) {
+            throw recordDownloadFailure(contract, "单个下载", ex);
+        }
+    }
+
+    private DownloadResult downloadContractFileContent(Contract contract, String type) throws IOException {
         // 仅创建状态允许编辑，因此只对创建状态按当前数据库数据即时生成。
         // 签署中及之后直接读取已保存文件，避免下载时重复模板填充、PDF 转换及存储上传。
         if (!"signed".equals(type)) {
@@ -319,7 +336,11 @@ public class ContractQueryService {
         if (!usesFadadaDocument(contract.getStatus())) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "创建状态合同应下载未盖章原合同");
         }
-        return selfProvider.getObject().getFadadaDocumentDownloadUrl(contract);
+        try {
+            return selfProvider.getObject().getFadadaDocumentDownloadUrl(contract);
+        } catch (Exception ex) {
+            throw recordDownloadFailure(contract, "获取签署文件下载地址", ex);
+        }
     }
 
     /**
@@ -419,13 +440,16 @@ public class ContractQueryService {
 
     private byte[] downloadFadadaDocument(Contract contract) throws IOException {
         String downloadUrl = selfProvider.getObject().getFadadaDocumentDownloadUrl(contract);
+        java.util.concurrent.CompletableFuture<HttpResponse<byte[]>> transfer = null;
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(downloadUrl))
                     .GET()
-                    .timeout(Duration.ofSeconds(60))
+                    .timeout(fadadaOpenApiProperties.getFileDownloadTimeout())
                     .build();
-            HttpResponse<byte[]> response = DOWNLOAD_HTTP_CLIENT.send(request,
+            transfer = downloadHttpClient().sendAsync(request,
                     HttpResponse.BodyHandlers.ofByteArray());
+            HttpResponse<byte[]> response = transfer.get(fadadaOpenApiProperties.getFileDownloadTimeout().toMillis(),
+                    java.util.concurrent.TimeUnit.MILLISECONDS);
             if (response.statusCode() < 200 || response.statusCode() >= 300 || response.body().length == 0) {
                 throw new IOException("法大大文件下载失败，HTTP状态=" + response.statusCode());
             }
@@ -437,6 +461,12 @@ public class ContractQueryService {
             throw new IOException("法大大文件下载被中断", ex);
         } catch (IllegalArgumentException ex) {
             throw new IOException("法大大文件下载地址无效", ex);
+        } catch (java.util.concurrent.TimeoutException ex) {
+            throw new IOException("法大大文件下载超时", ex);
+        } catch (java.util.concurrent.ExecutionException ex) {
+            throw new IOException("法大大文件传输失败", ex.getCause());
+        } finally {
+            if (transfer != null && !transfer.isDone()) transfer.cancel(true);
         }
     }
 
@@ -448,9 +478,6 @@ public class ContractQueryService {
      */
     public record DownloadResult(byte[] fileBytes, String fileName) {
     }
-
-    // 添加到类的成员变量区域（如果没有 MAX_BATCH_BYTES）
-    private static final long MAX_BATCH_BYTES = 100 * 1024 * 1024; // 100MB
 
     /**
      * 批量下载合同文件（返回ZIP压缩包）
@@ -477,9 +504,9 @@ public class ContractQueryService {
              ZipOutputStream zip = new ZipOutputStream(output)) {
 
             Set<String> fileNames = new HashSet<>();
-            long totalBytes = 0;
 
             for (Contract contract : contracts) {
+                try {
                 // 仅创建状态需要按当前可编辑数据生成；其他状态直接读取已保存文件。
                 String fileUrl = null;
                 byte[] fileBytes;
@@ -504,14 +531,6 @@ public class ContractQueryService {
                     log.info("批量下载非创建状态合同，直接使用已保存文件：contractNo={}, status={}",
                             contract.getContractNo(), contract.getStatus());
                 }
-                totalBytes += fileBytes.length;
-
-                // 检查总大小限制
-                if (totalBytes > MAX_BATCH_BYTES) {
-                    throw new BusinessException(ResultCode.SHIPPING_MARK_BATCH_TOO_LARGE,
-                            "批量下载文件总大小超过限制(100MB)");
-                }
-
                 // 生成唯一文件名：合同编号.pdf
                 String extension = fileUrl != null && fileUrl.endsWith(".xlsx") ? ".xlsx" : ".pdf";
                 String stageSuffix = contract.getStatus() == ContractStatus.SIGNING ? "-签署中" : "";
@@ -524,6 +543,9 @@ public class ContractQueryService {
 
                 log.info("合同文件已添加到ZIP: contractNo={}, fileName={}, size={}",
                         contract.getContractNo(), fileName, fileBytes.length);
+                } catch (Exception ex) {
+                    throw recordDownloadFailure(contract, "批量下载", ex);
+                }
             }
 
             zip.finish();
@@ -540,6 +562,41 @@ public class ContractQueryService {
             log.error("合同批量下载失败", e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "合同文件下载失败: " + e.getMessage());
         }
+    }
+
+    /** 文件下载失败同时写服务日志和合同操作日志，日志写入失败不覆盖原始下载错误。 */
+    private BusinessException recordDownloadFailure(Contract contract, String scene, Exception exception) {
+        String reason = StringUtils.hasText(exception.getMessage()) ? exception.getMessage() : "文件处理失败";
+        Throwable cause = exception;
+        for (int depth = 0; depth < 10 && cause.getCause() != null && cause.getCause() != cause; depth++) {
+            cause = cause.getCause();
+        }
+        if (cause != exception && StringUtils.hasText(cause.getMessage())) {
+            reason += "；原因：" + cause.getMessage();
+        }
+        log.error("合同下载失败：scene={}, contractId={}, contractNo={}, status={}, templateId={}",
+                scene, contract.getId(), contract.getContractNo(), contract.getStatus(), contract.getTemplateId(), exception);
+        try {
+            String operator = Contract.SYSTEM_OPERATOR;
+            var attributes = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+            if (attributes instanceof org.springframework.web.context.request.ServletRequestAttributes requestAttributes) {
+                String email = requestAttributes.getRequest().getHeader("X-User-Email");
+                if (StringUtils.hasText(email)) operator = email;
+            }
+            ContractOperationLog operation = ContractOperationLog.ofUpdate(contract.getId(), contract.getContractNo(),
+                    operator, operator, "合同下载失败",
+                    "下载方式=" + scene + "；合同状态=" + contract.getStatus() + "；模板ID=" + contract.getTemplateId()
+                            + "；失败原因=" + reason.substring(0, Math.min(reason.length(), 1000)));
+            operation.setOperationType(ContractOperationLog.TYPE_DOWNLOAD_FAILED);
+            contractRepository.saveOperationLog(operation);
+        } catch (Exception logException) {
+            log.error("下载失败操作日志保存失败：contractId={}, contractNo={}",
+                    contract.getId(), contract.getContractNo(), logException);
+        }
+        ResultCode code = exception instanceof BusinessException businessException
+                ? businessException.getResultCode() : ResultCode.SYSTEM_ERROR;
+        return new BusinessException(code, scene + "失败，合同编号：" + contract.getContractNo()
+                + "；" + (StringUtils.hasText(exception.getMessage()) ? exception.getMessage() : "文件处理失败"));
     }
 
     /**

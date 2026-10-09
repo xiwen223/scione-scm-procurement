@@ -99,6 +99,7 @@ public class FadadaOpenApiClient {
     private final FadadaRequestSigner signer;
     private final ObjectMapper objectMapper;
     private final RestClient restClient;
+    private final java.net.http.HttpClient uploadHttpClient;
     /** 按 appId 缓存 accessToken：不同应用凭据的 token 互不通用。 */
     private final Map<String, CachedToken> cachedTokens = new ConcurrentHashMap<>();
     private final WeComClient weComClient;
@@ -123,6 +124,8 @@ public class FadadaOpenApiClient {
         requestFactory.setConnectTimeout(properties.getConnectTimeout());
         requestFactory.setReadTimeout(properties.getReadTimeout());
         this.restClient = restClientBuilder.clone().requestFactory(requestFactory).build();
+        this.uploadHttpClient = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(properties.getFileConnectTimeout()).build();
     }
 
     /**
@@ -179,25 +182,34 @@ public class FadadaOpenApiClient {
         if (content == null || content.length == 0) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "上传文件内容不能为空");
         }
+        java.util.concurrent.CompletableFuture<java.net.http.HttpResponse<Void>> transfer = null;
         try {
-            ResponseEntity<Void> response = restClient.put()
-                    .uri(URI.create(uploadUrl))
-                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                    .body(content)
-                    .retrieve()
-                    .toBodilessEntity();
-            if (response.getStatusCode().value() != 200) {
-                String reason = "文件上传失败：HTTP " + response.getStatusCode().value();
+            var request = java.net.http.HttpRequest.newBuilder(URI.create(uploadUrl))
+                    .timeout(properties.getFileUploadTimeout())
+                    .header("Content-Type", MediaType.APPLICATION_OCTET_STREAM_VALUE)
+                    .PUT(java.net.http.HttpRequest.BodyPublishers.ofByteArray(content)).build();
+            transfer = uploadHttpClient.sendAsync(request, java.net.http.HttpResponse.BodyHandlers.discarding());
+            var response = transfer.get(properties.getFileUploadTimeout().toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+            if (response.statusCode() != 200) {
+                String reason = "文件上传失败：HTTP " + response.statusCode();
                 sendFailureAlert("文件上传", reason, null);
                 throw fadadaError(reason);
             }
         } catch (BusinessException exception) {
             throw exception;
-        } catch (RestClientException exception) {
-            String reason = "文件上传失败：" + transportFailureReason(exception);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw fadadaError("文件上传被中断");
+        } catch (java.util.concurrent.TimeoutException exception) {
+            sendFailureAlert("文件上传", "文件上传超时", null);
+            throw fadadaError("文件上传超时");
+        } catch (java.util.concurrent.ExecutionException | IllegalArgumentException exception) {
+            String reason = "文件上传失败：" + transportFailureReason(new RestClientException("文件传输失败", exception));
             // 预签名地址含临时凭证，告警仅记录操作名称。
             sendFailureAlert("文件上传", reason, null);
             throw fadadaError(reason);
+        } finally {
+            if (transfer != null && !transfer.isDone()) transfer.cancel(true);
         }
     }
 

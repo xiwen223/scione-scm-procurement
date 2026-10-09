@@ -62,6 +62,8 @@ public class ContractDetailResponse {
     // 状态信息
     private Integer status;
     private String statusText;
+    private String signLaunchState;
+    private String signLaunchError;
 
     // 作废信息（选填的原因 + 作废时间），详情页在状态为「取消」时展示
     private String cancelReason;
@@ -134,6 +136,8 @@ public class ContractDetailResponse {
 
         dto.setStatus(contract.getStatus().getCode());
         dto.setStatusText(contract.getStatus().getDesc());
+        dto.setSignLaunchState(contract.getSignLaunchState());
+        dto.setSignLaunchError(contract.getSignLaunchError());
         dto.setCancelReason(contract.getCancelReason());
         dto.setCancelTime(contract.getCancelTime());
 

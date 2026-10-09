@@ -52,7 +52,35 @@ public class ContractUpdateService {
     /** 统一保存合同主信息、折扣及商品明细，所有变更在同一事务提交。 */
     @Transactional
     public ContractUpdateResponse updateContract(Long contractId, ContractUpdateRequest request, String operatorEmail) {
-        return updateContractInternal(contractId, request, operatorEmail, "修改合同");
+        String operationDesc = isDiscountOnlyRequest(request)
+                ? "修改合同折扣" : "修改合同";
+        return updateContractInternal(contractId, request, operatorEmail, operationDesc);
+    }
+
+    private boolean isDiscountOnlyRequest(ContractUpdateRequest request) {
+        return request.getDiscountedAmount() != null
+                && request.getOriginalAmount() == null
+                && !StringUtils.hasText(request.getContractNo())
+                && request.getContractType() == null
+                && !StringUtils.hasText(request.getContractName())
+                && request.getBuyerCompanyId() == null
+                && !StringUtils.hasText(request.getSupplierName())
+                && !StringUtils.hasText(request.getSupplierAddress())
+                && !StringUtils.hasText(request.getContactPerson())
+                && !StringUtils.hasText(request.getSupplierPhone())
+                && !StringUtils.hasText(request.getSupplierCreditCode())
+                && !StringUtils.hasText(request.getSupplierBankAccount())
+                && !StringUtils.hasText(request.getSupplierBankName())
+                && !StringUtils.hasText(request.getPrepayPercent())
+                && !StringUtils.hasText(request.getSettlementMethod())
+                && !StringUtils.hasText(request.getBuyerCompanyName())
+                && !StringUtils.hasText(request.getBuyerAddress())
+                && !StringUtils.hasText(request.getPostCode())
+                && !StringUtils.hasText(request.getBuyerPhone())
+                && !StringUtils.hasText(request.getFax())
+                && !StringUtils.hasText(request.getContractDate())
+                && !StringUtils.hasText(request.getDeliveryDate())
+                && (request.getItems() == null || request.getItems().isEmpty());
     }
 
     private ContractUpdateResponse updateContractInternal(Long contractId, ContractUpdateRequest request,
@@ -73,7 +101,7 @@ public class ContractUpdateService {
         log.info("加载合同成功：contractNo={}, status={}", oldContractNo, contract.getStatus().getDesc());
 
         // 2. 仅“创建”状态允许修改合同及折扣，避免签署中的文件与已提交签署任务不一致。
-        if (contract.getStatus() != ContractStatus.CREATED) {
+        if (contract.isSignLaunching() || contract.getStatus() != ContractStatus.CREATED) {
             log.warn("合同状态不允许修改：contractNo={}, status={}", oldContractNo, contract.getStatus().getDesc());
             throw new BusinessException(ResultCode.CONTRACT_STATUS_NOT_ALLOWED,
                     "合同状态为【" + contract.getStatus().getDesc() + "】，不允许修改");

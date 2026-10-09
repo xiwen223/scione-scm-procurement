@@ -6,7 +6,6 @@ import com.scione.scm.bill.application.dto.ContractCancelRequest;
 import com.scione.scm.bill.application.port.ContractFileStore;
 import com.scione.scm.bill.application.port.ContractPdfConverter;
 import com.scione.scm.bill.application.port.ContractTemplateService;
-import com.scione.scm.bill.application.port.LingxingSupplierClient;
 import com.scione.scm.bill.config.FadadaOpenApiProperties;
 import com.scione.scm.bill.domain.company.BuyerCompany;
 import com.scione.scm.bill.domain.company.BuyerCompanyRepository;
@@ -14,8 +13,6 @@ import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractOperationLog;
 import com.scione.scm.bill.domain.contract.ContractRepository;
 import com.scione.scm.bill.domain.contract.ContractStatus;
-import com.scione.scm.bill.domain.posync.PoSyncRecord;
-import com.scione.scm.bill.domain.posync.PoSyncRepository;
 import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
 import com.scione.scm.bill.infrastructure.fadada.FadadaAlertContext;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -26,7 +23,6 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 
 /** 合同签署阶段操作。 */
@@ -38,23 +34,37 @@ public class ContractSignAppService {
 
     private final ContractRepository contractRepository;
     private final BuyerCompanyRepository buyerCompanyRepository;
-    private final PoSyncRepository poSyncRepository;
-    private final LingxingSupplierClient lingxingSupplierClient;
-    /** 签署前复核与「同步领星数据」弹窗共用同一套字段口径，避免两处算法漂移。 */
-    private final ContractLingxingSyncService contractLingxingSyncService;
     private final ContractFileStore contractFileStore;
     private final ContractPdfConverter contractPdfConverter;
     private final ContractTemplateService contractTemplateService;
     private final FadadaOpenApiClient fadadaOpenApiClient;
     private final FadadaOpenApiProperties fadadaProperties;
+    private final com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractMapper contractMapper;
+
+    /** 仅做本地校验和持久化排队，外部调用由独立后台执行器处理。 */
+    public StartSignResult submitStartSign(Long contractId, String operatorEmail) {
+        Contract contract = contractRepository.findById(contractId)
+                .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
+        if (contract.getStatus() != ContractStatus.CREATED || contract.isSignLaunching()) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "合同正在发起签署或状态不允许，请勿重复提交");
+        }
+        BuyerCompany buyer = buyerCompanyRepository.findById(contract.getBuyerCompanyId())
+                .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同关联需方不存在"));
+        assertFreeSignBusinessIdConfigured(contract, buyer, operatorEmail);
+        validateSigningData(contract, buyer, contract.getSupplierPhone(), contract.getSupplierCreditCode());
+        if (contractMapper.enqueueSign(contractId, operatorEmail) != 1) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "合同状态已变化或正在发起签署，请刷新后查看");
+        }
+        return new StartSignResult(false, false, List.of());
+    }
 
     @FadadaAlertContext(FadadaAlertContext.Type.CONTRACT)
     public StartSignResult startSign(Long contractId, String operatorEmail, boolean forceConfirm) {
         log.info("开始发起合同签署：contractId={}, forceConfirm={}, operator={}", contractId, forceConfirm, operatorEmail);
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
-        if (contract.getStatus() != ContractStatus.CREATED) {
-            throw new BusinessException(ResultCode.PARAM_ERROR, "仅创建状态的合同可发起签署");
+        if (contract.getStatus() != ContractStatus.SIGNING || !"RUNNING".equals(contract.getSignLaunchState())) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "签署后台任务状态不正确，无法执行");
         }
         log.info("签署前合同状态校验通过：contractNo={}, status={}", contract.getContractNo(), contract.getStatus());
         BuyerCompany buyer = buyerCompanyRepository.findById(contract.getBuyerCompanyId())
@@ -74,7 +84,6 @@ public class ContractSignAppService {
         log.info("签署使用合同已保存的供方信息，跳过领星复核：contractNo={}", contract.getContractNo());
         validateSigningData(contract, buyer, signingSupplierPhone, signingSupplierCreditCode);
         log.info("签署前需方印章与免验证签配置校验通过：contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
-        List<String> differences = List.of();
 
         // 签署前始终依据当前合同数据生成新文件，确保折扣等延迟保存的金额已进入法大大签署文档。
         byte[] fileBytes = loadOrGenerateContractPdfForSigning(contract);
@@ -92,7 +101,9 @@ public class ContractSignAppService {
         log.info("开始创建法大大签署任务：contractNo={}, buyerSealId={}, freeSignCode={}, supplierName={}, supplierCreditCodePresent={}, supplierPhone={}",
                 contract.getContractNo(), mask(buyer.getFadadaSealId()), mask(buyer.getFadadaFreeSignBusinessId()), contract.getSupplierName(),
                 StringUtils.hasText(signingSupplierCreditCode), mask(signingSupplierPhone));
-        FadadaOpenApiClient.SignTask task = fadadaOpenApiClient.createPurchaseContractTask(
+        FadadaOpenApiClient.SignTask task;
+        try {
+        task = fadadaOpenApiClient.createPurchaseContractTask(
                 new FadadaOpenApiClient.PurchaseContractTaskRequest(
                         "采购合同-" + contract.getContractNo(), file.fileId(), contract.getContractNo(),
                         fadadaProperties.getNotifyUrl(), buyer.getCompanyName(), buyer.getCreditCode(), buyer.getOpenCorpId(), buyer.getEntityId(),
@@ -100,43 +111,19 @@ public class ContractSignAppService {
                         contract.getSupplierName(), signingSupplierCreditCode, signingSupplierPhone, file.fileTotalPages()));
         log.info("法大大双企业签署任务创建成功：contractNo={}, signTaskId={}", contract.getContractNo(), task.signTaskId());
         contractRepository.markSigning(contractId, task.signTaskId());
+        } catch (Exception ex) {
+            String message = "创建法大大任务结果需核对：" + ex.getMessage();
+            contractMapper.failSign(contractId, "UNKNOWN", message.substring(0, Math.min(1000, message.length())));
+            throw ex;
+        }
         log.info("合同状态已更新为签署中：contractNo={}, signTaskId={}", contract.getContractNo(), task.signTaskId());
         logCreatedSignTaskStatus(contract.getContractNo(), task.signTaskId());
         String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
         contractRepository.saveOperationLog(ContractOperationLog.ofStartSign(
                 contractId, contract.getContractNo(), operator, operator, task.signTaskId(),
-                differences.isEmpty() ? null : "领星差异=" + String.join(" | ", differences)
-                        + "；操作人确认差异后仍发起签署"));
+                null));
         log.info("发起签署操作日志已写入：contractNo={}, signTaskId={}", contract.getContractNo(), task.signTaskId());
-        return new StartSignResult(true, false, differences);
-    }
-
-    /**
-     * 签署前领星复核。字段比对（含商品明细全量字段、供方扩展字段、默认收款账户）统一交给
-     * {@link ContractLingxingSyncService#describeDifferences}：它取领星实时数据、
-     * 价格按「含税单价 ÷ (1 + 税率)」折成不含税后比对，口径与「同步领星数据」弹窗完全一致。
-     * 这里只补两行「查不到」的提示，并保持与签署流程一致的阻断语义。
-     *
-     * <p>复核失败（{@code skippedReason != null}）时不再补「未查询到」，改为补一行失败说明，
-     * 并且**不再调用领星**：不可用还继续请求，只会把签署按钮多拖 20 多秒重试。</p>
-     */
-    private List<String> findLingxingDifferences(Contract contract, PoSyncRecord po,
-                                                 LingxingSupplierClient.SupplierProfile latestSupplier,
-                                                 String skippedReason) {
-        List<String> differences = new ArrayList<>();
-        if (skippedReason != null) {
-            differences.add(skippedReason);
-            return differences;
-        }
-        if (po == null) {
-            differences.add("领星采购单：未查询到");
-        }
-        if (latestSupplier == null) {
-            differences.add("领星供应商资料：未查询到");
-        }
-        differences.addAll(contractLingxingSyncService.describeDifferences(contract, latestSupplier));
-        // 本地快照与领星实时同时查不到时上面会各写一行，去重后再落日志
-        return new ArrayList<>(new LinkedHashSet<>(differences));
+        return new StartSignResult(true, false, List.of());
     }
 
     private byte[] generateLatestContractPdfForSigning(Contract contract) {
@@ -185,6 +172,9 @@ public class ContractSignAppService {
     public void cancel(Long contractId, ContractCancelRequest request, String operatorEmail) {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
+        if (contract.isSignLaunching()) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "合同正在发起签署或结果待核对，暂不能作废");
+        }
         if (contract.getStatus() != ContractStatus.CREATED
                 && contract.getStatus() != ContractStatus.SIGNING
                 && contract.getStatus() != ContractStatus.EXECUTING) {
@@ -283,6 +273,8 @@ public class ContractSignAppService {
     }
 
     public record StartSignResult(boolean started, boolean needConfirm, List<String> differences) {
+        @com.fasterxml.jackson.annotation.JsonProperty("queued")
+        public boolean queued() { return !started && !needConfirm; }
     }
 
     /** 查询法大大签署任务状态，用于合同签署联调与页面展示。 */
@@ -355,6 +347,25 @@ public class ContractSignAppService {
         String taskStatus = detail.path("signTaskStatus").asText();
         boolean finished = "task_finished".equalsIgnoreCase(taskStatus);
         boolean updated = false;
+        if (!finished && contract.getStatus() == ContractStatus.SIGNING && contract.isSignLaunching()
+                && "sign_progress".equalsIgnoreCase(taskStatus)) {
+            for (JsonNode actor : detail.path("actors")) {
+                String actorId = actor.path("actorInfo").path("actorId").asText(actor.path("actorId").asText());
+                if (("BUYER_" + contract.getContractNo()).equals(actorId)
+                        && "signed".equalsIgnoreCase(actor.path("signStatus").asText())) {
+                    updated = contractMapper.confirmSignLaunch(contractId, contract.getFadadaTaskId()) > 0;
+                    if (updated) {
+                        String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
+                        contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(contractId,
+                                contract.getContractNo(), operator, operator, "我方签署状态兜底同步",
+                                "法大大确认我方已签署；清除发起签署中子状态；任务ID=" + contract.getFadadaTaskId()));
+                        log.info("我方签署已确认，兜底清除发起签署中子状态：contractId={}, contractNo={}, taskId={}",
+                                contractId, contract.getContractNo(), contract.getFadadaTaskId());
+                    }
+                    break;
+                }
+            }
+        }
         if (finished && contract.getStatus() == ContractStatus.SIGNING) {
             contractRepository.markExecuting(contract.getId());
             String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
@@ -465,6 +476,9 @@ public class ContractSignAppService {
     public void urgeSign(Long contractId, String operatorEmail) {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
+        if (contract.isSignLaunching()) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "我方正在签署或结果待核对，暂不能催办供方");
+        }
         if (contract.getStatus() != ContractStatus.SIGNING) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "仅签署中状态的合同可催签");
         }

@@ -27,6 +27,8 @@ public class ContractListItemResponse {
 
     private Integer status;
     private String statusText;
+    private String signLaunchState;
+    private String signLaunchError;
 
     private Integer createType;
     private String createTypeText;
@@ -68,6 +70,8 @@ public class ContractListItemResponse {
         dto.setContractDate(contract.getContractDate());
         dto.setStatus(contract.getStatus().getCode());
         dto.setStatusText(contract.getStatus().getDesc());
+        dto.setSignLaunchState(contract.getSignLaunchState());
+        dto.setSignLaunchError(contract.getSignLaunchError());
         dto.setCreateType(contract.getCreateType());
         dto.setCreateTypeText(contract.getCreateType() == 1 ? "自动创建" : "手动创建");
         dto.setCreateTime(contract.getCreateTime());

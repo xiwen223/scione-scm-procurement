@@ -61,10 +61,11 @@ public class ContractController {
 
     @PostMapping("/auto-create/trigger")
     @Operation(summary = "手动触发合同自动创建",
-            description = "扫描 po_status=1 且 has_contract=0 的 PO，自动生成合同")
+            description = "同步领星 PO，并为本次同步的待下单 PO 自动创建合同；重复合同由数据库唯一约束拦截")
     public ApiResponse<PoSyncAppService.SyncResult> triggerAutoCreate() {
-        // 与 5 分钟原生调度使用同一条链路：先从领星拉取，再仅处理本次状态=1 的 PO。
-        return ApiResponse.success(poSyncAppService.pullAndSync());
+        // 与定时任务共用同步链路，不再对创建任务加命名锁。
+        PoSyncAppService.SyncResult result = poSyncAppService.pullAndSync();
+        return ApiResponse.success(result);
     }
 
     /** 手动创建前检查 PO 状态；非待下单只提示，用户仍可继续创建。 */
@@ -316,7 +317,7 @@ public class ContractController {
             @RequestParam(value = "forceConfirm", defaultValue = "false") boolean forceConfirm,
             @RequestHeader("X-User-Email") String userEmail) {
         try {
-            return ApiResponse.success(contractSignAppService.startSign(contractId, userEmail, forceConfirm));
+            return ApiResponse.success(contractSignAppService.submitStartSign(contractId, userEmail));
         } catch (BusinessException ex) {
             return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
         }

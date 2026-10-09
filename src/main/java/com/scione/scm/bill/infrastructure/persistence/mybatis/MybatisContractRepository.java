@@ -3,8 +3,10 @@ package com.scione.scm.bill.infrastructure.persistence.mybatis;
 import com.scione.scm.bill.application.dto.ContractListQueryRequest;
 import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractItem;
+import com.scione.scm.bill.domain.contract.ActiveContractRef;
 import com.scione.scm.bill.domain.contract.ContractOperationLog;
 import com.scione.scm.bill.domain.contract.ContractRepository;
+import com.scione.scm.bill.domain.contract.ContractStatus;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractItemMapper;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractMapper;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ProcurementOperationLogMapper;
@@ -87,6 +89,17 @@ public class MybatisContractRepository implements ContractRepository {
     }
 
     @Override
+    public Optional<ActiveContractRef> findActiveByPurchaseOrderNo(String purchaseOrderNo) {
+        ContractPO po = contractMapper.findActiveByPurchaseOrderNo(purchaseOrderNo);
+        if (po == null) {
+            return Optional.empty();
+        }
+        int status = po.getStatus() == null ? ContractStatus.CREATED.getCode() : po.getStatus();
+        return Optional.of(new ActiveContractRef(po.getId(), po.getContractNo(), status,
+                ContractStatus.of(status).getDesc()));
+    }
+
+    @Override
     public boolean existsContractNo(String contractNo, long excludeContractId) {
         return contractMapper.countByContractNoExcludingId(contractNo, excludeContractId) > 0;
     }
@@ -121,7 +134,7 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
                 po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
-                po.getCancelReason(), po.getCancelTime(),
+                po.getCancelReason(), po.getCancelTime(), po.getSignLaunchState(), po.getSignLaunchError(),
                 items
         ));
     }
@@ -143,7 +156,11 @@ public class MybatisContractRepository implements ContractRepository {
 
     @Override
     public void updatePdfUrl(long contractId, String pdfUrl) {
-        contractMapper.updatePdfUrl(contractId, pdfUrl);
+        if (contractMapper.updatePdfUrl(contractId, pdfUrl) != 1) {
+            throw new com.scione.scm.bill.common.BusinessException(
+                    com.scione.scm.bill.common.ResultCode.CONTRACT_STATUS_NOT_ALLOWED,
+                    "合同状态已变化，PDF地址未保存：contractId=" + contractId);
+        }
     }
 
     @Override
@@ -357,7 +374,7 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
                 po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
-                po.getCancelReason(), po.getCancelTime(),
+                po.getCancelReason(), po.getCancelTime(), po.getSignLaunchState(), po.getSignLaunchError(),
                 items
         ));
     }
@@ -423,7 +440,7 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getCreatorId(), po.getCreatorName(), po.getCreateType(),
                 po.getContractPdfUrl(), po.getSignedPdfUrl(), po.getFadadaTaskId(),
                 po.getSignStartTime(), po.getSignCompleteTime(), po.getCreateTime(), po.getUpdateTime(),
-                po.getCancelReason(), po.getCancelTime(),
+                po.getCancelReason(), po.getCancelTime(), po.getSignLaunchState(), po.getSignLaunchError(),
                 null  // items=null
         );
     }
@@ -433,7 +450,10 @@ public class MybatisContractRepository implements ContractRepository {
     public void update(Contract contract) {
         // 1. 更新合同主表
         ContractPO po = toPO(contract);
-        contractMapper.updateById(po);
+        if (contractMapper.updateById(po) != 1) {
+            throw new com.scione.scm.bill.common.BusinessException(
+                    com.scione.scm.bill.common.ResultCode.PARAM_ERROR, "合同状态已变化或正在发起签署，不允许修改");
+        }
         log.info("合同主表更新成功：contractId={}", contract.getId());
 
         // 2. 更新明细

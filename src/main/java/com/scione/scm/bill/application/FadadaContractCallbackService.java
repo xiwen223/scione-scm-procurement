@@ -22,6 +22,7 @@ public class FadadaContractCallbackService {
     private final FadadaRequestSigner signer;
     private final ObjectMapper objectMapper;
     private final ContractRepository contractRepository;
+    private final com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractMapper contractMapper;
 
     public void handle(Map<String, String> headers, String bizContent) throws Exception {
         String appId = headers.get("X-FASC-App-Id");
@@ -33,43 +34,11 @@ public class FadadaContractCallbackService {
         for (String key : new String[]{"X-FASC-App-Id","X-FASC-Sign-Type","X-FASC-Timestamp","X-FASC-Nonce","X-FASC-Event"}) params.put(key, headers.get(key));
         params.put("bizContent", bizContent == null ? "" : bizContent);
         if (!signer.sign(params, timestamp, properties.getAppSecret()).equalsIgnoreCase(signature)) throw new IllegalArgumentException("法大大回调验签失败");
-        JsonNode body = businessNode(objectMapper.readTree(bizContent));
-        String contractNo = contractNo(body);
-        Contract contract = findContract(body, contractNo);
-        if (contract == null) {
-            log.warn("法大大合同回调无法关联合同：event={}, transReferenceIdPresent={}, businessNoPresent={}",
-                    event, body.hasNonNull("transReferenceId"), body.hasNonNull("businessNo"));
-            return;
-        }
-        contractNo = contract.getContractNo();
-        log.info("法大大合同回调已关联合同：event={}, contractId={}, contractNo={}, currentStatus={}",
-                event, contract.getId(), contractNo, contract.getStatus());
-        String details = "法大大事件=" + event + "；任务ID=" + body.path("signTaskId").asText()
-                + "；事件时间=" + body.path("eventTime").asText();
-        String reason = firstText(body, "signFailedReason", "signRejectReason", "terminationNote", "reason");
-        if (!reason.isBlank()) details += "；原因=" + reason;
-        if (isSignTaskFinished(event, body) && contract.getStatus() == ContractStatus.SIGNING) {
-            contractRepository.markExecuting(contract.getId());
-            log.info("法大大签署完成，合同已更新为履行中：contractId={}, contractNo={}, event={}, taskStatus={}",
-                    contract.getId(), contractNo, event, body.path("signTaskStatus").asText());
-            details += "；合同状态：签署中 → 履行中";
-        }
-        if ("sign-task-abolish".equals(event) && contract.getStatus() == ContractStatus.EXECUTING) {
-            contractRepository.markFadadaAbolished(contract.getId(), reason);
-            details += "；解除协议已完成；合同状态：履行中 → 取消";
-            log.info("法大大作废协议已完成，合同已更新为取消：contractId={}, contractNo={}", contract.getId(), contractNo);
-        }
-        ContractOperationLog log = ContractOperationLog.ofUpdate(contract.getId(), contractNo, "fadada", "法大大回调", "签署任务回调", details);
-        contractRepository.saveOperationLog(log);
+        handleVerifiedEvent(event, bizContent);
     }
 
     /** 已由统一回调控制器完成验签后的合同事件处理。 */
     public void handleVerifiedEvent(String event, String bizContent) throws Exception {
-        Map<String, String> headers = new LinkedHashMap<>();
-        headers.put("X-FASC-App-Id", properties.getAppId());
-        headers.put("X-FASC-Timestamp", "0");
-        headers.put("X-FASC-Sign", "verified");
-        headers.put("X-FASC-Event", event);
         JsonNode body = businessNode(objectMapper.readTree(bizContent));
         String contractNo = contractNo(body);
         Contract contract = findContract(body, contractNo);
@@ -79,6 +48,7 @@ public class FadadaContractCallbackService {
             return;
         }
         contractNo = contract.getContractNo();
+        confirmBuyerSign(event, body, contract);
         log.info("法大大合同回调已关联合同：event={}, contractId={}, contractNo={}, currentStatus={}",
                 event, contract.getId(), contractNo, contract.getStatus());
         String details = "法大大事件=" + event + "；任务ID=" + body.path("signTaskId").asText()
@@ -98,6 +68,19 @@ public class FadadaContractCallbackService {
         }
         contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(
                 contract.getId(), contractNo, "fadada", "法大大回调", "签署任务回调", details));
+    }
+
+    /** 我方签署完成事件清除子状态，整体任务完成事件仍按原逻辑转履行中。 */
+    private void confirmBuyerSign(String event, JsonNode body, Contract contract) {
+        String taskId = body.path("signTaskId").asText("");
+        String actorId = body.path("actorId").asText(body.path("actorInfo").path("actorId").asText(""));
+        boolean buyerSigned = "sign-task-signed".equals(event)
+                && ("BUYER_" + contract.getContractNo()).equals(actorId);
+        if ((buyerSigned || isSignTaskFinished(event, body)) && !taskId.isBlank()) {
+            int updated = contractMapper.confirmSignLaunch(contract.getId(), taskId);
+            if (updated > 0) log.info("我方签署回调已确认，清除正在签署子状态：contractNo={}, taskId={}",
+                    contract.getContractNo(), taskId);
+        }
     }
 
     private String firstText(JsonNode body, String... fields) {

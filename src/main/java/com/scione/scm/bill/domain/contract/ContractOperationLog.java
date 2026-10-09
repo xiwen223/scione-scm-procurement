@@ -16,6 +16,7 @@ public class ContractOperationLog {
     public static final String TYPE_CANCEL = "CANCEL";
     public static final String TYPE_STATUS_CHANGE = "STATUS_CHANGE";
     public static final String TYPE_SKIP_CREATE = "SKIP_CREATE";
+    public static final String TYPE_DOWNLOAD_FAILED = "DOWNLOAD_FAILED";
     /** 发起签署被前置校验拦截（如我司未配置免验证签场景码），合同状态保持不变、未调用法大大。 */
     public static final String TYPE_START_SIGN_BLOCKED = "START_SIGN_BLOCKED";
 

@@ -151,7 +151,7 @@ public class ContractLingxingSyncService {
                                                         String operatorEmail) {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
-        if (contract.getStatus() != ContractStatus.CREATED) {
+        if (contract.isSignLaunching() || contract.getStatus() != ContractStatus.CREATED) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "仅创建状态的合同可同步领星数据");
         }
         Set<String> selectedKeys = request == null || request.selectedFieldKeys() == null

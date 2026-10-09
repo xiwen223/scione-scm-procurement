@@ -58,6 +58,13 @@ public class Contract {
     /** 实际使用的合同模板 ID，关联 contract_template.id。 */
     private Long templateId;
     private ContractStatus status;
+    private String signLaunchState;
+    private String signLaunchError;
+
+    public boolean isSignLaunching() {
+        return "QUEUED".equals(signLaunchState) || "RUNNING".equals(signLaunchState) || "WAIT_CALLBACK".equals(signLaunchState)
+                || "UNKNOWN".equals(signLaunchState);
+    }
     private String creatorId;
     private String creatorName;
     private Integer createType;
@@ -150,7 +157,7 @@ public class Contract {
                                      String contractPdfUrl, String signedPdfUrl, String fadadaTaskId,
                                      LocalDateTime signStartTime, LocalDateTime signCompleteTime,
                                      LocalDateTime createTime, LocalDateTime updateTime,
-                                     String cancelReason, LocalDateTime cancelTime,
+                                     String cancelReason, LocalDateTime cancelTime, String signLaunchState, String signLaunchError,
                                      List<ContractItem> items) {
         Contract c = new Contract();
         c.id = id;
@@ -196,6 +203,8 @@ public class Contract {
         c.updateTime = updateTime;
         c.cancelReason = cancelReason;
         c.cancelTime = cancelTime;
+        c.signLaunchState = signLaunchState;
+        c.signLaunchError = signLaunchError;
         if (items != null) {
             c.items.addAll(items);
         }

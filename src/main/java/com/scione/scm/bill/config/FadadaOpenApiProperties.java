@@ -27,6 +27,10 @@ public class FadadaOpenApiProperties {
     private String apiSubVersion = "5.1";
     private Duration connectTimeout = Duration.ofSeconds(10);
     private Duration readTimeout = Duration.ofSeconds(60);
+    /** 文件传输独立超时，不影响普通 API 请求。 */
+    private Duration fileConnectTimeout = Duration.ofSeconds(60);
+    private Duration fileUploadTimeout = Duration.ofMinutes(30);
+    private Duration fileDownloadTimeout = Duration.ofMinutes(30);
     private Duration tokenTtl = Duration.ofSeconds(7200);
     private Duration tokenRefreshAhead = Duration.ofSeconds(60);
     private int maxAttempts = 3;

@@ -11,6 +11,8 @@ import java.time.LocalDateTime;
  */
 @Data
 public class ContractPO {
+    private String signLaunchState;
+    private String signLaunchError;
     private Long id;
     private String contractNo;
     private String contractName;

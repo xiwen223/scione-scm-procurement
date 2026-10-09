@@ -28,6 +28,17 @@ public interface ContractRepository {
     boolean existsActiveByPurchaseOrderNo(String purchaseOrderNo);
 
     /**
+     * 查询指定采购单号名下已有的「有效合同」（未取消、未逻辑删除），取最新一条。
+     *
+     * <p>与 {@link #existsActiveByPurchaseOrderNo(String)} 判定口径一致（status != 5 且 is_deleted = 0），
+     * 但额外返回合同编号与状态，用于在填单阶段就给出「已存在合同 HTxxxx（签署中）」这类可读提示。</p>
+     *
+     * @param purchaseOrderNo 采购单号
+     * @return 有效合同引用；没有则 empty
+     */
+    Optional<ActiveContractRef> findActiveByPurchaseOrderNo(String purchaseOrderNo);
+
+    /**
      * 按合同编号查询（用于 generateContractNo 去重）。
      *
      * @param contractNo 合同编号

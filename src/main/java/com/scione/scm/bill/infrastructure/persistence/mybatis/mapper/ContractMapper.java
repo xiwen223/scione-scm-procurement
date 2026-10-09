@@ -11,6 +11,33 @@ import java.math.BigDecimal;
  * 合同主表 Mapper。
  */
 public interface ContractMapper {
+    /** 只回写模板关联；条件更新避免覆盖并发修改的合同类型或模板。 */
+    @org.apache.ibatis.annotations.Update("UPDATE contract c JOIN contract_template t ON t.id=#{newTemplateId} SET c.template_id=t.id,c.update_time=NOW() WHERE c.id=#{id} AND c.is_deleted=0 AND c.contract_type=#{contractType} AND c.template_id <=> #{oldTemplateId} AND t.contract_type=c.contract_type AND t.is_default=1 AND t.is_active=1 AND t.is_deleted=0")
+    int rebindDefaultTemplate(@Param("id") Long id, @Param("contractType") Integer contractType,
+                             @Param("oldTemplateId") Long oldTemplateId, @Param("newTemplateId") Long newTemplateId);
+    @org.apache.ibatis.annotations.Update("UPDATE contract SET status=2,sign_launch_state='QUEUED', sign_launch_error=NULL, sign_launch_operator=#{operator}, update_time=NOW() WHERE id=#{id} AND status=1 AND is_deleted=0 AND COALESCE(sign_launch_state,'') NOT IN ('QUEUED','RUNNING','WAIT_CALLBACK','UNKNOWN')")
+    int enqueueSign(@Param("id") Long id, @Param("operator") String operator);
+
+    @org.apache.ibatis.annotations.Select("SELECT id FROM contract WHERE sign_launch_state='QUEUED' AND status=2 AND is_deleted=0 ORDER BY update_time,id LIMIT 4")
+    List<Long> queuedSigns();
+
+    @org.apache.ibatis.annotations.Select("SELECT id FROM contract WHERE sign_launch_state='WAIT_CALLBACK' AND status=2 AND is_deleted=0 AND fadada_task_id IS NOT NULL ORDER BY update_time,id LIMIT 4")
+    List<Long> waitingSignCallbacks();
+
+    @org.apache.ibatis.annotations.Update("UPDATE contract SET update_time=NOW() WHERE id=#{id} AND status=2 AND sign_launch_state='WAIT_CALLBACK'")
+    int touchWaitingSign(@Param("id") Long id);
+
+    @org.apache.ibatis.annotations.Update("UPDATE contract SET sign_launch_state='RUNNING',update_time=NOW() WHERE id=#{id} AND status=2 AND is_deleted=0 AND sign_launch_state='QUEUED'")
+    int claimSign(@Param("id") Long id);
+
+    @org.apache.ibatis.annotations.Select("SELECT sign_launch_operator FROM contract WHERE id=#{id}")
+    String signOperator(@Param("id") Long id);
+
+    @org.apache.ibatis.annotations.Update("UPDATE contract SET status=CASE WHEN #{state}='FAILED' THEN 1 ELSE status END,sign_launch_state=#{state},sign_launch_error=#{error},update_time=NOW() WHERE id=#{id} AND status=2 AND sign_launch_state='RUNNING'")
+    int failSign(@Param("id") Long id, @Param("state") String state, @Param("error") String error);
+
+    @org.apache.ibatis.annotations.Update("UPDATE contract SET fadada_task_id=#{taskId},sign_launch_state='DONE',sign_launch_error=NULL,sign_start_time=COALESCE(sign_start_time,NOW()),update_time=NOW() WHERE id=#{id} AND status=2 AND is_deleted=0 AND sign_launch_state IN ('RUNNING','WAIT_CALLBACK','UNKNOWN') AND (fadada_task_id IS NULL OR fadada_task_id=#{taskId})")
+    int confirmSignLaunch(@Param("id") Long id, @Param("taskId") String taskId);
 
     /**
      * 插入合同（回填主键 id）。
@@ -24,6 +51,14 @@ public interface ContractMapper {
      * @return 存在返回 1，不存在返回 0
      */
     int existsActiveByPurchaseOrderNo(@Param("purchaseOrderNo") String purchaseOrderNo);
+
+    /**
+     * 查询指定采购单号名下最新的有效合同（只取 id / contract_no / status 三列）。
+     *
+     * @param purchaseOrderNo 采购单号
+     * @return 合同 PO（只填三列）；没有则 null
+     */
+    ContractPO findActiveByPurchaseOrderNo(@Param("purchaseOrderNo") String purchaseOrderNo);
 
     /**
      * 按合同编号查询。

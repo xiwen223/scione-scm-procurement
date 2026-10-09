@@ -52,8 +52,13 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     private static final String PURCHASE_ORDER_LIST_PATH =
             "/erp/sc/routing/data/local_inventory/purchaseOrderList";
     private static final int PURCHASE_ORDER_PAGE_SIZE = 500;
-    /** batchGetProductInfo 单次请求最多携带的 SKU 数；合同明细超过这个量时自动分批。 */
-    private static final int PRODUCT_BATCH_SIZE = 50;
+    /**
+     * batchGetProductInfo 单次请求最多携带的 SKU 数；合同明细超过这个量时自动分批。
+     *
+     * <p>领星官方契约：{@code skus} / {@code productIds} / {@code sku_identifiers} 三选一，
+     * 上限均为 100（令牌桶容量 1）。取满上限可以减少请求次数、降低触发频控的概率。</p>
+     */
+    private static final int PRODUCT_BATCH_SIZE = 100;
     private static final DateTimeFormatter LINGXING_DATE_TIME =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter LINGXING_DATE =

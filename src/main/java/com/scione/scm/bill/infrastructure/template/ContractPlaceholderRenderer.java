@@ -12,6 +12,7 @@ import org.apache.poi.ss.usermodel.CellCopyPolicy;
 import org.apache.poi.ss.usermodel.CellStyle;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.ss.usermodel.HorizontalAlignment;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
@@ -356,12 +357,18 @@ final class ContractPlaceholderRenderer {
 
     private void styleAndFit(Cell cell, String original, Map<String, CellStyle> styles) {
         boolean price = original.equals("${items.unitPriceWithoutTax}") || original.equals("${items.unitPrice}");
-        String key = cell.getCellStyle().getIndex() + ":" + price;
+        // 数量、单价、金额这类填充值是数字，模板里多是「常规」对齐；通用格式的数字在导出时靠右，
+        // 与模板中已经居中的合计行（原价/折扣/总计）并排看就是参差不齐。这里统一改成水平居中，
+        // 模板里显式设过左/右对齐的单元格不动，避免覆盖模板作者的选择。
+        boolean centered = cell.getCellType() == CellType.NUMERIC
+                && cell.getCellStyle().getAlignment() == HorizontalAlignment.GENERAL;
+        String key = cell.getCellStyle().getIndex() + ":" + price + ":" + centered;
         CellStyle style = styles.computeIfAbsent(key, ignored -> {
             CellStyle copy = cell.getSheet().getWorkbook().createCellStyle();
             copy.cloneStyleFrom(cell.getCellStyle());
             copy.setWrapText(true);
             copy.setShrinkToFit(false);
+            if (centered) copy.setAlignment(HorizontalAlignment.CENTER);
             if (price) {
                 String format = copy.getDataFormatString();
                 String four = format.replaceAll("\\.0{1,3}(?!0)", ".0000");

@@ -11,8 +11,8 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 手动创建合同的进度看板（纯内存，单实例）。
  *
- * <p>创建合同是一个同步长请求：最慢的是 {@code enrichContractItemsWithImages} 按 SKU 逐个查领星商品图，
- * 几十个 SKU 就要几十秒，而这期间前端收不到任何中间状态，很容易让人以为页面卡死。
+ * <p>创建合同是一个同步长请求：最慢的是从领星批量补商品图、以及渲染首版 PDF，
+ * 而这期间前端收不到任何中间状态，很容易让人以为页面卡死。
  * 这里让前端发起创建时带上一个 {@code progressKey}，后端在关键节点更新进度，
  * 前端并行轮询 {@code GET /api/v1/contracts/create/progress} 把「第几步 / 在做什么」用小字显示出来。
  *
@@ -31,7 +31,7 @@ public class ContractCreateProgressTracker {
     public static final int STEP_VALIDATE = 1;
     /** 组装合同数据（编号、明细、手动补充字段）。 */
     public static final int STEP_ASSEMBLE = 2;
-    /** 按 SKU 从领星补商品图片，最慢的一步，文案里会带 i/N。 */
+    /** 从领星批量补商品图片，文案里会带本次待查的商品数。 */
     public static final int STEP_IMAGES = 3;
     /** 必填校验 + 落库 + 回写采购单标记。 */
     public static final int STEP_SAVE = 4;
