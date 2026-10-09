@@ -200,6 +200,8 @@
             delivery_date = #{deliveryDate},
             update_time = NOW()
         WHERE id = #{id}
+          AND status = 1
+          AND is_deleted = 0
     </update>
 
     <!-- 履行中的作废要走法大大解除协议，状态得等回调才变；用户填的作废原因先在这里落库，

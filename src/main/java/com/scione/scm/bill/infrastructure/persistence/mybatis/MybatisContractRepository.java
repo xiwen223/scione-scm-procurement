@@ -463,6 +463,13 @@ public class MybatisContractRepository implements ContractRepository {
     }
 
     @Override
+    public void updateMain(Contract contract) {
+        if (contractMapper.updateById(toPO(contract)) != 1) {
+            throw new IllegalStateException("合同状态已变更，无法更新合同");
+        }
+    }
+
+    @Override
     public void updateAmounts(Contract contract) {
         if (contractMapper.updateAmounts(contract.getId(), contract.getOriginalAmount(),
                 contract.getDiscountedAmount(), contract.getContractAmount()) != 1) {
@@ -474,7 +481,7 @@ public class MybatisContractRepository implements ContractRepository {
     @Override
     public void updateItemPricing(ContractItem item) {
         if (itemMapper.updatePricing(item.getId(), item.getQuantity(), item.getUnitPrice(), item.getAmount()) != 1) {
-            throw new IllegalStateException("合同明细不存在，无法更新");
+            throw new IllegalStateException("合同明细不存在或合同状态已变更，无法更新");
         }
         log.info("合同单条明细价格更新成功：itemId={}", item.getId());
     }

@@ -71,6 +71,9 @@
             unit_price = #{unitPrice},
             amount = #{amount}
         WHERE id = #{id}
+          AND EXISTS (SELECT 1 FROM contract c
+                      WHERE c.id = contract_item.contract_id
+                        AND c.status = 1 AND c.is_deleted = 0)
     </update>
 
     <!-- 详情查询补齐的历史明细图片回写；带空值条件，已有图片的行不会被覆盖 -->

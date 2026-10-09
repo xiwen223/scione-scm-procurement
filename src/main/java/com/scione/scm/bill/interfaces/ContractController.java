@@ -12,7 +12,6 @@ import com.scione.scm.bill.application.dto.ContractCreateRequest;
 import com.scione.scm.bill.application.dto.ContractCreateResponse;
 import com.scione.scm.bill.application.dto.ContractBatchDownloadRequest;
 import com.scione.scm.bill.application.dto.ContractDetailResponse;
-import com.scione.scm.bill.application.dto.ContractItemUpdateRequest;
 import com.scione.scm.bill.application.dto.ContractLingxingSyncDTO;
 import com.scione.scm.bill.application.dto.ContractListItemResponse;
 import com.scione.scm.bill.application.dto.ContractListQueryRequest;
@@ -200,7 +199,7 @@ public class ContractController {
     }
 
     @PutMapping("/{contractId}")
-    @Operation(summary = "修改合同", description = "修改合同信息（只更新传入的字段）；仅更新数据库，下载或发起签署时才生成最新合同文件")
+    @Operation(summary = "修改合同", description = "统一保存合同信息、折扣和商品数量/单价；仅更新发生变化的数据，下载或发起签署时才生成最新合同文件")
     public ApiResponse<ContractUpdateResponse> updateContract(
             @PathVariable Long contractId,
             @RequestBody @Validated ContractUpdateRequest request,
@@ -224,28 +223,6 @@ public class ContractController {
 
         } catch (RuntimeException ex) {
             log.error("修改合同发生未处理异常：contractId={}", contractId, ex);
-            return ApiResponse.fail(ResultCode.SYSTEM_ERROR.getCode(), ResultCode.SYSTEM_ERROR.getMessage());
-        }
-    }
-
-    @PutMapping("/{contractId}/items/{itemId}")
-    @Operation(summary = "修改合同明细", description = "仅创建状态合同可修改；修改后自动重算金额并只更新数据库，下载或发起签署时才生成最新合同文件")
-    public ApiResponse<ContractUpdateResponse> updateContractItem(
-            @PathVariable Long contractId,
-            @PathVariable Long itemId,
-            @RequestBody @Validated ContractItemUpdateRequest request,
-            @RequestHeader("X-User-Email") String userEmail) {
-        try {
-            return ApiResponse.success(contractUpdateService.updateContractItem(contractId, itemId, request, userEmail));
-        } catch (BusinessException ex) {
-            // 业务校验（合同/明细不存在、状态不允许修改等）把原因原样返回给用户
-            log.warn("修改合同明细校验未通过：contractId={}, itemId={}, reason={}", contractId, itemId, ex.getMessage());
-            return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
-        } catch (IllegalArgumentException | IllegalStateException ex) {
-            log.warn("修改合同明细参数非法：contractId={}, itemId={}, reason={}", contractId, itemId, ex.getMessage());
-            return ApiResponse.fail(ResultCode.PARAM_ERROR.getCode(), ex.getMessage());
-        } catch (RuntimeException ex) {
-            log.error("修改合同明细发生未处理异常：contractId={}, itemId={}", contractId, itemId, ex);
             return ApiResponse.fail(ResultCode.SYSTEM_ERROR.getCode(), ResultCode.SYSTEM_ERROR.getMessage());
         }
     }

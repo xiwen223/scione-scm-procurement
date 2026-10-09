@@ -49,117 +49,10 @@ public class ContractUpdateService {
     private final BuyerCompanyRepository buyerCompanyRepository;
     private final ContractTemplateService contractTemplateService;
 
-    /**
-     * 专用明细修改入口：保证路径中的明细确实属于该合同，并仅允许创建状态的合同修改。
-     * 实际更新、金额重算和操作日志均复用合同修改主流程；文件仅在下载或签署时生成。
-     */
-    @Transactional
-    public ContractUpdateResponse updateContractItem(Long contractId, Long itemId,
-                                                     ContractItemUpdateRequest itemRequest,
-                                                     String operatorEmail) {
-        Contract contract = contractRepository.findById(contractId)
-                .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
-                        "合同不存在：contractId=" + contractId));
-        if (contract.getStatus() != ContractStatus.CREATED) {
-            throw new BusinessException(ResultCode.CONTRACT_STATUS_NOT_ALLOWED,
-                    "仅创建状态的合同可修改明细，当前状态为【" + contract.getStatus().getDesc() + "】");
-        }
-        boolean itemExists = contract.getItems().stream().anyMatch(item -> itemId.equals(item.getId()));
-        if (!itemExists) {
-            throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
-                    "合同明细不存在或不属于该合同：itemId=" + itemId
-                            + "，contractNo=" + contract.getContractNo());
-        }
-        // 数量/单价/不支持字段的校验与「整份合同修改」共用同一份规则，避免两个入口标准不一致
-        validateItemUpdate(itemRequest);
-
-        itemRequest.setId(itemId);
-        ContractItem item = contract.getItems().stream()
-                .filter(current -> itemId.equals(current.getId()))
-                .findFirst()
-                .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
-                        "合同明细不存在或不属于该合同：itemId=" + itemId
-                                + "，contractNo=" + contract.getContractNo()));
-        List<String> changeDetails = new ArrayList<>();
-        ContractUpdateRequest request = new ContractUpdateRequest();
-        request.setItems(List.of(itemRequest));
-        applyItemUpdates(contract, request, changeDetails);
-        recalculateContractAmount(contract, changeDetails);
-
-        // 单条明细编辑只发两条精确 SQL：该明细的数量/单价/金额 + 合同金额合计。
-        contractRepository.updateItemPricing(item);
-        contractRepository.updateAmounts(contract);
-        contractRepository.updatePdfUrl(contractId, null);
-        contract.setContractPdfUrl(null);
-        saveOperationLog(contract, operatorEmail, "修改合同明细", changeDetails);
-        log.info("合同单条明细编辑完成，无全量明细更新：contractNo={}, itemId={}", contract.getContractNo(), itemId);
-        return new ContractUpdateResponse(contractId, contract.getContractNo(), contract.getContractPdfUrl(), "合同明细修改成功");
-    }
-
-    /**
-     * 修改合同。
-     *
-     * @param contractId 合同ID
-     * @param request    修改请求
-     * @return 修改结果
-     */
+    /** 统一保存合同主信息、折扣及商品明细，所有变更在同一事务提交。 */
     @Transactional
     public ContractUpdateResponse updateContract(Long contractId, ContractUpdateRequest request, String operatorEmail) {
-        String operationDesc = request.getDiscountedAmount() != null
-                ? "修改合同折扣" : "修改合同";
-        if (isDiscountOnlyRequest(request)) {
-            return updateDiscountOnly(contractId, request, operatorEmail, operationDesc);
-        }
-        return updateContractInternal(contractId, request, operatorEmail, operationDesc);
-    }
-
-    private ContractUpdateResponse updateDiscountOnly(Long contractId, ContractUpdateRequest request,
-                                                      String operatorEmail, String operationDesc) {
-        Contract contract = contractRepository.findById(contractId)
-                .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
-                        "合同不存在：contractId=" + contractId));
-        if (contract.getStatus() != ContractStatus.CREATED) {
-            throw new BusinessException(ResultCode.CONTRACT_STATUS_NOT_ALLOWED,
-                    "合同状态为【" + contract.getStatus().getDesc() + "】，不允许修改");
-        }
-        List<String> changeDetails = new ArrayList<>();
-        applyFieldUpdates(contract, request, changeDetails);
-        recalculateContractAmount(contract, changeDetails);
-
-        // 折扣保存只更新 contract 的三个金额字段；不更新任何 contract_item。
-        contractRepository.updateAmounts(contract);
-        contractRepository.updatePdfUrl(contractId, null);
-        contract.setContractPdfUrl(null);
-        saveOperationLog(contract, operatorEmail, operationDesc, changeDetails);
-        log.info("合同折扣编辑完成，仅更新金额字段：contractNo={}, discountAmount={}, actualAmount={}",
-                contract.getContractNo(), contract.getDiscountedAmount(), contract.getContractAmount());
-        return new ContractUpdateResponse(contractId, contract.getContractNo(), contract.getContractPdfUrl(), "合同折扣修改成功");
-    }
-
-    private boolean isDiscountOnlyRequest(ContractUpdateRequest request) {
-        return request.getDiscountedAmount() != null
-                && request.getOriginalAmount() == null
-                && !StringUtils.hasText(request.getContractNo())
-                && request.getContractType() == null
-                && !StringUtils.hasText(request.getContractName())
-                && request.getBuyerCompanyId() == null
-                && !StringUtils.hasText(request.getSupplierName())
-                && !StringUtils.hasText(request.getSupplierAddress())
-                && !StringUtils.hasText(request.getContactPerson())
-                && !StringUtils.hasText(request.getSupplierPhone())
-                && !StringUtils.hasText(request.getSupplierCreditCode())
-                && !StringUtils.hasText(request.getSupplierBankAccount())
-                && !StringUtils.hasText(request.getSupplierBankName())
-                && !StringUtils.hasText(request.getPrepayPercent())
-                && !StringUtils.hasText(request.getSettlementMethod())
-                && !StringUtils.hasText(request.getBuyerCompanyName())
-                && !StringUtils.hasText(request.getBuyerAddress())
-                && !StringUtils.hasText(request.getPostCode())
-                && !StringUtils.hasText(request.getBuyerPhone())
-                && !StringUtils.hasText(request.getFax())
-                && !StringUtils.hasText(request.getContractDate())
-                && !StringUtils.hasText(request.getDeliveryDate())
-                && (request.getItems() == null || request.getItems().isEmpty());
+        return updateContractInternal(contractId, request, operatorEmail, "修改合同");
     }
 
     private ContractUpdateResponse updateContractInternal(Long contractId, ContractUpdateRequest request,
@@ -189,19 +82,29 @@ public class ContractUpdateService {
         // 3. 记录变更内容（用于操作日志）
         List<String> changeDetails = new ArrayList<>();
 
-        // 4. 应用字段修改
-        applyFieldUpdates(contract, request, changeDetails);
-
-        // 5. 应用明细修改
-        applyItemUpdates(contract, request, changeDetails);
-
-        // 6. 重新计算合同金额
-        recalculateContractAmount(contract, changeDetails);
-
+        BigDecimal oldOriginalAmount = contract.getOriginalAmount();
+        BigDecimal oldDiscountedAmount = contract.getDiscountedAmount();
+        BigDecimal oldContractAmount = contract.getContractAmount();
+        boolean mainChanged = applyFieldUpdates(contract, request, changeDetails);
+        List<ContractItem> changedItems = applyItemUpdates(contract, request, changeDetails);
+        if (!changedItems.isEmpty() || !Objects.equals(oldOriginalAmount, contract.getOriginalAmount())
+                || !Objects.equals(oldDiscountedAmount, contract.getDiscountedAmount())) {
+            recalculateContractAmount(contract, changeDetails);
+        }
+        if (changeDetails.isEmpty()) {
+            return new ContractUpdateResponse(contractId, contract.getContractNo(), contract.getContractPdfUrl(), "合同无变更");
+        }
         String contractNo = contract.getContractNo();
-
-        // 7. 保存修改
-        contractRepository.update(contract);
+        if (mainChanged) {
+            contractRepository.updateMain(contract);
+        } else if (!Objects.equals(oldOriginalAmount, contract.getOriginalAmount())
+                || !Objects.equals(oldDiscountedAmount, contract.getDiscountedAmount())
+                || !Objects.equals(oldContractAmount, contract.getContractAmount())) {
+            contractRepository.updateAmounts(contract);
+        }
+        for (ContractItem item : changedItems) {
+            contractRepository.updateItemPricing(item);
+        }
         // 合同编号变了：主表之外的冗余引用（明细 contract_no、操作日志 data_name）必须一起改，
         // 否则明细检索和操作日志会挂着一个不存在的编号。
         if (!Objects.equals(oldContractNo, contractNo)) {
@@ -233,7 +136,7 @@ public class ContractUpdateService {
     /**
      * 应用字段更新。
      */
-    private void applyFieldUpdates(Contract contract, ContractUpdateRequest request, List<String> changeDetails) {
+    private boolean applyFieldUpdates(Contract contract, ContractUpdateRequest request, List<String> changeDetails) {
         String contractNo = contract.getContractNo();
 
         // 合同编号：主表 + 明细冗余列 + 操作日志快照三处都要一致。
@@ -355,6 +258,9 @@ public class ContractUpdateService {
             if (!Objects.equals(buyer.getIsActive(), 1)) {
                 throw new IllegalArgumentException("选择的需方公司已停用，请选择启用中的公司");
             }
+            if (!Objects.equals(contract.getBuyerCompanyId(), buyer.getId())) {
+                changeDetails.add("需方公司ID：" + contract.getBuyerCompanyId() + " → " + buyer.getId());
+            }
             addBuyerSnapshotChange(changeDetails, "需方公司", contract.getBuyerCompanyName(), buyer.getCompanyName());
             addBuyerSnapshotChange(changeDetails, "需方统一社会信用代码", contract.getBuyerCompanyCode(), buyer.getCreditCode());
             addBuyerSnapshotChange(changeDetails, "签订地点", contract.getBuyerAddress(), buyer.getAddress());
@@ -411,6 +317,7 @@ public class ContractUpdateService {
         }
         }
 
+        boolean mainChanged = !changeDetails.isEmpty();
         // 金额信息
         if (request.getOriginalAmount() != null
                 && request.getOriginalAmount().compareTo(contract.getOriginalAmount()) != 0) {
@@ -429,6 +336,7 @@ public class ContractUpdateService {
             contract.setDiscountedAmount(request.getDiscountedAmount());
         }
 
+        int changesBeforeDates = changeDetails.size();
         // 日期信息
         if (StringUtils.hasText(request.getContractDate())) {
             try {
@@ -457,6 +365,7 @@ public class ContractUpdateService {
                 log.warn("交货日期格式错误，忽略：{}", request.getDeliveryDate());
             }
         }
+        return mainChanged || changeDetails.size() > changesBeforeDates;
     }
 
     /**
@@ -491,12 +400,12 @@ public class ContractUpdateService {
     /**
      * 应用明细修改。
      */
-    private void applyItemUpdates(Contract contract, ContractUpdateRequest request, List<String> changeDetails) {
+    private List<ContractItem> applyItemUpdates(Contract contract, ContractUpdateRequest request, List<String> changeDetails) {
         if (request.getItems() == null || request.getItems().isEmpty()) {
-            log.debug("无明细修改请求，跳过");
-            return;
+            return List.of();
         }
 
+        List<ContractItem> changedItems = new ArrayList<>();
         String contractNo = contract.getContractNo();
         List<ContractItem> contractItems = contract.getItems();
 
@@ -520,9 +429,10 @@ public class ContractUpdateService {
                         "合同明细不存在或不属于该合同：itemId=" + itemId + "，contractNo=" + contractNo);
             }
 
-            // 与单条明细接口完全相同的校验规则
+            // 统一校验每条明细
             validateItemUpdate(itemRequest);
 
+            int changesBefore = changeDetails.size();
             String itemDesc = "明细[" + item.getProductName() + "]";
 
             // 修改数量
@@ -545,7 +455,7 @@ public class ContractUpdateService {
             }
 
             // 重新计算明细金额（如果数量或单价改变了）
-            if (itemRequest.getQuantity() != null || itemRequest.getUnitPrice() != null) {
+            if (changeDetails.size() > changesBefore) {
                 if (item.getQuantity() == null || item.getUnitPrice() == null) {
                     // 存量数据缺数量或单价时无法重算金额：不猜值，保持原金额不动，只记录
                     log.warn("明细缺少数量或单价，跳过金额重算：contractNo={}, itemId={}, quantity={}, unitPrice={}",
@@ -553,22 +463,24 @@ public class ContractUpdateService {
                 } else {
                     BigDecimal newAmount = new BigDecimal(item.getQuantity())
                             .multiply(item.getUnitPrice());
-                    if (newAmount.compareTo(item.getAmount()) != 0) {
+                    if (item.getAmount() == null || newAmount.compareTo(item.getAmount()) != 0) {
                         log.info("重新计算明细金额：itemId={}, old={}, new={}",
                                 itemId, item.getAmount(), newAmount);
                         changeDetails.add(itemDesc + "金额：" + item.getAmount() + " → " + newAmount);
                         item.setAmount(newAmount);
                     }
                 }
+                changedItems.add(item);
             }
 
         }
 
-        log.info("合同明细修改完成：contractNo={}, modifiedItemCount={}", contractNo, request.getItems().size());
+        log.info("合同明细修改完成：contractNo={}, modifiedItemCount={}", contractNo, changedItems.size());
+        return changedItems;
     }
 
     /**
-     * 明细修改的统一校验：整份合同接口与单条明细接口共用，避免两个入口规则不一致。
+     * 合同明细修改校验。
      *
      * <p>只允许改数量和不含税单价；金额一律由系统按 数量 × 单价 重算，不接受调用方传入；
      * 交货日期与备注暂不支持修改，传了就明确报错而不是悄悄忽略。</p>
@@ -622,7 +534,7 @@ public class ContractUpdateService {
         // 模板“整”后的金额为实际合同金额：原价合计 − 折扣。
         BigDecimal newContractAmount = originalAmount.subtract(discountedAmount);
 
-        if (newContractAmount.compareTo(contract.getContractAmount()) != 0) {
+        if (contract.getContractAmount() == null || newContractAmount.compareTo(contract.getContractAmount()) != 0) {
             log.info("重新计算合同金额：contractNo={}, old={}, new={}",
                     contract.getContractNo(), contract.getContractAmount(), newContractAmount);
             changeDetails.add("合同金额：" + contract.getContractAmount() + " → " + newContractAmount);

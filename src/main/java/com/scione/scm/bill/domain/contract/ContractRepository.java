@@ -129,6 +129,9 @@ public interface ContractRepository {
      */
     void update(Contract contract);
 
+    /** 仅更新合同主表，不更新商品明细。 */
+    void updateMain(Contract contract);
+
     /** 仅更新合同金额字段，用于折扣调整，避免无关明细逐条 UPDATE。 */
     void updateAmounts(Contract contract);
 
