@@ -17,6 +17,9 @@ public class ContractCreateRequest {
     @Schema(description = "采购单号", example = "PO20261201001", required = true)
     private String purchaseOrderNo;
 
+    @Schema(description = "预填返回的 PO 同步时间，用于确认创建时仍使用同一次回填快照")
+    private String poSnapshotTime;
+
     // ========== 供方信息（可选，覆盖领星数据） ==========
 
     @Schema(description = "供方名称（可选，不传则使用领星数据）", example = "浙江XXX供应商有限公司")

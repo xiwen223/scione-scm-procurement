@@ -103,7 +103,7 @@ public class ContractAutoCreateService {
         if (!StringUtils.hasText(purchaseOrderNo)) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "采购单号不能为空");
         }
-        // 预填步骤1：规范采购单号，再读取本地 PO；必要的远端补查和 PO 保存封装在 loadManualPo。
+        // 每次预填主动查领星并刷新本地 PO；查询失败明确报错，不把旧缓存当成最新数据。
         String orderNo = purchaseOrderNo.trim();
         PoSyncRecord po = loadManualPo(orderNo);
         // 预填步骤2：补供应商档案和收款账户；该查询失败时允许缺字段，交给表单提示用户补录。
@@ -172,7 +172,8 @@ public class ContractAutoCreateService {
                 buildPrefillItems(po.getItems()),
                 List.copyOf(missing),
                 existing == null ? null : existing.contractNo(),
-                existing == null ? null : existing.statusText());
+                existing == null ? null : existing.statusText(),
+                po.getSyncTime() == null ? null : po.getSyncTime().toString());
     }
 
     /**
@@ -243,20 +244,13 @@ public class ContractAutoCreateService {
         return resolved;
     }
 
-    /** 预填用的 PO：本地缺失或价格口径过期时按单号从领星补同步，与手动创建走同一套兜底。 */
+    /** 预填始终查询领星最新单头和明细，更新 PO 快照后再回填，不静默回退旧数据。 */
     private PoSyncRecord loadManualPo(String orderNo) {
-        Optional<PoSyncRecord> local = poSyncRepository.findByPurchaseOrderNo(orderNo);
-        boolean stalePrice = local.isPresent() && needsPriceResync(local.get());
-        if (local.isPresent() && !stalePrice) {
-            return local.get();
-        }
-        if (stalePrice) {
-            log.info("本地采购单缺少不含税单价，预填前重新同步：purchaseOrderNo={}", orderNo);
-        }
         LingxingPurchaseOrderClient.PurchaseOrderData order = lingxingPurchaseOrderClient.findByOrderNo(orderNo)
                 .orElseThrow(() -> new BusinessException(ResultCode.PARAM_ERROR,
-                        stalePrice ? "本地采购单价格口径尚未更新，且领星未查到该采购单：" + orderNo
-                                : "本地和领星均未找到采购单：" + orderNo));
+                        "领星未找到采购单：" + orderNo));
+        log.info("手动创建预填刷新领星最新采购单：purchaseOrderNo={}, itemCount={}",
+                orderNo, order.items() == null ? 0 : order.items().size());
         poSyncRepository.save(PoSyncAppService.toRecord(order, LocalDateTime.now()));
         return poSyncRepository.findByPurchaseOrderNo(orderNo)
                 .orElseThrow(() -> new BusinessException(ResultCode.SYSTEM_ERROR,
@@ -318,7 +312,8 @@ public class ContractAutoCreateService {
             List<ManualPoItem> items,
             List<String> missingFields,
             String existingContractNo,
-            String existingContractStatus) {
+            String existingContractStatus,
+            String poSnapshotTime) {
     }
 
     /**
@@ -576,25 +571,18 @@ public class ContractAutoCreateService {
         // 1. 不传需方公司时使用 priority=1；传入时使用页面下拉框选中的公司。
         BuyerCompany buyer = resolveManualBuyerCompany(request.getBuyerCompanyId());
 
-        // 2. 优先使用本地已同步的 PO；仅本地缺失时按单号从领星补查旧 PO。
-        Optional<PoSyncRecord> poOpt = poSyncRepository.findByPurchaseOrderNo(purchaseOrderNo);
-        boolean oldPriceRecord = poOpt.isPresent() && needsPriceResync(poOpt.get());
-        if (poOpt.isEmpty() || oldPriceRecord) {
-            if (oldPriceRecord) {
-                log.info("本地采购单缺少不含税单价，创建前重新同步：purchaseOrderNo={}", purchaseOrderNo);
+        // 2. 页面请求使用已确认的回填快照，不再次拉领星覆盖表单；旧调用方未预填时主动刷新。
+        PoSyncRecord po;
+        if (StringUtils.hasText(request.getPoSnapshotTime())) {
+            po = poSyncRepository.findByPurchaseOrderNo(purchaseOrderNo)
+                    .orElseThrow(() -> new BusinessException(ResultCode.PARAM_ERROR, "预填采购单已不存在，请重新回填"));
+            if (po.getSyncTime() == null || !request.getPoSnapshotTime().equals(po.getSyncTime().toString())) {
+                throw new BusinessException(ResultCode.PARAM_ERROR,
+                        "采购单快照在回填后已更新，请重新查询 PO 并确认表单后创建");
             }
-            LingxingPurchaseOrderClient.PurchaseOrderData order = lingxingPurchaseOrderClient
-                    .findByOrderNo(purchaseOrderNo)
-                    .orElseThrow(() -> new BusinessException(ResultCode.PARAM_ERROR,
-                            oldPriceRecord ? "本地采购单价格口径尚未更新，且领星未查到该采购单：" + purchaseOrderNo
-                                    : "本地和领星均未找到采购单：" + purchaseOrderNo));
-            poSyncRepository.save(PoSyncAppService.toRecord(order, LocalDateTime.now()));
-            poOpt = poSyncRepository.findByPurchaseOrderNo(purchaseOrderNo);
+        } else {
+            po = loadManualPo(purchaseOrderNo);
         }
-        if (poOpt.isEmpty()) {
-            throw new BusinessException(ResultCode.SYSTEM_ERROR, "采购单补充同步后读取失败：" + purchaseOrderNo);
-        }
-        PoSyncRecord po = poOpt.get();
 
         // 3. 手动创建不受自动创建的“待下单”状态限制；保留实际状态便于排查。
         log.info("手动创建采购单状态：purchaseOrderNo={}, poStatus={}, poStatusText={}",
@@ -674,12 +662,6 @@ public class ContractAutoCreateService {
                 fileUrl,
                 "合同创建成功"
         );
-    }
-
-    /** 旧同步记录没有不含税单价时，仅在首次使用时补查一次领星。 */
-    private boolean needsPriceResync(PoSyncRecord po) {
-        return po.getItems() == null || po.getItems().isEmpty()
-                || po.getItems().stream().anyMatch(item -> item.getUnitPriceWithoutTax() == null);
     }
 
     /** 从已保存的合同快照生成首版 PDF、上传 S3 并回写地址；不重新同步领星字段。 */
