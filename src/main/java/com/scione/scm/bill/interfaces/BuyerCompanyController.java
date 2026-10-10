@@ -6,7 +6,6 @@ import com.scione.scm.bill.application.BuyerCompanyApplicationService;
 import com.scione.scm.bill.application.ProcurementOperationLogRecorder;
 import com.scione.scm.bill.application.dto.BuyerCompanyDetailResponse;
 import com.scione.scm.bill.application.dto.BuyerCompanyListItemResponse;
-import com.scione.scm.bill.application.dto.BuyerCompanySealRequest;
 import com.scione.scm.bill.application.dto.BuyerCompanyUpsertRequest;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -34,7 +33,6 @@ import static com.scione.scm.bill.application.ProcurementOperationLogRecorder.ch
 import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementBusinessType.BUYER_COMPANY;
 import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.CREATE;
 import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.UPDATE;
-import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType.UPDATE_SEAL;
 
 @RestController
 @Validated
@@ -46,6 +44,15 @@ public class BuyerCompanyController {
     private final BuyerCompanyApplicationService service;
     private final ProcurementOperationLogRecorder operationLog;
 
+    /**
+     * 需方公司列表查询
+     * @param keyword 公司名/电话/信用代码
+     * @param isActive 是否启用
+     * @param defaultOnly 是否默认（优先级）
+     * @param pageNum
+     * @param pageSize
+     * @return
+     */
     @GetMapping
     public ApiResponse<PageResult<BuyerCompanyListItemResponse>> list(
             @RequestParam(required = false) String keyword,
@@ -62,12 +69,23 @@ public class BuyerCompanyController {
         return ApiResponse.success(result);
     }
 
+    /**
+     * 查询需方公司详情
+     * @param id
+     * @return
+     */
     @GetMapping("/{id}")
     public ApiResponse<BuyerCompanyDetailResponse> detail(@PathVariable @Min(1) Long id) {
         BuyerCompanyDetailResponse result = service.getById(id);
         return ApiResponse.success(result);
     }
 
+    /**
+     * 创建需方公司
+     * @param operatorEmail
+     * @param request
+     * @return
+     */
     @PostMapping
     public ResponseEntity<ApiResponse<BuyerCompanyDetailResponse>> create(
             @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail,
@@ -78,6 +96,13 @@ public class BuyerCompanyController {
                 .body(ApiResponse.success(result));
     }
 
+    /**
+     * 需方公司修改
+     * @param id
+     * @param operatorEmail
+     * @param request
+     * @return
+     */
     @PutMapping("/{id}")
     public ApiResponse<BuyerCompanyDetailResponse> update(
             @PathVariable @Min(1) Long id,
@@ -86,18 +111,9 @@ public class BuyerCompanyController {
         // 变更前快照：日志只记录本次真正变化的字段，需要拿到修改前的值（与模板删除的取快照方式一致）
         BuyerCompanyDetailResponse before = service.getById(id);
         BuyerCompanyDetailResponse result = service.update(id, request);
+        // 日志记录
         operationLog.record(BUYER_COMPANY, id, result.companyName(), UPDATE, operatorEmail,
                 companyChanges(before, result));
-        return ApiResponse.success(result);
-    }
-
-    @PutMapping("/{id}/seal")
-    public ApiResponse<BuyerCompanyDetailResponse> updateSeal(
-            @PathVariable @Min(1) Long id,
-            @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail,
-            @Valid @RequestBody BuyerCompanySealRequest request) {
-        BuyerCompanyDetailResponse result = service.updateSeal(id, request);
-        operationLog.record(BUYER_COMPANY, id, result.companyName(), UPDATE_SEAL, operatorEmail);
         return ApiResponse.success(result);
     }
 

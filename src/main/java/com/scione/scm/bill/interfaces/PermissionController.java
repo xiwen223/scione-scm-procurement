@@ -43,12 +43,6 @@ public class PermissionController {
     @Value("${permission.contractTemplateList:}")
     private List<String> contractTemplateList;
 
-    @Autowired
-    private LingxingOpenApiClient lingxingOpenApiClient;
-
-    @Autowired
-    private FadadaOpenApiClient fadadaOpenApiClient;
-
     @GetMapping("/checkBuyerCompanyList")
     @Operation(summary = "查询当前用户角色是否有我方公司按钮操作权限")
     public ApiResponse<Boolean> checkBuyerCompanyList(@RequestHeader("X-User-Role") String role) {
@@ -61,23 +55,4 @@ public class PermissionController {
         return ApiResponse.success(contractTemplateList.contains(role.trim()));
     }
 
-    @GetMapping("/api/test")
-    public ApiResponse<JsonNode> ApiTest(@RequestParam("id") Long id) {
-        Optional<JsonNode> supplierById = lingxingOpenApiClient.findSupplierById(id);
-        if (supplierById.isPresent()) {
-            JsonNode jsonNode = supplierById.get();
-            return ApiResponse.success(jsonNode);
-        }
-        return ApiResponse.success(null);
-    }
-
-    @GetMapping("/api/test1")
-    public ApiResponse<JsonNode> ApiTest1(@RequestParam("corpIdentNo") String openCorpId) {
-        Optional<JsonNode> supplierById = fadadaOpenApiClient.getCorp(openCorpId);
-        if (supplierById.isPresent()) {
-            JsonNode jsonNode = supplierById.get();
-            return ApiResponse.success(jsonNode);
-        }
-        return ApiResponse.success(null);
-    }
 }

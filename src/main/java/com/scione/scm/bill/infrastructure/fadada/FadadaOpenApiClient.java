@@ -13,9 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
@@ -27,8 +25,6 @@ import org.springframework.web.client.RestClientResponseException;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -61,7 +57,6 @@ public class FadadaOpenApiClient {
     private static final String PROCESS_FILE_PATH = "/file/process";
     private static final String CREATE_SIGN_TASK_PATH = "/sign-task/create";
     private static final String START_SIGN_TASK_PATH = "/sign-task/start";
-    private static final String GET_ACTOR_URL_PATH = "/sign-task/actor/get-url";
     private static final String URGE_SIGN_TASK_PATH = "/sign-task/urge";
     private static final String CANCEL_SIGN_TASK_PATH = "/sign-task/cancel";
     private static final String ABOLISH_SIGN_TASK_PATH = "/sign-task/abolish";
@@ -72,11 +67,8 @@ public class FadadaOpenApiClient {
     /** 该查询路径来自本地 Python 示例，供应商标注为旧版；上线前请以租户 V5 文档核验。 */
     private static final String GET_SIGN_TASK_DETAIL_PATH = "/sign-task/app/get-detail";
     private static final String GET_DOWNLOAD_URL_PATH = "/sign-task/owner/get-download-url";
-    private static final String GET_CORP_AUTH_URL_PATH = "/corp/get-auth-url";
     private static final String GET_CORP_INFO_PATH = "/corp/get";
     private static final String GET_CORP_ENTITY_LIST_PATH = "/corp/entity/get-list";
-    private static final String GET_EDIT_URL_PATH = "/sign-task/get-edit-url";
-    private static final String GET_TEMPLATE_DETAIL_PATH = "/sign-template/get-detail";
     private static final String CREATE_SEAL_BY_IMAGE_PATH = "/seal/create-by-image";
     private static final String GET_SEAL_FREE_SIGN_URL_PATH = "/seal/free-sign/get-url";
     private static final String SET_SEAL_STATUS_PATH = "/seal/set-status";
@@ -139,11 +131,6 @@ public class FadadaOpenApiClient {
                 Map.of("corpIdentNo", requireText(corpIdentNo, "corpIdentNo")), true);
         JsonNode data = response.get("data");
         return data == null || data.isNull() ? Optional.empty() : Optional.of(data);
-    }
-
-    /** 获取并缓存主应用 accessToken。 */
-    public String getAccessToken() {
-        return accessTokenFor(primaryCredential());
     }
 
     /** 获取并缓存指定应用凭据的 accessToken。 */
@@ -213,18 +200,6 @@ public class FadadaOpenApiClient {
         }
     }
 
-    /** 从本地文件读取字节后上传；文件仅在调用期读取，不会写入日志。 */
-    public void uploadFile(String uploadUrl, Path file) {
-        if (file == null || !Files.isRegularFile(file)) {
-            throw new BusinessException(ResultCode.PARAM_ERROR, "待上传文件不存在");
-        }
-        try {
-            uploadFile(uploadUrl, Files.readAllBytes(file));
-        } catch (IOException exception) {
-            throw fadadaError("读取待上传文件失败");
-        }
-    }
-
     /** 处理已上传文件并获取可用于签署任务的 fileId。 */
     public ProcessedFile processFile(String fddFileUrl, String fileName, String fileType, String fileFormat) {
         String effectiveFileType = requireText(fileType, "fileType");
@@ -243,39 +218,6 @@ public class FadadaOpenApiClient {
         JsonNode first = files.get(0);
         return new ProcessedFile(requiredText(first, "fileId", "文件处理失败"),
                 first.path("fileTotalPages").canConvertToInt() ? first.path("fileTotalPages").intValue() : null);
-    }
-
-    /** 创建个人签署任务。任务固定自动提交；短信发送取决于 sendNotification。 */
-    public SignTask createPersonSignTask(PersonSignTaskRequest request) {
-        Objects.requireNonNull(request, "request");
-        Map<String, Object> actor = new LinkedHashMap<>();
-        actor.put("actorId", requireText(request.actorId(), "actorId"));
-        actor.put("actorType", "person");
-        actor.put("actorName", requireText(request.signerName(), "signerName"));
-        actor.put("permissions", List.of("sign"));
-        actor.put("identNameForMatch", request.signerName());
-        actor.put("certType", "id_card");
-        actor.put("certNoForMatch", requireText(request.signerIdNo(), "signerIdNo"));
-        actor.put("sendNotification", request.sendNotification());
-        actor.put("notifyType", List.of("start"));
-        actor.put("notifyAddress", requireText(request.signerPhone(), "signerPhone"));
-        return createSignTask(request.taskName(), request.fileId(), request.businessNo(), request.notifyUrl(), actor);
-    }
-
-    /** 创建企业盖章任务。企业名称、统一社会信用代码和法大大印章 ID 均为必填。 */
-    public SignTask createCorpSignTask(CorpSignTaskRequest request) {
-        Objects.requireNonNull(request, "request");
-        Map<String, Object> actor = new LinkedHashMap<>();
-        actor.put("actorId", requireText(request.actorId(), "actorId"));
-        actor.put("actorType", "corp");
-        actor.put("actorName", requireText(request.corpName(), "corpName"));
-        actor.put("permissions", List.of("sign"));
-        actor.put("orgCode", requireText(request.orgCode(), "orgCode"));
-        actor.put("sealId", requireText(request.sealId(), "sealId"));
-        actor.put("sendNotification", request.sendNotification());
-        actor.put("notifyType", List.of("start"));
-        actor.put("notifyAddress", requireText(request.notifyPhone(), "notifyPhone"));
-        return createSignTask(request.taskName(), request.fileId(), request.businessNo(), request.notifyUrl(), actor);
     }
 
     /** 创建采购合同双企业签署任务：我方免验证自动盖章后，再短信通知供应商签署。 */
@@ -525,24 +467,6 @@ public class FadadaOpenApiClient {
                 "actors", List.of(buyerActor)), false);
     }
 
-    /** 获取参与方签署入口。返回 URL 为短期敏感凭据，调用方不得持久化或写日志。 */
-    public ActorSignUrl getActorSignUrl(ActorSignUrlRequest request) {
-        Objects.requireNonNull(request, "request");
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("signTaskId", requireText(request.signTaskId(), "signTaskId"));
-        body.put("actorId", requireText(request.actorId(), "actorId"));
-        putIfNotBlank(body, "clientUserId", request.clientUserId());
-        putIfNotBlank(body, "redirectUrl", request.redirectUrl());
-        putIfNotBlank(body, "redirectMiniAppUrl", request.redirectMiniAppUrl());
-        JsonNode data = businessPost(GET_ACTOR_URL_PATH, body, true).path("data");
-        String signUrl = text(data, "actorSignTaskUrl");
-        String embedUrl = text(data, "actorSignTaskEmbedUrl");
-        if (isBlank(signUrl) && isBlank(embedUrl)) {
-            throw fadadaError("获取参与方签署链接失败：响应中未返回签署链接");
-        }
-        return new ActorSignUrl(signUrl, embedUrl);
-    }
-
     /** 查询签署任务详情。保留供应商原始 JSON，避免在 V5 字段未确认前丢失信息。 */
     public JsonNode getSignTaskDetail(String signTaskId) {
         return businessPost(GET_SIGN_TASK_DETAIL_PATH,
@@ -563,26 +487,6 @@ public class FadadaOpenApiClient {
         putIfNotBlank(body, "customName", request.customName());
         JsonNode data = businessPost(GET_DOWNLOAD_URL_PATH, body, true).path("data");
         return requiredText(data, "downloadUrl", "获取签署文档下载地址失败");
-    }
-
-    /** 获取企业授权页面链接。 */
-    public String getCorpAuthUrl(String clientCorpId, List<String> authScopes) {
-        List<String> scopes = authScopes == null || authScopes.isEmpty()
-                ? List.of("signtask_init", "signtask_info") : List.copyOf(authScopes);
-        JsonNode data = businessPost(GET_CORP_AUTH_URL_PATH, Map.of(
-                "clientCorpId", requireText(clientCorpId, "clientCorpId"), "authScopes", scopes), true).path("data");
-        return requiredText(data, "authUrl", "获取企业授权链接失败");
-    }
-
-    /** 查询法大大企业绑定、认证和授权信息。 */
-    public JsonNode getCorpInfo(String openCorpId, String clientCorpId) {
-        if (isBlank(openCorpId) && isBlank(clientCorpId)) {
-            throw new BusinessException(ResultCode.PARAM_ERROR, "openCorpId 和 clientCorpId 至少传入一个");
-        }
-        Map<String, Object> body = new LinkedHashMap<>();
-        putIfNotBlank(body, "openCorpId", openCorpId);
-        putIfNotBlank(body, "clientCorpId", clientCorpId);
-        return businessPost(GET_CORP_INFO_PATH, body, true).path("data");
     }
 
     /**
@@ -634,37 +538,6 @@ public class FadadaOpenApiClient {
         }
         log.warn("法大大主体列表中未找到同名主体，建章请求不带 entityId：corpName={}, 主体数={}", target, entities.size());
         return null;
-    }
-
-    /** 获取签署任务编辑链接。redirectUrl 会按本地 Python 客户端规则进行完整 URL 编码。 */
-    public String getSignTaskEditUrl(EditUrlRequest request) {
-        Objects.requireNonNull(request, "request");
-        boolean hasTaskId = !isBlank(request.signTaskId());
-        boolean hasInitiator = !isBlank(request.initiatorIdType()) || !isBlank(request.initiatorOpenId());
-        if (hasTaskId == hasInitiator || (!hasTaskId && isBlank(request.initiatorIdType()))) {
-            throw new BusinessException(ResultCode.PARAM_ERROR, "signTaskId 与 initiator 必须且只能传入一组");
-        }
-        Map<String, Object> body = new LinkedHashMap<>();
-        if (hasTaskId) {
-            body.put("signTaskId", request.signTaskId());
-        } else {
-            body.put("initiator", Map.of("idType", requireText(request.initiatorIdType(), "initiatorIdType"),
-                    "openId", requireText(request.initiatorOpenId(), "initiatorOpenId")));
-        }
-        if (!isBlank(request.redirectUrl())) {
-            body.put("redirectUrl", encodeRedirectUrl(request.redirectUrl()));
-        }
-        body.put("editAfterStart", request.editAfterStart());
-        JsonNode data = businessPost(GET_EDIT_URL_PATH, body, true).path("data");
-        return requiredText(data, "signTaskEditUrl", "获取签署任务编辑链接失败");
-    }
-
-    /** 查询签署模板详情，保留供应商原始 JSON。 */
-    public JsonNode getSignTemplateDetail(String ownerIdType, String ownerOpenId, String signTemplateId) {
-        return businessPost(GET_TEMPLATE_DETAIL_PATH, Map.of(
-                "ownerId", Map.of("idType", requireText(ownerIdType, "ownerIdType"),
-                        "openId", requireText(ownerOpenId, "ownerOpenId")),
-                "signTemplateId", requireText(signTemplateId, "signTemplateId")), true).path("data");
     }
 
     /**
@@ -749,21 +622,6 @@ public class FadadaOpenApiClient {
         body.put("openCorpId", requireText(openCorpId, "openCorpId"));
         body.put("sealId", requireText(sealId, "sealId"));
         businessPost(DELETE_SEAL_PATH, body, false);
-    }
-
-    private SignTask createSignTask(String taskName, String fileId, String businessNo, String notifyUrl,
-                                    Map<String, Object> actor) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("signTaskSubject", requireText(taskName, "taskName"));
-        body.put("initiator", Map.of("idType", "corp", "openId", configuredOpenCorpId()));
-        body.put("autoStart", true);
-        body.put("actors", List.of(Map.of("actor", actor)));
-        body.put("docs", List.of(Map.of("docId", "doc1", "docName", taskName,
-                "docFileId", requireText(fileId, "fileId"))));
-        putIfNotBlank(body, "businessNo", businessNo);
-        putIfNotBlank(body, "notifyUrl", notifyUrl);
-        JsonNode data = businessPost(CREATE_SIGN_TASK_PATH, body, false).path("data");
-        return new SignTask(requiredText(data, "signTaskId", "创建签署任务失败"));
     }
 
     /**
@@ -1193,38 +1051,15 @@ public class FadadaOpenApiClient {
     public record SignTask(String signTaskId) {
     }
 
-    public record PersonSignTaskRequest(
-            String taskName, String fileId, String actorId, String signerPhone, String signerName,
-            String signerIdNo, String businessNo, String notifyUrl, boolean sendNotification) {
-    }
-
-    public record CorpSignTaskRequest(
-            String taskName, String fileId, String actorId, String corpName, String orgCode, String sealId,
-            String notifyPhone, String businessNo, String notifyUrl, boolean sendNotification) {
-    }
-
     public record PurchaseContractTaskRequest(
             String taskName, String fileId, String businessNo, String notifyUrl,
             String buyerName, String buyerCreditCode, String buyerOpenCorpId, String buyerEntityId, String buyerSealId, String freeSignBusinessId,
             String supplierName, String supplierCreditCode, String supplierPhone, Integer fileTotalPages) {
     }
 
-    public record ActorSignUrl(
-            String actorSignTaskUrl, String actorSignTaskEmbedUrl) {
-    }
-
-    public record ActorSignUrlRequest(
-            String signTaskId, String actorId, String clientUserId, String redirectUrl, String redirectMiniAppUrl) {
-    }
-
     public record DownloadUrlRequest(
             String ownerIdType, String ownerOpenId, String signTaskId, String customName,
             boolean compression, String downloadMode) {
-    }
-
-    public record EditUrlRequest(
-            String signTaskId, String initiatorIdType, String initiatorOpenId,
-            String redirectUrl, boolean editAfterStart) {
     }
 
     public record SealFreeSignUrlRequest(
@@ -1242,9 +1077,5 @@ public class FadadaOpenApiClient {
         private boolean isValidAt(Instant instant) {
             return instant.isBefore(expiresAt);
         }
-    }
-
-    private static String encodeRedirectUrl(String value) {
-        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
     }
 }

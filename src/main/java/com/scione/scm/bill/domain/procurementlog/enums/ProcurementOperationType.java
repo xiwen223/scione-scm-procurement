@@ -11,7 +11,6 @@ public enum ProcurementOperationType {
     CREATE("CREATE", "新增", false),
     UPDATE("UPDATE", "修改", true),
     DELETE("DELETE", "删除", false),
-    UPDATE_SEAL("UPDATE_SEAL", "修改签章", false),
     UPLOAD_SEAL("UPLOAD_SEAL", "上传印章", false),
     REMOVE_SEAL("REMOVE_SEAL", "移除印章", false),
 

@@ -3,7 +3,6 @@ package com.scione.scm.bill.application;
 import com.scione.common.model.PageResult;
 import com.scione.scm.bill.application.dto.BuyerCompanyDetailResponse;
 import com.scione.scm.bill.application.dto.BuyerCompanyListItemResponse;
-import com.scione.scm.bill.application.dto.BuyerCompanySealRequest;
 import com.scione.scm.bill.application.dto.BuyerCompanySealUploadResponse;
 import com.scione.scm.bill.application.dto.BuyerCompanyUpsertRequest;
 import com.scione.scm.bill.application.dto.FileUploadResponse;
@@ -137,29 +136,6 @@ public class BuyerCompanyApplicationService {
             throw duplicateError(company);
         }
 
-        return toDetail(requireCompany(id));
-    }
-
-    @Transactional
-    public BuyerCompanyDetailResponse updateSeal(Long id, BuyerCompanySealRequest request) {
-        requireCompany(id);
-        String sealUrl = blankToNull(request.sealUrl());
-        if (sealUrl != null && sealUrl.length() > 512) {
-            throw new BusinessException(ResultCode.PARAM_ERROR, "签章图片地址长度不能超过 512");
-        }
-
-        // 移除签章时印章名称一并清空；新增 / 更换签章时印章名称必填
-        String sealName = blankToNull(request.sealName());
-        if (sealUrl == null) {
-            sealName = null;
-        } else if (sealName == null) {
-            throw new BusinessException(ResultCode.PARAM_ERROR, "印章名称不能为空");
-        }
-        if (sealName != null && sealName.length() > MAX_SEAL_NAME_LENGTH) {
-            throw new BusinessException(ResultCode.PARAM_ERROR, "印章名称长度不能超过 " + MAX_SEAL_NAME_LENGTH);
-        }
-
-        mapper.updateSeal(id, sealUrl, sealName);
         return toDetail(requireCompany(id));
     }
 
