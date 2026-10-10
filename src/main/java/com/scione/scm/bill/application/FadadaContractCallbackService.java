@@ -26,7 +26,7 @@ public class FadadaContractCallbackService {
         // 回调步骤2：优先按业务编号查合同，找不到时按原签署或解除协议任务 ID 匹配。
         Contract contract = findContract(body, contractNo);
         if (contract == null) {
-            log.warn("法大大合同回调无法关联合同：event={}, transReferenceIdPresent={}, businessNoPresent={}",
+            log.info("法大大合同回调无法关联合同：event={}, transReferenceIdPresent={}, businessNoPresent={}",
                     event, body.hasNonNull("transReferenceId"), body.hasNonNull("businessNo"));
             return;
         }

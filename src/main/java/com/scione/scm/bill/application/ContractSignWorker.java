@@ -72,7 +72,7 @@ public class ContractSignWorker {
                     mapper.touchWaitingSign(id);
                     service.syncFinishedSignTask(id, Contract.SYSTEM_OPERATOR);
                 } catch (Exception ex) {
-                    log.warn("我方签署状态兜底查询失败，稍后重试：contractId={}, reason={}", id, ex.getMessage());
+                    log.info("我方签署状态兜底查询失败，稍后重试：contractId={}, reason={}", id, ex.getMessage());
                 }
             })) break;
         }

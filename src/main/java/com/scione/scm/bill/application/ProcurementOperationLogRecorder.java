@@ -83,7 +83,7 @@ public class ProcurementOperationLogRecorder {
             String operatorName,
             Map<String, Object> details) {
         if (businessType == null || dataId == null || operationType == null) {
-            log.warn("操作日志缺少必要字段，已跳过：businessType={}, dataId={}, operationType={}",
+            log.info("操作日志缺少必要字段，已跳过：businessType={}, dataId={}, operationType={}",
                     businessType, dataId, operationType);
             return;
         }
@@ -151,7 +151,7 @@ public class ProcurementOperationLogRecorder {
         try {
             return truncate(objectMapper.writeValueAsString(details), MAX_OPERATION_DETAILS_LENGTH);
         } catch (JsonProcessingException exception) {
-            log.warn("操作详情序列化失败，本条日志不记录详情：{}", details, exception);
+            log.info("操作详情序列化失败，本条日志不记录详情：{}", details, exception);
             return null;
         }
     }

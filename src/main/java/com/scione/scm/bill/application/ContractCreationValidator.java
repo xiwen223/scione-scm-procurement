@@ -146,7 +146,7 @@ public class ContractCreationValidator {
         try {
             picUrlsBySku.putAll(contractRepository.findLatestItemPicUrlsBySkus(skus));
         } catch (RuntimeException ex) {
-            log.warn("合同创建校验：本地商品图片缓存查询失败，改为直接查领星，待查 SKU 数={}", skus.size(), ex);
+            log.info("合同创建校验：本地商品图片缓存查询失败，改为直接查领星，待查 SKU 数={}", skus.size(), ex);
         }
 
         // 2. 仍未命中的 SKU 一次性批量查领星（接口本身支持 skus 数组）
@@ -160,7 +160,7 @@ public class ContractCreationValidator {
                     }
                 });
             } catch (RuntimeException ex) {
-                log.warn("合同创建校验：批量查询领星商品图失败，待查 SKU 数={}", remains.size(), ex);
+                log.info("合同创建校验：批量查询领星商品图失败，待查 SKU 数={}", remains.size(), ex);
                 queryFailedSkus.addAll(remains);
             }
         }

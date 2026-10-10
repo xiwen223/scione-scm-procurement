@@ -99,7 +99,7 @@ public class ContractImageCompressor {
             byte[] encoded = encodeJpeg(scale(source, maxSide));
             return encoded.length < raw.length ? encoded : raw;
         } catch (IOException | RuntimeException ex) {
-            log.warn("图片压缩失败，按原样嵌入：bytes={}, exception={}", raw.length, ex.getClass().getSimpleName());
+            log.info("图片压缩失败，按原样嵌入：bytes={}, exception={}", raw.length, ex.getClass().getSimpleName());
             return raw;
         }
     }

@@ -63,13 +63,13 @@ public class ContractImageDownloader {
                     try {
                         byte[] bytes = restTemplate.getForObject(url, byte[].class);
                         if (bytes == null || bytes.length == 0) {
-                            log.warn("合同商品图片下载为空：contractNo={}", contractNo);
+                            log.info("合同商品图片下载为空：contractNo={}", contractNo);
                             return null;
                         }
                         return bytes;
                     } catch (RuntimeException ex) {
                         // 不打印可能包含临时凭据的图片 URL。
-                        log.warn("合同商品图片下载失败，继续生成：contractNo={}, exception={}",
+                        log.info("合同商品图片下载失败，继续生成：contractNo={}, exception={}",
                                 contractNo, ex.getClass().getSimpleName());
                         return null;
                     }

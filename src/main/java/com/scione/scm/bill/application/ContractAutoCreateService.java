@@ -146,7 +146,7 @@ public class ContractAutoCreateService {
         try {
             existing = contractRepository.findActiveByPurchaseOrderNo(orderNo).orElse(null);
         } catch (RuntimeException ex) {
-            log.warn("手动创建预填：查询采购单已有合同失败，跳过该提示：purchaseOrderNo={}", orderNo, ex);
+            log.info("手动创建预填：查询采购单已有合同失败，跳过该提示：purchaseOrderNo={}", orderNo, ex);
         }
 
         log.info("手动创建领星预填完成：purchaseOrderNo={}, supplierId={}, 已有合同={}, 未带出字段={}",
@@ -226,7 +226,7 @@ public class ContractAutoCreateService {
         try {
             resolved.putAll(contractRepository.findLatestItemPicUrlsBySkus(skus));
         } catch (RuntimeException ex) {
-            log.warn("手动创建预填：本地图片缓存查询失败，改为直接查领星：待查 SKU 数={}", skus.size(), ex);
+            log.info("手动创建预填：本地图片缓存查询失败，改为直接查领星：待查 SKU 数={}", skus.size(), ex);
         }
         List<String> remains = skus.stream().filter(sku -> !resolved.containsKey(sku)).toList();
         if (!remains.isEmpty()) {
@@ -237,7 +237,7 @@ public class ContractAutoCreateService {
                     }
                 });
             } catch (RuntimeException ex) {
-                log.warn("手动创建预填：批量查询领星商品图失败，图片留空：待查 SKU 数={}", remains.size(), ex);
+                log.info("手动创建预填：批量查询领星商品图失败，图片留空：待查 SKU 数={}", remains.size(), ex);
             }
         }
         return resolved;
@@ -271,7 +271,7 @@ public class ContractAutoCreateService {
         try {
             return lingxingSupplierClient.findSupplierProfile(supplierId).orElse(null);
         } catch (RuntimeException ex) {
-            log.warn("领星预填：查询供应商档案失败，供方扩展字段留空：supplierId={}", supplierId, ex);
+            log.info("领星预填：查询供应商档案失败，供方扩展字段留空：supplierId={}", supplierId, ex);
             return null;
         }
     }
@@ -408,7 +408,7 @@ public class ContractAutoCreateService {
             String reason = "PO=" + poNo + "，供应商=" + po.getSupplierName()
                     + "，跳过原因：查询领星默认收款账户失败，无法进行账户名称白名单核验";
             contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
-            log.warn("跳过建合同：{}", reason, ex);
+            log.info("跳过建合同：{}", reason, ex);
             return false;
         }
 
@@ -432,44 +432,44 @@ public class ContractAutoCreateService {
         if (!validation.missingFields().isEmpty()) {
             String reason = "PO=" + poNo + "，缺失/不满足字段：" + String.join("、", validation.missingFields());
             contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
-            log.warn("跳过建合同：{}", reason);
+            log.info("跳过建合同：{}", reason);
             return false;
         }
 
         // 校验 1：supplier_name 必填
         if (!StringUtils.hasText(po.getSupplierName())) {
-            log.warn("跳过建合同（supplier_name 为空）：poNo={}", poNo);
+            log.info("跳过建合同（supplier_name 为空）：poNo={}", poNo);
             return false;
         }
 
 
         // 校验 2：supplier_phone 必填（签署必需）
         if (!StringUtils.hasText(po.getSupplierPhone())) {
-            log.warn("跳过建合同（supplier_phone 为空）：poNo={}", poNo);
+            log.info("跳过建合同（supplier_phone 为空）：poNo={}", poNo);
             return false;
         }
 
         // 校验 3：contact_person 必填
         if (!StringUtils.hasText(po.getContactPerson())) {
-            log.warn("跳过建合同（contact_person 为空）：poNo={}", poNo);
+            log.info("跳过建合同（contact_person 为空）：poNo={}", poNo);
             return false;
         }
 
         // 校验 4：必须有明细
         if (po.getItems() == null || po.getItems().isEmpty()) {
-            log.warn("跳过建合同（无明细）：poNo={}", poNo);
+            log.info("跳过建合同（无明细）：poNo={}", poNo);
             return false;
         }
 
         // 校验 5：需方公司地址必填（用于签订地点）
         if (!StringUtils.hasText(buyer.getAddress())) {
-            log.warn("跳过建合同（需方公司地址为空）：poNo={}, buyerCompanyId={}", poNo, buyer.getId());
+            log.info("跳过建合同（需方公司地址为空）：poNo={}, buyerCompanyId={}", poNo, buyer.getId());
             return false;
         }
 
         // 校验 6：唯一性兜底
         if (contractRepository.existsActiveByPurchaseOrderNo(poNo)) {
-            log.warn("跳过建合同（已存在非取消合同）：poNo={}", poNo);
+            log.info("跳过建合同（已存在非取消合同）：poNo={}", poNo);
             recordDuplicateCreateSkipped(poNo);
             return false;
         }
@@ -492,7 +492,7 @@ public class ContractAutoCreateService {
         } catch (DuplicateKeyException ex) {
             // 上面的 existsActiveByPurchaseOrderNo 是「先查后写」，与另一个实例的创建存在竞态窗口；
             // contract.uk_contract_active_po_no 是最终兜底，撞上说明确有并发，按「已存在」跳过即可。
-            log.warn("跳过建合同（并发重复创建，命中唯一约束）：poNo={}", poNo, ex);
+            log.info("跳过建合同（并发重复创建，命中唯一约束）：poNo={}", poNo, ex);
             recordDuplicateCreateSkipped(poNo);
             return false;
         }
@@ -521,7 +521,7 @@ public class ContractAutoCreateService {
                         details += "；已有合同=" + existing.contractNo() + "；合同状态=" + existing.statusText();
                     }
                 } catch (RuntimeException ex) {
-                    log.warn("重复创建跳过日志查询已有合同失败：purchaseOrderNo={}", purchaseOrderNo, ex);
+                    log.info("重复创建跳过日志查询已有合同失败：purchaseOrderNo={}", purchaseOrderNo, ex);
                 }
                 contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(purchaseOrderNo, details));
             });
@@ -604,7 +604,7 @@ public class ContractAutoCreateService {
         //    一次查询同时拿到「有没有」和「是哪一份」，报错时能直接告诉用户撞的是哪张合同。
         ActiveContractRef existingContract = contractRepository.findActiveByPurchaseOrderNo(purchaseOrderNo).orElse(null);
         if (existingContract != null) {
-            log.warn("手动创建被拒：采购单已有有效合同，purchaseOrderNo={}, 已有合同={}({})",
+            log.info("手动创建被拒：采购单已有有效合同，purchaseOrderNo={}, 已有合同={}({})",
                     purchaseOrderNo, existingContract.contractNo(), existingContract.statusText());
             throw new BusinessException(ResultCode.CONTRACT_PURCHASE_ORDER_ALREADY_EXISTS,
                     "该采购单已存在合同 " + existingContract.contractNo()
@@ -645,7 +645,7 @@ public class ContractAutoCreateService {
             // 第 4 步的 findActiveByPurchaseOrderNo 是「先查后写」，而本方法在检查之后还要
             // 改明细、批量查领星图片、压图，窗口有几秒到几十秒；若期间定时任务或另一次点击
             // 抢先落库，这里由 contract.uk_contract_active_po_no 拦下，转成与前置检查一致的业务提示。
-            log.warn("手动创建合同命中唯一约束（并发重复创建）：purchaseOrderNo={}", purchaseOrderNo, ex);
+            log.info("手动创建合同命中唯一约束（并发重复创建）：purchaseOrderNo={}", purchaseOrderNo, ex);
             throw new BusinessException(ResultCode.CONTRACT_PURCHASE_ORDER_ALREADY_EXISTS);
         }
 
@@ -764,7 +764,7 @@ public class ContractAutoCreateService {
                 contract.setContractDate(date);
                 log.info("手动覆盖合同日期：{}", date);
             } catch (Exception ex) {
-                log.warn("合同日期格式错误，使用默认值：{}", request.getContractDate());
+                log.info("合同日期格式错误，使用默认值：{}", request.getContractDate());
             }
         }
 
@@ -775,7 +775,7 @@ public class ContractAutoCreateService {
                 contract.setDeliveryDate(date);
                 log.info("手动覆盖交货日期：{}", date);
             } catch (Exception ex) {
-                log.warn("交货日期格式错误，忽略：{}", request.getDeliveryDate());
+                log.info("交货日期格式错误，忽略：{}", request.getDeliveryDate());
             }
         }
     }
@@ -809,7 +809,7 @@ public class ContractAutoCreateService {
             ContractItem item = matchItem(items, override);
             if (item == null) {
                 ignored++;
-                log.warn("明细覆盖值未匹配到采购商品，已忽略：contractNo={}, index={}, sku={}",
+                log.info("明细覆盖值未匹配到采购商品，已忽略：contractNo={}, index={}, sku={}",
                         contract.getContractNo(), override.getIndex(), override.getSku());
                 continue;
             }
@@ -823,7 +823,7 @@ public class ContractAutoCreateService {
             matched++;
         }
         if (matched == 0) {
-            log.warn("明细覆盖值全部未匹配，金额保持采购单原值：contractNo={}, 未命中={}",
+            log.info("明细覆盖值全部未匹配，金额保持采购单原值：contractNo={}, 未命中={}",
                     contract.getContractNo(), ignored);
             return;
         }
@@ -961,7 +961,7 @@ public class ContractAutoCreateService {
         try {
             List<ContractItem> contractItems = contract.getItems();
             if (contractItems == null || contractItems.isEmpty()) {
-                log.warn("合同无明细，跳过图片获取：contractNo={}", contract.getContractNo());
+                log.info("合同无明细，跳过图片获取：contractNo={}", contract.getContractNo());
                 return;
             }
 
@@ -983,7 +983,7 @@ public class ContractAutoCreateService {
                 }
                 String sku = contractItem.getSku();
                 if (sku == null || sku.isBlank()) {
-                    log.warn("合同明细SKU为空，跳过图片获取：contractNo={}", contract.getContractNo());
+                    log.info("合同明细SKU为空，跳过图片获取：contractNo={}", contract.getContractNo());
                     imageNotFoundCount++;
                     continue;
                 }
@@ -1010,7 +1010,7 @@ public class ContractAutoCreateService {
                     cachedPicUrls = contractRepository.findLatestItemPicUrlsBySkus(pendingBySku.keySet());
                 } catch (Exception ex) {
                     // 查库失败不阻断：这几个 SKU 直接退化为查领星
-                    log.warn("合同明细图片缓存批量查询失败（改为直接查领星）：contractNo={}, 待查 SKU 数={}",
+                    log.info("合同明细图片缓存批量查询失败（改为直接查领星）：contractNo={}, 待查 SKU 数={}",
                             contract.getContractNo(), pendingBySku.size(), ex);
                 }
                 for (Map.Entry<String, List<ContractItem>> entry : pendingBySku.entrySet()) {
@@ -1055,7 +1055,7 @@ public class ContractAutoCreateService {
                             imageFoundCount++;
                             log.info("获取商品图片成功：sku={}, picUrl={}", contractItem.getSku(), picUrl);
                         } else {
-                            log.warn("领星API未找到商品图片：sku={}", contractItem.getSku());
+                            log.info("领星API未找到商品图片：sku={}", contractItem.getSku());
                             imageNotFoundCount++;
                         }
                     }
@@ -1093,7 +1093,7 @@ public class ContractAutoCreateService {
             });
         } catch (RuntimeException ex) {
             // 创建前已做必填校验；此处仅防御性保护，避免远端短暂波动覆盖已校验的数据。
-            log.warn("回填供方地址失败：supplierId={}", contract.getSupplierId());
+            log.info("回填供方地址失败：supplierId={}", contract.getSupplierId());
         }
     }
 

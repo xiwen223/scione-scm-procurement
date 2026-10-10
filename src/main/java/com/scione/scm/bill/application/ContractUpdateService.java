@@ -93,7 +93,7 @@ public class ContractUpdateService {
         Optional<Contract> contractOpt = contractRepository.findById(contractId);
         if (contractOpt.isEmpty()) {
             // 业务问题（资源不存在）用 WARN，不打堆栈；系统故障才用 ERROR
-            log.warn("合同不存在，无法修改：contractId={}", contractId);
+            log.info("合同不存在，无法修改：contractId={}", contractId);
             throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
                     "合同不存在：contractId=" + contractId);
         }
@@ -104,7 +104,7 @@ public class ContractUpdateService {
 
         // 2. 仅“创建”状态允许修改合同及折扣，避免签署中的文件与已提交签署任务不一致。
         if (contract.isSignLaunching() || contract.getStatus() != ContractStatus.CREATED) {
-            log.warn("合同状态不允许修改：contractNo={}, status={}", oldContractNo, contract.getStatus().getDesc());
+            log.info("合同状态不允许修改：contractNo={}, status={}", oldContractNo, contract.getStatus().getDesc());
             throw new BusinessException(ResultCode.CONTRACT_STATUS_NOT_ALLOWED,
                     "合同状态为【" + contract.getStatus().getDesc() + "】，不允许修改");
         }
@@ -386,7 +386,7 @@ public class ContractUpdateService {
                     contract.setContractDate(newDate);
                 }
             } catch (Exception ex) {
-                log.warn("签署日期格式错误，忽略：{}", request.getContractDate());
+                log.info("签署日期格式错误，忽略：{}", request.getContractDate());
             }
         }
 
@@ -400,7 +400,7 @@ public class ContractUpdateService {
                     contract.setDeliveryDate(newDate);
                 }
             } catch (Exception ex) {
-                log.warn("交货日期格式错误，忽略：{}", request.getDeliveryDate());
+                log.info("交货日期格式错误，忽略：{}", request.getDeliveryDate());
             }
         }
         return mainChanged || changeDetails.size() > changesBeforeDates;
@@ -423,7 +423,7 @@ public class ContractUpdateService {
                 contract.setTemplateId(templateId);
             }
         } catch (BusinessException ex) {
-            log.warn("合同类型变更但未找到启用默认模板，保留原模板：contractId={}, contractType={}, reason={}",
+            log.info("合同类型变更但未找到启用默认模板，保留原模板：contractId={}, contractType={}, reason={}",
                     contract.getId(), contract.getContractType(), ex.getMessage());
             changeDetails.add("合同模板：类型【" + typeDesc + "】未配置启用默认模板，仍使用原模板");
         }
@@ -462,7 +462,7 @@ public class ContractUpdateService {
             ContractItem item = itemMap.get(itemId);
             if (item == null) {
                 // 不能静默跳过：请求里的明细必须属于该合同，否则调用方以为改成功、实际没改任何数据
-                log.warn("明细不存在或不属于该合同，拒绝修改：contractNo={}, itemId={}", contractNo, itemId);
+                log.info("明细不存在或不属于该合同，拒绝修改：contractNo={}, itemId={}", contractNo, itemId);
                 throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
                         "合同明细不存在或不属于该合同：itemId=" + itemId + "，contractNo=" + contractNo);
             }
@@ -496,7 +496,7 @@ public class ContractUpdateService {
             if (changeDetails.size() > changesBefore) {
                 if (item.getQuantity() == null || item.getUnitPrice() == null) {
                     // 存量数据缺数量或单价时无法重算金额：不猜值，保持原金额不动，只记录
-                    log.warn("明细缺少数量或单价，跳过金额重算：contractNo={}, itemId={}, quantity={}, unitPrice={}",
+                    log.info("明细缺少数量或单价，跳过金额重算：contractNo={}, itemId={}, quantity={}, unitPrice={}",
                             contractNo, itemId, item.getQuantity(), item.getUnitPrice());
                 } else {
                     BigDecimal newAmount = new BigDecimal(item.getQuantity())

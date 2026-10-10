@@ -259,7 +259,7 @@ public class PoiContractTemplateService implements ContractTemplateService {
                             log.info("图片插入成功：rowIndex={}, sku={}, imageSize={} bytes",
                                     currentRowIndex, item.getSku(), imageBytes.length);
                         } else {
-                            log.warn("下载的图片为空：rowIndex={}, sku={}, picUrl={}",
+                            log.info("下载的图片为空：rowIndex={}, sku={}, picUrl={}",
                                     currentRowIndex, item.getSku(), item.getPicUrl());
                         }
 
@@ -340,7 +340,7 @@ public class PoiContractTemplateService implements ContractTemplateService {
                     setCellValue(sheet, deliveryRow, 1, deliveryText); // B列
                 }
             } else {
-                log.warn("交货日期为空，跳过填充：contractNo={}", contract.getContractNo());
+                log.info("交货日期为空，跳过填充：contractNo={}", contract.getContractNo());
             }
 
             // 第30行（索引29）：结算方式
@@ -448,7 +448,7 @@ public class PoiContractTemplateService implements ContractTemplateService {
         try {
             return lingxingSupplierClient.findDefaultPaymentAccount(contract.getSupplierId());
         } catch (RuntimeException ex) {
-            log.warn("获取供应商默认收款账号失败，使用基础结算说明：supplierId={}", contract.getSupplierId());
+            log.info("获取供应商默认收款账号失败，使用基础结算说明：supplierId={}", contract.getSupplierId());
             return Optional.empty();
         }
     }
@@ -459,7 +459,7 @@ public class PoiContractTemplateService implements ContractTemplateService {
         try {
             byte[] bytes = downloadedImages.get(item.getPicUrl());
             if (bytes == null || bytes.length == 0) {
-                log.warn("合同明细图片为空：sku={}", item.getSku());
+                log.info("合同明细图片为空：sku={}", item.getSku());
                 return;
             }
             Workbook workbook = cell.getSheet().getWorkbook();
@@ -490,7 +490,7 @@ public class PoiContractTemplateService implements ContractTemplateService {
      */
     private void adjustDrawingPositions(Sheet sheet, int insertPosition, int rowsToShift) {
         if (!(sheet instanceof XSSFSheet)) {
-            log.warn("只有XSSFSheet支持图片位置调整，当前sheet类型：{}", sheet.getClass().getName());
+            log.info("只有XSSFSheet支持图片位置调整，当前sheet类型：{}", sheet.getClass().getName());
             return;
         }
 

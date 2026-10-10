@@ -110,7 +110,7 @@ public class ContractController {
             return ApiResponse.success(response);
 
         } catch (BusinessException ex) {
-            log.warn("手动创建合同校验未通过：purchaseOrderNo={}, reason={}",
+            log.info("手动创建合同校验未通过：purchaseOrderNo={}, reason={}",
                     request.getPurchaseOrderNo(), ex.getMessage());
             return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
         } catch (RuntimeException ex) {
@@ -212,11 +212,11 @@ public class ContractController {
 
         } catch (com.scione.scm.bill.common.BusinessException ex) {
             // 业务校验（编号占用、类型非法、状态不允许等）要把原因原样返回给用户
-            log.warn("修改合同校验未通过：contractId={}, reason={}", contractId, ex.getMessage());
+            log.info("修改合同校验未通过：contractId={}, reason={}", contractId, ex.getMessage());
             return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
 
         } catch (IllegalArgumentException | IllegalStateException ex) {
-            log.warn("修改合同参数非法：contractId={}, reason={}", contractId, ex.getMessage());
+            log.info("修改合同参数非法：contractId={}, reason={}", contractId, ex.getMessage());
             return ApiResponse.fail(ResultCode.PARAM_ERROR.getCode(), ex.getMessage());
 
         } catch (RuntimeException ex) {

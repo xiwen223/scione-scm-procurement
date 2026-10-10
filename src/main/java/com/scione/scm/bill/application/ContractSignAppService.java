@@ -165,9 +165,9 @@ public class ContractSignAppService {
                     log.info("签署前复用合同PDF成功：contractNo={}, bytes={}", contract.getContractNo(), cachedPdf.length);
                     return cachedPdf;
                 }
-                log.warn("已保存合同PDF为空，改为重新生成：contractNo={}", contract.getContractNo());
+                log.info("已保存合同PDF为空，改为重新生成：contractNo={}", contract.getContractNo());
             } catch (Exception ex) {
-                log.warn("读取已保存合同PDF失败，改为重新生成：contractNo={}, reason={}",
+                log.info("读取已保存合同PDF失败，改为重新生成：contractNo={}, reason={}",
                         contract.getContractNo(), ex.getMessage());
             }
         }
@@ -435,22 +435,22 @@ public class ContractSignAppService {
                 StringUtils.hasText(buyer.getFadadaFreeSignBusinessId()), buyer.getFadadaFreeSignExpireTime(),
                 StringUtils.hasText(latestSupplierCreditCode), StringUtils.hasText(latestSupplierPhone));
         if (!StringUtils.hasText(buyer.getOpenCorpId())) {
-            log.warn("签署参数校验失败：需方法大大OpenCorpId缺失，contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
+            log.info("签署参数校验失败：需方法大大OpenCorpId缺失，contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
             throw new BusinessException(ResultCode.PARAM_ERROR, "需方法大大OpenCorpId未配置");
         }
         if (!StringUtils.hasText(buyer.getSealUrl())) {
-            log.warn("签署参数校验失败：需方印章图片缺失，contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
+            log.info("签署参数校验失败：需方印章图片缺失，contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
             throw new BusinessException(ResultCode.PARAM_ERROR, "我司印章未上传");
         }
         if (!StringUtils.hasText(buyer.getFadadaSealId())) {
-            log.warn("签署参数校验失败：法大大印章ID缺失，contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
+            log.info("签署参数校验失败：法大大印章ID缺失，contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
             throw new BusinessException(ResultCode.PARAM_ERROR, "我司法大大印章未审核完成");
         }
         // 免验证签场景码的「缺失 / 过期」校验已提前到 assertFreeSignBusinessIdConfigured()，
         // 这里不再重复，避免同一条拦截出现两种不同的提示。
         if (!StringUtils.hasText(latestSupplierCreditCode)
                 || !StringUtils.hasText(latestSupplierPhone)) {
-            log.warn("签署参数校验失败：供方签署资料缺失，contractNo={}, creditCodePresent={}, phonePresent={}",
+            log.info("签署参数校验失败：供方签署资料缺失，contractNo={}, creditCodePresent={}, phonePresent={}",
                     contract.getContractNo(), StringUtils.hasText(latestSupplierCreditCode), StringUtils.hasText(latestSupplierPhone));
             throw new BusinessException(ResultCode.PARAM_ERROR, "供应商统一社会信用代码或签署手机号未填写");
         }
@@ -479,7 +479,7 @@ public class ContractSignAppService {
             log.info("签署任务创建后状态查询：contractNo={}, signTaskId={}, taskStatus={}, actors={}",
                     contractNo, signTaskId, detail.path("signTaskStatus").asText("<unknown>"), actorStatuses);
         } catch (RuntimeException ex) {
-            log.warn("签署任务已创建，但创建后状态查询失败（不影响签署流程）：contractNo={}, signTaskId={}, reason={}",
+            log.info("签署任务已创建，但创建后状态查询失败（不影响签署流程）：contractNo={}, signTaskId={}, reason={}",
                     contractNo, signTaskId, ex.getMessage());
         }
     }
@@ -503,7 +503,7 @@ public class ContractSignAppService {
             fadadaOpenApiClient.urgeSignTask(contract.getFadadaTaskId());
         } catch (BusinessException ex) {
             // 第三方返回内容只留在后台日志；接口响应使用本系统业务文案，避免向用户暴露服务商及业务码。
-            log.warn("催办请求未受理：contractNo={}, signTaskId={}, upstreamReason={}",
+            log.info("催办请求未受理：contractNo={}, signTaskId={}, upstreamReason={}",
                     contract.getContractNo(), contract.getFadadaTaskId(), ex.getMessage());
             if (isUrgeTimeLimit(ex.getMessage())) {
                 throw new BusinessException(ResultCode.PARAM_ERROR, "催办时间间隔未到，请稍后再试");
@@ -549,7 +549,7 @@ public class ContractSignAppService {
             log.info("{}法大大任务状态：contractNo={}, signTaskId={}, taskStatus={}, actors={}",
                     scene, contractNo, signTaskId, detail.path("signTaskStatus").asText("<unknown>"), actors);
         } catch (RuntimeException ex) {
-            log.warn("{}查询法大大任务状态失败（不影响催签结果）：contractNo={}, signTaskId={}, reason={}",
+            log.info("{}查询法大大任务状态失败（不影响催签结果）：contractNo={}, signTaskId={}, reason={}",
                     scene, contractNo, signTaskId, ex.getMessage());
         }
     }

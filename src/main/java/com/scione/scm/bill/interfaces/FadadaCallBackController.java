@@ -124,15 +124,15 @@ public class FadadaCallBackController {
         String nonce = headers.getFirst("X-FASC-Nonce");
 
         if (isBlank(sign) || isBlank(timestamp)) {
-            log.warn("法大大回调缺少签名或时间戳，已忽略：event={}", event);
+            log.info("法大大回调缺少签名或时间戳，已忽略：event={}", event);
             return false;
         }
         if (isBlank(appId) || !appId.equals(fadadaOpenApiProperties.getAppId())) {
-            log.warn("法大大回调 AppId 不匹配，已忽略：event={}", event);
+            log.info("法大大回调 AppId 不匹配，已忽略：event={}", event);
             return false;
         }
         if (!isBlank(signType) && !SIGN_TYPE.equalsIgnoreCase(signType)) {
-            log.warn("法大大回调签名类型不支持，已忽略：signType={}", signType);
+            log.info("法大大回调签名类型不支持，已忽略：signType={}", signType);
             return false;
         }
 
@@ -155,7 +155,7 @@ public class FadadaCallBackController {
         }
 
         if (!expected.equalsIgnoreCase(sign.trim())) {
-            log.warn("法大大回调验签不通过，已忽略：event={}, appId={}", event, appId);
+            log.info("法大大回调验签不通过，已忽略：event={}, appId={}", event, appId);
             return false;
         }
         return true;
@@ -244,7 +244,7 @@ public class FadadaCallBackController {
 
         String reason = text(business, "reason");
         if (isBlank(reason)) {
-            log.warn("法大大印章审核不通过回调未携带 reason，仅更新审核状态：verifyId={}", verifyId);
+            log.info("法大大印章审核不通过回调未携带 reason，仅更新审核状态：verifyId={}", verifyId);
         }
         buyerCompanyApplicationService.handleSealVerifyFailed(verifyId, reason);
     }

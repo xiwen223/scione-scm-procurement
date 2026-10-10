@@ -220,7 +220,7 @@ public class BuyerCompanyApplicationService {
      * <p>补偿本身失败只记 ERROR 并保留原始异常向上抛出，不能让清理异常掩盖真正的失败原因。</p>
      */
     private void compensateFailedSealUpload(Long id, String objectKey, RuntimeException cause) {
-        log.warn("法大大创建印章失败，回滚本次上传的签章数据：companyId={}, objectKey={}", id, objectKey, cause);
+        log.info("法大大创建印章失败，回滚本次上传的签章数据：companyId={}, objectKey={}", id, objectKey, cause);
         try {
             fileApplicationService.delete(objectKey);
             mapper.clearSeal(id);
@@ -294,7 +294,7 @@ public class BuyerCompanyApplicationService {
         Thread.sleep(3000);
         int updated = mapper.updateSealVerified(verify, fadadaSealId);
         if (updated == 0) {
-            log.warn("法大大印章审核通过回调未匹配到待更新记录（印章可能已移除、公司已删除或 verifyId 未被记录）：verifyId={}, sealId={}",
+            log.info("法大大印章审核通过回调未匹配到待更新记录（印章可能已移除、公司已删除或 verifyId 未被记录）：verifyId={}, sealId={}",
                     verify, fadadaSealId);
             return;
         }
@@ -326,7 +326,7 @@ public class BuyerCompanyApplicationService {
 
         int updated = mapper.updateFreeSignAuthorization(fadadaSealId, sceneCode, expireAt);
         if (updated == 0) {
-            log.warn("法大大免验证签授权回调未匹配到待更新记录（印章已被移除、公司已逻辑删除、或印章尚未落库）：sealId={}",
+            log.info("法大大免验证签授权回调未匹配到待更新记录（印章已被移除、公司已逻辑删除、或印章尚未落库）：sealId={}",
                     fadadaSealId);
             return;
         }
@@ -350,7 +350,7 @@ public class BuyerCompanyApplicationService {
         try {
             millis = Long.parseLong(value.trim());
         } catch (NumberFormatException exception) {
-            log.warn("法大大免验证签授权回调 expiresTime 不是合法毫秒时间戳，到期时间按不限期处理：expiresTime={}", value);
+            log.info("法大大免验证签授权回调 expiresTime 不是合法毫秒时间戳，到期时间按不限期处理：expiresTime={}", value);
             return null;
         }
         return millis > 0 ? LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneId.systemDefault()) : null;
@@ -376,7 +376,7 @@ public class BuyerCompanyApplicationService {
         Thread.sleep(3000);
         int updated = mapper.updateSealVerifyFailed(verify, failedReason);
         if (updated == 0) {
-            log.warn("法大大印章审核不通过回调未匹配到待更新记录（印章已被移除、公司已逻辑删除、或 verifyId 未被记录）：verifyId={}",
+            log.info("法大大印章审核不通过回调未匹配到待更新记录（印章已被移除、公司已逻辑删除、或 verifyId 未被记录）：verifyId={}",
                     verify);
             return;
         }
@@ -390,7 +390,7 @@ public class BuyerCompanyApplicationService {
         if (value == null || value.length() <= MAX_SEAL_FAILED_REASON_LENGTH) {
             return value;
         }
-        log.warn("法大大印章审核不通过原因超过 {} 个字符，已截断入库", MAX_SEAL_FAILED_REASON_LENGTH);
+        log.info("法大大印章审核不通过原因超过 {} 个字符，已截断入库", MAX_SEAL_FAILED_REASON_LENGTH);
         return value.substring(0, MAX_SEAL_FAILED_REASON_LENGTH);
     }
 

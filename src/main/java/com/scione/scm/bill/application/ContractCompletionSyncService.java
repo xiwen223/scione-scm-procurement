@@ -28,7 +28,7 @@ public class ContractCompletionSyncService {
         for (Contract contract : contractRepository.findExecutingContracts()) {
             scanned++;
             if (contract.getPurchaseOrderNo() == null || contract.getPurchaseOrderNo().isBlank()) {
-                log.warn("履行中合同缺少采购单号，跳过领星完成同步：contractId={}, contractNo={}",
+                log.info("履行中合同缺少采购单号，跳过领星完成同步：contractId={}, contractNo={}",
                         contract.getId(), contract.getContractNo());
                 continue;
             }
@@ -55,7 +55,7 @@ public class ContractCompletionSyncService {
                     try {
                         var po = orders.get(orderNo);
                         if (po == null) {
-                            log.warn("领星未查询到履行中合同采购单：contractNo={}, purchaseOrderNo={}",
+                            log.info("领星未查询到履行中合同采购单：contractNo={}, purchaseOrderNo={}",
                                     contract.getContractNo(), contract.getPurchaseOrderNo());
                             continue;
                         }

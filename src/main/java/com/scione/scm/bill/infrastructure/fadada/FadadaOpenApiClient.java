@@ -525,7 +525,7 @@ public class FadadaOpenApiClient {
      */
     private String resolveEntityId(String openCorpId, String corpName) {
         if (isBlank(corpName)) {
-            log.warn("企业名称为空，跳过法大大主体查询，建章请求不带 entityId");
+            log.info("企业名称为空，跳过法大大主体查询，建章请求不带 entityId");
             return null;
         }
         String target = corpName.trim();
@@ -536,7 +536,7 @@ public class FadadaOpenApiClient {
                 return entity.entityId().trim();
             }
         }
-        log.warn("法大大主体列表中未找到同名主体，建章请求不带 entityId：corpName={}, 主体数={}", target, entities.size());
+        log.info("法大大主体列表中未找到同名主体，建章请求不带 entityId：corpName={}, 主体数={}", target, entities.size());
         return null;
     }
 
@@ -647,15 +647,15 @@ public class FadadaOpenApiClient {
             boolean hasNext = index + 1 < credentials.size();
             // 只有明确的应用不匹配业务码才切换备用应用；其他业务错误不是换凭证就能修复。
             if (hasNext && APP_MISMATCH_CODES.contains(code)) {
-                log.warn("法大大应用不匹配（业务码 {}），改用备用应用重试：path={}, 失败appId={}, 备用appId={}",
+                log.info("法大大应用不匹配（业务码 {}），改用备用应用重试：path={}, 失败appId={}, 备用appId={}",
                         code, path, credential.appId(), credentials.get(index + 1).appId());
                 continue;
             }
-            log.warn("Fadada request was rejected: {}", sanitizeReason(lastReason));
+            log.info("Fadada request was rejected: {}", sanitizeReason(lastReason));
             sendFailureAlert(path, lastReason, response);
             throw fadadaError(lastReason);
         }
-        log.warn("Fadada request was rejected: {}", sanitizeReason(lastReason));
+        log.info("Fadada request was rejected: {}", sanitizeReason(lastReason));
         throw fadadaError(lastReason == null ? "请求失败" : lastReason);
     }
 
@@ -670,7 +670,7 @@ public class FadadaOpenApiClient {
         String code = response == null ? "" : response.path("code").asText();
         if (!SUCCESS_CODE.equals(code)) {
             String reason = businessFailureReason(response);
-            log.warn("Fadada request was rejected: {}", sanitizeReason(reason));
+            log.info("Fadada request was rejected: {}", sanitizeReason(reason));
             sendFailureAlert(TOKEN_PATH, reason, response);
             throw fadadaError(reason);
         }
@@ -743,7 +743,7 @@ public class FadadaOpenApiClient {
                         path, credential.appId(), attempt, response == null ? "<空响应>" : response.path("code").asText());
                 return response;
             } catch (RestClientException exception) {
-                log.warn("法大大接口网络失败：path={}, appId={}, attempt={}, exception={}",
+                log.info("法大大接口网络失败：path={}, appId={}, attempt={}, exception={}",
                         path, credential.appId(), attempt, exception.getClass().getSimpleName());
                 if (attempt == attempts) {
                     String reason = transportFailureReason(exception);
@@ -810,7 +810,7 @@ public class FadadaOpenApiClient {
             // 从容器获取代理；直接 this 调用不会触发 @Async。
             selfProvider.getObject().sendFailureAlert(path, request);
         } catch (RuntimeException exception) {
-            log.warn("法大大接口告警任务提交失败：path={}, exception={}", path,
+            log.info("法大大接口告警任务提交失败：path={}, exception={}", path,
                     exception.getClass().getSimpleName());
         }
     }
@@ -826,11 +826,11 @@ public class FadadaOpenApiClient {
         try {
             ApiResponse<Void> result = weComClient.send(request);
             if (result == null || !result.isSuccess()) {
-                log.warn("法大大接口告警提交失败：path={}, code={}", path,
+                log.info("法大大接口告警提交失败：path={}, code={}", path,
                         result == null ? null : result.getCode());
             }
         } catch (Exception exception) {
-            log.warn("法大大接口告警提交异常：path={}, exception={}", path,
+            log.info("法大大接口告警提交异常：path={}, exception={}", path,
                     exception.getClass().getSimpleName());
         }
     }

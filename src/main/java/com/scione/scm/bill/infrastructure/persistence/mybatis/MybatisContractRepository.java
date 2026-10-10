@@ -63,7 +63,7 @@ public class MybatisContractRepository implements ContractRepository {
                 itemMapper.batchInsert(itemPOs);
             } else {
                 // 已有明细，跳过插入
-                log.warn("合同明细已存在，跳过插入：contractId={}, existingCount={}",
+                log.info("合同明细已存在，跳过插入：contractId={}, existingCount={}",
                         contractId, existingItems.size());
             }
         }

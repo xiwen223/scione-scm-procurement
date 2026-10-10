@@ -52,7 +52,7 @@ public class FadadaAlertContextAspect {
             }
         } catch (RuntimeException exception) {
             // 补充告警信息失败不改变业务方法的正常执行或原有异常。
-            log.warn("获取法大大告警上下文失败：method={}, exception={}",
+            log.info("获取法大大告警上下文失败：method={}, exception={}",
                     joinPoint.getSignature().toShortString(), exception.getClass().getSimpleName());
         }
         try (FadadaAlertContextHolder.Scope ignored = contextHolder.open(context)) {

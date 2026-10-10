@@ -160,7 +160,7 @@ public class ContractQueryService {
             cachedPicUrls = contractRepository.findLatestItemPicUrlsBySkus(skus);
         } catch (Exception e) {
             // 补图失败绝不能影响合同详情主流程：查库失败就全部退化为查领星
-            log.warn("合同明细图片缓存查询失败（改为直接查领星）：contractNo={}", contract.getContractNo(), e);
+            log.info("合同明细图片缓存查询失败（改为直接查领星）：contractNo={}", contract.getContractNo(), e);
         }
         for (String sku : skus) {
             String cached = cachedPicUrls.get(sku);
@@ -181,7 +181,7 @@ public class ContractQueryService {
                 });
             } catch (Exception e) {
                 // 图片展示失败不影响合同详情主流程；下次查询仍会尝试补齐。
-                log.warn("合同明细图片批量查询失败：contractNo={}, 待查 SKU 数={}",
+                log.info("合同明细图片批量查询失败：contractNo={}, 待查 SKU 数={}",
                         contract.getContractNo(), needRemote.size(), e);
             }
         }
@@ -216,7 +216,7 @@ public class ContractQueryService {
                 contractRepository.updateItemPicUrl(item.getId(), item.getPicUrl());
                 persisted++;
             } catch (Exception e) {
-                log.warn("合同明细图片落库失败（不影响详情展示）：contractNo={}, itemId={}",
+                log.info("合同明细图片落库失败（不影响详情展示）：contractNo={}, itemId={}",
                         contract.getContractNo(), item.getId(), e);
             }
         }
@@ -424,7 +424,7 @@ public class ContractQueryService {
         if (isConfiguredPrimary || isRegisteredInApps(ownerOpenCorpId)) {
             return "";
         }
-        log.warn("法大大任务归属企业未登记任何应用凭据，下载会失败：contractNo={}, signTaskId={}, buyerOpenCorpId={}, appId={}",
+        log.info("法大大任务归属企业未登记任何应用凭据，下载会失败：contractNo={}, signTaskId={}, buyerOpenCorpId={}, appId={}",
                 contract.getContractNo(), contract.getFadadaTaskId(), maskId(ownerOpenCorpId),
                 fadadaOpenApiProperties.getAppId());
         return "；该合同需方公司使用的法大大企业（openCorpId=" + maskId(ownerOpenCorpId)

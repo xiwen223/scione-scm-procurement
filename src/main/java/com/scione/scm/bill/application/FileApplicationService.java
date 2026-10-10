@@ -119,7 +119,7 @@ public class FileApplicationService {
         if (!response.isSuccess()) {
             String reason = "业务码 " + response.getCode()
                     + (blankToNull(response.getMessage()) == null ? "" : "：" + response.getMessage());
-            log.warn("Storage request was rejected, action={}, reason={}", action, reason);
+            log.info("Storage request was rejected, action={}, reason={}", action, reason);
             throw storageError(action, reason);
         }
         return response.getData();

@@ -229,14 +229,14 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
                 if (!"0".equals(code) && !"200".equals(code)) {
                     String reason = "业务码 " + (code.isBlank() ? "为空" : code)
                             + (remoteMessage.isBlank() ? "" : "：" + remoteMessage);
-                    log.warn("Lingxing supplier request was rejected: {}", sanitizeReason(reason));
+                    log.info("Lingxing supplier request was rejected: {}", sanitizeReason(reason));
                     throw lingxingError(reason);
                 }
                 JsonNode data = response == null ? null : response.get("data");
                 long responseTotal = response == null ? -1 : response.path("total").asLong(-1);
                 if (data == null || !data.isArray() || responseTotal < 0) {
                     String reason = remoteMessage.isBlank() ? "响应数据格式错误" : remoteMessage;
-                    log.warn("Lingxing supplier response is invalid: code={}, reason={}",
+                    log.info("Lingxing supplier response is invalid: code={}, reason={}",
                             code, sanitizeReason(reason));
                     throw lingxingError(reason);
                 }
@@ -305,7 +305,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     private Optional<SupplierPaymentAccount> defaultPaymentAccount(JsonNode supplier) {
         JsonNode accounts = supplier.path("payment_account_group");
         if (!accounts.isArray() || accounts.isEmpty()) {
-            log.warn("领星供应商资料里没有收款账户列表（payment_account_group 缺失或为空）");
+            log.info("领星供应商资料里没有收款账户列表（payment_account_group 缺失或为空）");
             return Optional.empty();
         }
         SupplierPaymentAccount disabledDefault = null;
@@ -325,7 +325,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             String bankName = text(account, "bank_name");
             if (isBlank(accountName) || isBlank(accountId) || isBlank(bankName)) {
                 // 原来是直接 return 空，会把后面「字段完整的默认账户」一起丢掉，这里改成继续往后找。
-                log.warn("领星供应商默认收款账号字段不完整，跳过该行：户名={}, 账号={}, 开户行={}",
+                log.info("领星供应商默认收款账号字段不完整，跳过该行：户名={}, 账号={}, 开户行={}",
                         accountName, maskAccountId(accountId), bankName);
                 continue;
             }
@@ -340,11 +340,11 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             }
         }
         if (disabledDefault != null) {
-            log.warn("领星供应商默认收款账户已停用（is_open=0），仍按勾选的默认账户使用：户名={}",
+            log.info("领星供应商默认收款账户已停用（is_open=0），仍按勾选的默认账户使用：户名={}",
                     disabledDefault.accountName());
             return Optional.of(disabledDefault);
         }
-        log.warn("领星供应商未维护默认收款账户（无 is_default=1 的行），合同将无法带出收款账户。"
+        log.info("领星供应商未维护默认收款账户（无 is_default=1 的行），合同将无法带出收款账户。"
                 + "收款账户共 {} 条：{}", accounts.size(), String.join(" | ", candidates));
         return Optional.empty();
     }
@@ -486,7 +486,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             String remoteMessage = responseMessage(response);
             if (!code.isBlank() && !"0".equals(code) && !"200".equals(code)) {
                 String reason = "业务码 " + code + (remoteMessage.isBlank() ? "" : "：" + remoteMessage);
-                log.warn("Lingxing purchase order request was rejected: {}", sanitizeReason(reason));
+                log.info("Lingxing purchase order request was rejected: {}", sanitizeReason(reason));
                 throw lingxingError(reason);
             }
             return response;

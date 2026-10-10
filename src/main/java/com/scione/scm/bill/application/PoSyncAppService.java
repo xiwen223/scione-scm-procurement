@@ -74,7 +74,7 @@ public class PoSyncAppService {
             if (!StringUtils.hasText(orderSn)) {
                 // 采购单号是唯一键、非空，缺了无法落库，只能跳过
                 failed++;
-                log.warn("跳过无采购单号的记录：{}", order);
+                log.info("跳过无采购单号的记录：{}", order);
                 continue;
             }
             try {
@@ -166,7 +166,7 @@ public class PoSyncAppService {
         po.setUnitPrice(item.price());
         po.setUnitPriceWithoutTax(PurchasePriceCalculator.withoutTax(item.price(), isTax, item.taxRate()));
         if (Integer.valueOf(1).equals(isTax) && item.price() != null && po.getUnitPriceWithoutTax() == null) {
-            log.warn("含税采购商品缺少有效税率，无法计算不含税单价：poNo={}, sku={}, taxRate={}",
+            log.info("含税采购商品缺少有效税率，无法计算不含税单价：poNo={}, sku={}, taxRate={}",
                     orderSn, item.sku(), item.taxRate());
         }
         po.setAmount(item.amount());
