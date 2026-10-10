@@ -244,6 +244,7 @@ public class BuyerCompanyApplicationService {
      * 保证失败后可重试。只有法大大侧删除成功后才会删除对象存储文件并清空
      * seal_name / seal_url / seal_base64 / fadada_seal_id / seal_flow_status。</p>
      */
+    // todo：与三方接口联调或者多次写操作的所有方法，解决事务问题
     @FadadaAlertContext(FadadaAlertContext.Type.COMPANY)
     public BuyerCompanyDetailResponse removeSeal(Long id) {
         BuyerCompanyPO company = requireCompany(id);
@@ -499,7 +500,8 @@ public class BuyerCompanyApplicationService {
 
         String sealBase64 = blankToNull(request.sealBase64());
         validateSealBase64(sealBase64);
-
+        // todo：如果涉及到dto和vo之间的转换，使用https://mapstruct.org方式，减少set
+        // todo：dto文件夹中把dto和vo分出来，request和response这两个都改成dto和vo
         company.setCompanyName(companyName);
         company.setCompanyShortName(blankToNull(request.companyShortName()));
         company.setCreditCode(blankToNull(request.creditCode()));

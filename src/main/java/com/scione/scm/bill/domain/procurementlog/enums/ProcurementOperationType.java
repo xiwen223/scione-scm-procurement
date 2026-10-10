@@ -7,7 +7,8 @@ import lombok.RequiredArgsConstructor;
 @Getter
 @RequiredArgsConstructor
 public enum ProcurementOperationType {
-
+    // todo：枚举中缺少的补充，多的移除
+    // todo：使用的时候加上注解，能直接跳到枚举类中
     CREATE("CREATE", "新增", false),
     UPDATE("UPDATE", "修改", true),
     DELETE("DELETE", "删除", false),

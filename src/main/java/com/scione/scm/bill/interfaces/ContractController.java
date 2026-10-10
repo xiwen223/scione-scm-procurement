@@ -65,6 +65,7 @@ public class ContractController {
         return ApiResponse.success(result);
     }
 
+    //运维接口
     /** 手动创建前检查 PO 状态；非待下单只提示，用户仍可继续创建。 */
     @GetMapping("/manual/po-status")
     @Operation(summary = "查询手动创建采购单状态")
@@ -151,6 +152,7 @@ public class ContractController {
             @PathVariable Long contractId,
             @RequestParam(value = "type", defaultValue = "signed") String type) throws java.io.IOException {
 
+        //todo：改成枚举
         if ("signed".equals(type)) {
             String downloadUrl = contractQueryService.getFadadaSignedDownloadUrl(contractId);
             return ResponseEntity.status(HttpStatus.FOUND)

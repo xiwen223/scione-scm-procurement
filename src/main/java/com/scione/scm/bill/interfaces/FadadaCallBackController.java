@@ -97,7 +97,7 @@ public class FadadaCallBackController {
             return CALLBACK_SUCCESS;
         }
         log.info("法大大回调验签通过：event={}, bizContentLength={}", event, bizContent.length());
-
+        // todo：1.事件加枚举；2.业务方法加到service层
         switch (event == null ? "" : event) {
             case EVENT_SEAL_VERIFY_SUCCESS -> handleSealVerifySuccess(bizContent);
             case EVENT_SEAL_VERIFY_FAILED -> handleSealVerifyFailed(bizContent);

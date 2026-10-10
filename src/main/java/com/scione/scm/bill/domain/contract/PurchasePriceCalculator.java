@@ -3,6 +3,7 @@ package com.scione.scm.bill.domain.contract;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 
+//todo：每一个方法都修改为更规范的注释
 /** 领星采购单价格换算；领星 tax_rate 使用百分数（例如 13.00 表示 13%）。 */
 public final class PurchasePriceCalculator {
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
@@ -27,7 +28,8 @@ public final class PurchasePriceCalculator {
             if (percent.signum() < 0) {
                 return null;
             }
-            BigDecimal divisor = BigDecimal.ONE.add(percent.divide(HUNDRED));
+            // BigDecimal divisor = BigDecimal.ONE.add(percent.divide(HUNDRED));
+            BigDecimal divisor = BigDecimal.ONE.add(percent.movePointLeft(2));
             return price.divide(divisor, 4, RoundingMode.HALF_UP);
         } catch (NumberFormatException | ArithmeticException exception) {
             return null;

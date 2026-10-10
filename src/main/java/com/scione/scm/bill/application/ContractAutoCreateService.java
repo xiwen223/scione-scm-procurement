@@ -199,6 +199,7 @@ public class ContractAutoCreateService {
         List<ManualPoItem> items = new ArrayList<>(poItems.size());
         for (PoSyncRecordItem item : poItems) {
             // 明细步骤3：统一数量口径，并用已换算不含税价计算小计，保持表单与最终合同一致。
+            //todo：不取plan数量
             Integer quantity = PurchasePriceCalculator.effectiveQuantity(
                     item.getQuantityReal(), item.getQuantityPlan());
             // 明细自带的 pic_url 优先（采购单列表接口已返回），缺失才用补图结果

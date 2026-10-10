@@ -53,6 +53,7 @@ public class ContractUpdateService {
     @Transactional
     public ContractUpdateResponse updateContract(Long contractId, ContractUpdateRequest request, String operatorEmail) {
         // 只改折扣的判断现在仅选择日志描述，不再分成第二套保存或 PDF 生成流程。
+        // todo：取消这个私有方法
         String operationDesc = isDiscountOnlyRequest(request)
                 ? "修改合同折扣" : "修改合同";
         return updateContractInternal(contractId, request, operatorEmail, operationDesc);
