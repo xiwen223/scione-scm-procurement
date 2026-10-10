@@ -17,7 +17,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -54,6 +53,13 @@ public class ContractCreationValidator {
     }
 
     public ValidationResult validate(PoSyncRecord po, BuyerCompany buyer) {
+        return validate(po, buyer, po.getSupplierId() == null ? null
+                : lingxingSupplierClient.findSupplierProfile(po.getSupplierId()).orElse(null));
+    }
+
+    /** 自动创建复用已经查询成功的供方档案，避免白名单核验后重复请求领星。 */
+    public ValidationResult validate(PoSyncRecord po, BuyerCompany buyer,
+                                     LingxingSupplierClient.SupplierProfile profile) {
         List<String> missing = new ArrayList<>();
         if (!StringUtils.hasText(po.getPurchaseOrderNo())) missing.add("采购单号");
         if (!StringUtils.hasText(po.getSupplierName())) missing.add("供应商名称");
@@ -63,7 +69,7 @@ public class ContractCreationValidator {
         if (buyer == null || !StringUtils.hasText(buyer.getCompanyName())) missing.add("需方");
         if (buyer == null || !StringUtils.hasText(buyer.getAddress())) missing.add("签订地点");
 
-        validateSupplierProfile(po, missing);
+        validateSupplierProfile(po, missing, profile);
 
         // 图片只在这里查一次：校验「有没有图」与创建「填图」共用这批结果
         ItemImages images = resolveItemImages(po.getItems());
@@ -71,27 +77,20 @@ public class ContractCreationValidator {
         return new ValidationResult(missing, images.picUrlsBySku(), images.queryFailedSkus());
     }
 
-    private void validateSupplierProfile(PoSyncRecord po, List<String> missing) {
+    private void validateSupplierProfile(PoSyncRecord po, List<String> missing,
+                                         LingxingSupplierClient.SupplierProfile profile) {
         if (po.getSupplierId() == null) {
             missing.add("供应商ID");
             return;
         }
-        try {
-            Optional<LingxingSupplierClient.SupplierProfile> profile = lingxingSupplierClient.findSupplierProfile(po.getSupplierId());
-            if (profile.isEmpty()) {
-                missing.add("供应商资料");
-                return;
-            }
-            LingxingSupplierClient.SupplierProfile value = profile.get();
-            if (!StringUtils.hasText(value.address())) missing.add("供方地址");
-            if (!StringUtils.hasText(value.prepayPercent())) missing.add("预付款比例");
-            if (!StringUtils.hasText(value.settlementMethod())) missing.add("结算方式");
-            if (value.defaultPaymentAccount().isEmpty()) {
-                missing.add("默认收款账户");
-            }
-        } catch (RuntimeException ex) {
-            missing.add("供应商资料查询失败");
+        if (profile == null) {
+            missing.add("供应商资料");
+            return;
         }
+        if (!StringUtils.hasText(profile.address())) missing.add("供方地址");
+        if (!StringUtils.hasText(profile.prepayPercent())) missing.add("预付款比例");
+        if (!StringUtils.hasText(profile.settlementMethod())) missing.add("结算方式");
+        if (profile.defaultPaymentAccount().isEmpty()) missing.add("默认收款账户");
     }
 
     private void validateItems(List<PoSyncRecordItem> items, List<String> missing, ItemImages images) {

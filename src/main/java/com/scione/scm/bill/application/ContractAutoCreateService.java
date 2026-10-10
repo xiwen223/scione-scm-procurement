@@ -374,6 +374,7 @@ public class ContractAutoCreateService {
             } catch (RuntimeException ex) {
                 failed++;
                 log.error("合同创建失败，poNo={}", poNo, ex);
+                recordAutoCreateFailure(po, ex);
             }
         }
 
@@ -392,40 +393,44 @@ public class ContractAutoCreateService {
     protected boolean processOnePo(PoSyncRecord po, BuyerCompany buyer) {
         String poNo = po.getPurchaseOrderNo();
 
-        String defaultAccountName;
-        try {
-            defaultAccountName = po.getSupplierId() == null ? null
-                    : lingxingSupplierClient.findSupplierProfile(po.getSupplierId())
-                    .flatMap(LingxingSupplierClient.SupplierProfile::defaultPaymentAccount)
-                    .map(LingxingSupplierClient.SupplierPaymentAccount::accountName)
-                    .orElse(null);
-        } catch (RuntimeException ex) {
+        // 外部接口异常向上抛出计入失败；只有查询成功后确实缺资料才算跳过。
+        LingxingSupplierClient.SupplierProfile profile = autoCreateStep("查询领星供应商资料及默认账户", () ->
+                po.getSupplierId() == null ? null
+                        : lingxingSupplierClient.findSupplierProfile(po.getSupplierId()).orElse(null));
+        String missingAccount = po.getSupplierId() == null ? "采购单未提供供应商ID"
+                : profile == null ? "领星未找到供应商资料"
+                : profile.defaultPaymentAccount().isEmpty() ? "领星供应商没有可用的默认收款账户"
+                : !StringUtils.hasText(profile.defaultPaymentAccount().get().accountName()) ? "领星默认收款账户名称为空" : null;
+        if (missingAccount != null) {
             String reason = "PO=" + poNo + "，供应商=" + po.getSupplierName()
-                    + "，跳过原因：查询领星默认收款账户失败，无法进行账户名称白名单核验";
-            contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
-            log.info("跳过建合同：{}", reason, ex);
-            return false;
-        }
-
-        if (!StringUtils.hasText(defaultAccountName)) {
-            String reason = "PO=" + poNo + "，供应商=" + po.getSupplierName()
-                    + "，跳过原因：领星未维护默认收款账户名称，无法进行白名单核验";
+                    + "，供应商ID=" + po.getSupplierId()
+                    + "；分类=资料不完整；步骤=默认收款账户白名单核验；缺失信息=" + missingAccount
+                    + "；处理=跳过创建，不自动重试";
             contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
             log.info("跳过建合同：{}", reason);
             return false;
         }
+        String defaultAccountName = profile.defaultPaymentAccount().get().accountName();
 
         if (!supplierWhitelist.contains(defaultAccountName)) {
             String reason = "PO=" + poNo + "，供应商=" + po.getSupplierName() + "，默认收款账户名称="
-                    + defaultAccountName + "，跳过原因：默认收款账户名称不在采购合同签约白名单";
+                    + defaultAccountName + "；分类=业务规则不满足；步骤=默认账户白名单核验"
+                    + "；原因=默认收款账户名称不在采购合同签约白名单；处理=跳过创建，不自动重试";
             contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
             log.info("跳过建合同：{}", reason);
             return false;
         }
 
-        ContractCreationValidator.ValidationResult validation = contractCreationValidator.validate(po, buyer);
+        ContractCreationValidator.ValidationResult validation = autoCreateStep("校验合同字段及图片", () ->
+                contractCreationValidator.validate(po, buyer, profile));
+        if (!validation.imageQueryFailedSkus().isEmpty()) {
+            throw new AutoCreateStepException("校验商品图片",
+                    new IllegalStateException("图片查询失败，不是已确认缺图；SKU="
+                            + String.join("、", validation.imageQueryFailedSkus())));
+        }
         if (!validation.missingFields().isEmpty()) {
-            String reason = "PO=" + poNo + "，缺失/不满足字段：" + String.join("、", validation.missingFields());
+            String reason = "PO=" + poNo + "；分类=资料不完整；步骤=合同必填校验；缺失字段="
+                    + String.join("、", validation.missingFields()) + "；处理=跳过创建，不自动重试";
             contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
             log.info("跳过建合同：{}", reason);
             return false;
@@ -474,8 +479,9 @@ public class ContractAutoCreateService {
 
         // 创建合同聚合
         Contract contract = Contract.createFromPo(po, buyer, contractNo);
-        contract.setTemplateId(contractTemplateService.resolveDefaultTemplateId(contract.getContractType()));
-        enrichSupplierAddress(contract);
+        contract.setTemplateId(autoCreateStep("选择有效默认模板", () ->
+                contractTemplateService.resolveDefaultTemplateId(contract.getContractType())));
+        applySupplierProfile(contract, profile);
 
         // 从领星API获取并填充商品图片URL（复用校验阶段已查回的结果，不再重复查领星）
         enrichContractItemsWithImages(contract, validation.picUrlsBySku());
@@ -490,16 +496,65 @@ public class ContractAutoCreateService {
             log.info("跳过建合同（并发重复创建，命中唯一约束）：poNo={}", poNo, ex);
             recordDuplicateCreateSkipped(poNo);
             return false;
+        } catch (RuntimeException ex) {
+            throw new AutoCreateStepException("保存合同主表、明细及创建日志", ex);
         }
 
         // 回写 PO 标记
-        poSyncRepository.markContractCreated(poNo, contractId);
+        autoCreateStep("回写采购单创建标记", () -> {
+            poSyncRepository.markContractCreated(poNo, contractId);
+            return null;
+        });
 
         log.info("合同创建成功：poNo={}, contractNo={}, contractId={}", poNo, contractNo, contractId);
 
         // 首次创建完成即保存 PDF；后续未编辑时签署可直接复用，避免再次拉取图片和填充模板。
-        generateInitialContractPdf(contract);
+        autoCreateStep("生成首版PDF并上传S3（合同已保存）", () -> generateInitialContractPdf(contract));
         return true;
+    }
+
+    private static <T> T autoCreateStep(String step, java.util.function.Supplier<T> action) {
+        try { return action.get(); }
+        catch (RuntimeException ex) { throw new AutoCreateStepException(step, ex); }
+    }
+
+    private static class AutoCreateStepException extends RuntimeException {
+        private final String step;
+        AutoCreateStepException(String step, RuntimeException cause) {
+            super(cause.getMessage(), cause);
+            this.step = step;
+        }
+    }
+
+    /** 最终失败写现有操作日志表，独立提交且写日志失败不能中断其他 PO。 */
+    private void recordAutoCreateFailure(PoSyncRecord po, RuntimeException failure) {
+        String step = failure instanceof AutoCreateStepException staged ? staged.step : "自动创建合同";
+        Throwable cause = failure instanceof AutoCreateStepException ? failure.getCause() : failure;
+        String category = cause instanceof com.scione.scm.bill.common.LingxingSupplierQueryException external
+                ? external.getCategory()
+                : cause instanceof org.springframework.dao.DataAccessException ? "数据库异常"
+                : cause instanceof BusinessException business && business.getResultCode() == ResultCode.LINGXING_API_ERROR
+                    ? "领星接口异常（具体责任待排查）"
+                : "校验商品图片".equals(step) ? "图片查询异常（来源待排查）" : "本系统或配置异常";
+        String reason = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
+        reason = reason.replaceAll("(?i)(access_token|appSecret|app_secret|sign)=([^&\\s]+)", "$1=***")
+                .replaceAll("https?://[^\\s；]+", "[地址已隐藏]")
+                .replaceAll("(?<!\\d)\\d{12,}(?!\\d)", "[长数字已脱敏]");
+        String details = "PO=" + po.getPurchaseOrderNo() + "；供应商=" + po.getSupplierName()
+                + "；供应商ID=" + po.getSupplierId() + "；分类=" + category + "；失败步骤=" + step
+                + "；详细原因=" + reason + "；处理=本轮创建失败，无后台重试队列，需人工处理后重新触发";
+        try {
+            var transaction = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+            transaction.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+            transaction.executeWithoutResult(status -> {
+                ContractOperationLog operation = ContractOperationLog.ofCreateSkipped(po.getPurchaseOrderNo(), details);
+                operation.setOperationType(ContractOperationLog.TYPE_CREATE_FAILED);
+                operation.setOperationDesc("合同自动创建失败");
+                contractRepository.saveOperationLog(operation);
+            });
+        } catch (RuntimeException logFailure) {
+            log.error("自动创建失败日志保存失败：poNo={}", po.getPurchaseOrderNo(), logFailure);
+        }
     }
 
     /** 重复创建跳过日志独立提交，避免被失败的合同插入事务回滚。 */
@@ -1055,28 +1110,19 @@ public class ContractAutoCreateService {
         }
     }
 
-    private void enrichSupplierAddress(Contract contract) {
-        if (contract.getSupplierId() == null) {
-            return;
+    private void applySupplierProfile(Contract contract, LingxingSupplierClient.SupplierProfile profile) {
+        // 白名单和必填校验已经确认这一份档案有效，直接复用，不再次请求领星。
+        if (StringUtils.hasText(profile.address())) contract.setSupplierAddress(profile.address());
+        if (StringUtils.hasText(profile.creditCode())) contract.setSupplierCreditCode(profile.creditCode());
+        if (StringUtils.hasText(profile.prepayPercent())) {
+            contract.setPrepayPercent(RatioText.of(profile.prepayPercent()));
         }
-        try {
-            lingxingSupplierClient.findSupplierProfile(contract.getSupplierId()).ifPresent(profile -> {
-                if (StringUtils.hasText(profile.address())) contract.setSupplierAddress(profile.address());
-                if (StringUtils.hasText(profile.creditCode())) contract.setSupplierCreditCode(profile.creditCode());
-                if (StringUtils.hasText(profile.prepayPercent())) {
-                    contract.setPrepayPercent(RatioText.of(profile.prepayPercent()));
-                }
-                if (StringUtils.hasText(profile.settlementMethod())) contract.setSettlementMethod(profile.settlementMethod());
-                profile.defaultPaymentAccount().ifPresent(account -> {
-                    contract.setSupplierAccountName(account.accountName());
-                    contract.setSupplierBankAccount(account.accountId());
-                    contract.setSupplierBankName(account.bankName());
-                });
-            });
-        } catch (RuntimeException ex) {
-            // 创建前已做必填校验；此处仅防御性保护，避免远端短暂波动覆盖已校验的数据。
-            log.info("回填供方地址失败：supplierId={}", contract.getSupplierId());
-        }
+        if (StringUtils.hasText(profile.settlementMethod())) contract.setSettlementMethod(profile.settlementMethod());
+        profile.defaultPaymentAccount().ifPresent(account -> {
+            contract.setSupplierAccountName(account.accountName());
+            contract.setSupplierBankAccount(account.accountId());
+            contract.setSupplierBankName(account.bankName());
+        });
     }
 
     /**

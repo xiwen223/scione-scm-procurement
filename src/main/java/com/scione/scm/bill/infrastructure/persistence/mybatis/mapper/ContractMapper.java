@@ -97,6 +97,10 @@ public interface ContractMapper {
      */
     int updatePdfUrl(@Param("id") Long id, @Param("pdfUrl") String pdfUrl);
 
+    int saveCancellationSnapshot(@Param("id") Long id, @Param("expectedStatus") int expectedStatus,
+                                 @Param("taskId") String taskId, @Param("originalPdfUrl") String originalPdfUrl,
+                                 @Param("snapshotUrl") String snapshotUrl);
+
     int markSigning(@Param("id") Long id, @Param("fadadaTaskId") String fadadaTaskId);
 
     int cancel(@Param("id") Long id, @Param("cancelReason") String cancelReason);

@@ -76,6 +76,9 @@ public interface ContractRepository {
      */
     void updatePdfUrl(long contractId, String pdfUrl);
 
+    /** 在取消前保存文件快照；仅当主状态、任务和创建态原文件均未变化时写入。 */
+    void saveCancellationSnapshot(Contract contract, String snapshotUrl);
+
     void markSigning(long contractId, String fadadaTaskId);
 
     void cancel(long contractId, String cancelReason);

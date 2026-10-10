@@ -37,6 +37,7 @@ public class ContractSignAppService {
     private final ContractFileStore contractFileStore;
     private final ContractPdfConverter contractPdfConverter;
     private final ContractTemplateService contractTemplateService;
+    private final ContractQueryService contractQueryService;
     private final FadadaOpenApiClient fadadaOpenApiClient;
     private final FadadaOpenApiProperties fadadaProperties;
     private final com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractMapper contractMapper;
@@ -192,6 +193,7 @@ public class ContractSignAppService {
             if (!StringUtils.hasText(contract.getFadadaTaskId())) {
                 throw new BusinessException(ResultCode.PARAM_ERROR, "签署中合同缺少法大大任务ID，无法安全作废");
             }
+            contractQueryService.preserveCancellationSnapshot(contract, operatorEmail);
             fadadaOpenApiClient.cancelSignTask(contract.getFadadaTaskId(), reason);
         }
         // 分支2：双方已经签完，必须创建解除协议并等待其完成，不能把接口受理当作作废完成。
@@ -234,6 +236,7 @@ public class ContractSignAppService {
             String fadadaReason = trimmedReason == null ? "合同作废" : trimmedReason;
             String buyerActorId = "BUYER_" + contract.getContractNo();
             String supplierActorId = "SUPPLIER_" + contract.getContractNo();
+            contractQueryService.preserveCancellationSnapshot(contract, operatorEmail);
             String abolishedTaskId = fadadaOpenApiClient.createAbolishSignTask(
                     contract.getFadadaTaskId(), buyer.getOpenCorpId(), fadadaReason, businessId,
                     buyerActorId, supplierActorId, contract.getSupplierPhone());
@@ -276,6 +279,9 @@ public class ContractSignAppService {
             log.info("履行中合同已发起法大大作废协议：contractNo={}, originalTaskId={}, abolishedTaskId={}",
                     contract.getContractNo(), contract.getFadadaTaskId(), abolishedTaskId);
             return;
+        }
+        if (contract.getStatus() == ContractStatus.CREATED) {
+            contractQueryService.preserveCancellationSnapshot(contract, operatorEmail);
         }
         contractRepository.cancel(contractId, reason);
         String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;

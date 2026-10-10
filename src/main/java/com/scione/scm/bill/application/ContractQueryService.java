@@ -259,7 +259,10 @@ public class ContractQueryService {
                 return new DownloadResult(cachedPdf, contract.getContractNo() + ".pdf");
             }
             // 下载分支2：非创建状态不能重新编辑生成原合同，读取已保存文件，缺地址则明确报资源不存在。
-            String fileUrl = getOriginalPdfUrl(contract);
+            // 与批量下载一致：取消合同优先读取历史已签署文件，没有时回退已保存原合同。
+            String fileUrl = contract.getStatus() == ContractStatus.CANCELLED
+                    && StringUtils.hasText(contract.getSignedPdfUrl())
+                    ? contract.getSignedPdfUrl() : getOriginalPdfUrl(contract);
             if (!StringUtils.hasText(fileUrl)) {
                 // 合同本身存在、但未保存过合同文件：属于「文件资源不存在」，给 404 而不是系统异常
                 throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
@@ -268,7 +271,8 @@ public class ContractQueryService {
             byte[] fileBytes = contractFileStore.download(fileUrl);
             log.info("下载非创建状态合同，直接使用已保存文件：contractNo={}, status={}, fileUrl={}",
                     contract.getContractNo(), contract.getStatus(), fileUrl);
-            return new DownloadResult(fileBytes, extractFileName(fileUrl, contract.getContractNo(), "original"));
+            return new DownloadResult(fileBytes, contract.getStatus() == ContractStatus.CANCELLED
+                    ? contract.getContractNo() + ".pdf" : extractFileName(fileUrl, contract.getContractNo(), "original"));
         }
 
         String fileUrl = getSignedPdfUrl(contract);
@@ -324,6 +328,35 @@ public class ContractQueryService {
         // 如果提取失败，根据类型生成默认文件名
         String extension = "signed".equals(type) ? ".pdf" : ".xlsx";
         return contractNo + extension;
+    }
+
+    /** 作废外部调用前冻结原合同文件，保存失败必须阻止后续撤销或解除协议。 */
+    public void preserveCancellationSnapshot(Contract contract, String operatorEmail) {
+        try {
+            byte[] bytes;
+            if (contract.getStatus() == ContractStatus.CREATED) {
+                bytes = downloadContractFileContent(contract, "original").fileBytes();
+            } else if (contract.getStatus() == ContractStatus.SIGNING || contract.getStatus() == ContractStatus.EXECUTING) {
+                // 必须下载原任务 fadadaTaskId 的文件，而不是另一个解除协议任务。
+                bytes = downloadFadadaDocument(contract);
+            } else {
+                throw new BusinessException(ResultCode.PARAM_ERROR, "当前状态不允许保存取消前合同快照");
+            }
+            if (bytes.length < 5 || bytes[0] != '%' || bytes[1] != 'P' || bytes[2] != 'D' || bytes[3] != 'F' || bytes[4] != '-') {
+                throw new IOException("取消前合同文件不是有效PDF，已停止作废");
+            }
+            String snapshotUrl = contractFileStore.store(contract.getContractNo() + "-取消前快照-"
+                    + java.util.UUID.randomUUID(), bytes, "pdf");
+            contractRepository.saveCancellationSnapshot(contract, snapshotUrl);
+            String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
+            contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(contract.getId(), contract.getContractNo(),
+                    operator, operator, "保存取消前合同快照", "快照来源状态=" + contract.getStatus()
+                            + "；原签署任务=" + contract.getFadadaTaskId() + "；原合同文件已保存，非解除协议"));
+            log.info("取消前原合同快照已保存：contractNo={}, sourceStatus={}, bytes={}",
+                    contract.getContractNo(), contract.getStatus(), bytes.length);
+        } catch (Exception ex) {
+            throw recordDownloadFailure(contract, "保存取消前合同快照（本次作废未发起）", ex);
+        }
     }
 
     private String getOriginalPdfUrl(Contract contract) {

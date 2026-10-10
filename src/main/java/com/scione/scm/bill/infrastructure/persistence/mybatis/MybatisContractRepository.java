@@ -178,6 +178,14 @@ public class MybatisContractRepository implements ContractRepository {
     }
 
     @Override
+    public void saveCancellationSnapshot(Contract contract, String snapshotUrl) {
+        if (contractMapper.saveCancellationSnapshot(contract.getId(), contract.getStatus().getCode(),
+                contract.getFadadaTaskId(), contract.getContractPdfUrl(), snapshotUrl) != 1) {
+            throw new IllegalStateException("合同状态或文件已变化，未保存取消前快照，请刷新后重试");
+        }
+    }
+
+    @Override
     public void markExecuting(long contractId) {
         if (contractMapper.markExecuting(contractId) != 1) {
             throw new IllegalStateException("合同状态已变更，无法完成签署回调");

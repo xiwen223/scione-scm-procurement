@@ -19,6 +19,7 @@ public enum ProcurementOperationType {
     // MODIFY 字面也是「修改」，为避免与 UPDATE 的「修改」在筛选下拉里重名，中文名加了来源前缀。
     MODIFY("MODIFY", "合同修改", false),
     SKIP_CREATE("SKIP_CREATE", "跳过创建", false),
+    CREATE_FAILED("CREATE_FAILED", "合同自动创建失败", true),
     START_SIGN("START_SIGN", "发起签署", false),
     DOWNLOAD_FAILED("DOWNLOAD_FAILED", "合同下载失败", true);
 

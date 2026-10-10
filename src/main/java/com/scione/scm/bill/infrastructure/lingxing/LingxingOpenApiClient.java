@@ -219,27 +219,10 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             queryParameters.put("sign", signature);
             URI uri = requestUri("/erp/sc/data/local_inventory/supplier", queryParameters);
             try {
-                JsonNode response = restClient.post()
-                        .uri(uri)
-                        .body(body)
-                        .retrieve()
-                        .body(JsonNode.class);
-                String code = response == null ? "" : response.path("code").asText();
-                String remoteMessage = responseMessage(response);
-                if (!"0".equals(code) && !"200".equals(code)) {
-                    String reason = "业务码 " + (code.isBlank() ? "为空" : code)
-                            + (remoteMessage.isBlank() ? "" : "：" + remoteMessage);
-                    log.info("Lingxing supplier request was rejected: {}", sanitizeReason(reason));
-                    throw lingxingError(reason);
-                }
-                JsonNode data = response == null ? null : response.get("data");
-                long responseTotal = response == null ? -1 : response.path("total").asLong(-1);
-                if (data == null || !data.isArray() || responseTotal < 0) {
-                    String reason = remoteMessage.isBlank() ? "响应数据格式错误" : remoteMessage;
-                    log.info("Lingxing supplier response is invalid: code={}, reason={}",
-                            code, sanitizeReason(reason));
-                    throw lingxingError(reason);
-                }
+                JsonNode response = requestSupplierPage(uri, body, supplierId, offset);
+                // 重试方法已经确认业务成功和分页结构有效，这里只扫描当前页目标供应商。
+                JsonNode data = response.get("data");
+                long responseTotal = response.path("total").asLong();
                 for (JsonNode item : data) {
                     Long remoteSupplierId = longValue(item, "supplier_id");
                     if (remoteSupplierId != null && remoteSupplierId == supplierId) {
@@ -260,6 +243,81 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             }
         } while (offset < total);
         return Optional.empty();
+    }
+
+    /** 只重试当前供应商列表页的临时失败，最多额外两次，每次间隔两秒。 */
+    private JsonNode requestSupplierPage(URI uri, Map<String, Object> body, long supplierId, int offset) {
+        long started = System.nanoTime();
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            String category;
+            String reason;
+            boolean retryable;
+            Throwable safeCause = null;
+            try {
+                JsonNode response = restClient.post().uri(uri).body(body).retrieve().body(JsonNode.class);
+                String code = response == null ? "" : response.path("code").asText();
+                if ("0".equals(code) || "200".equals(code)) {
+                    if (response.path("data").isArray() && response.path("total").asLong(-1) >= 0) return response;
+                    category = "领星响应异常";
+                    reason = "成功响应缺少有效 data 数组或 total 总数";
+                    retryable = false;
+                } else {
+                    category = "3001008".equals(code) ? "领星限流" : "领星业务拒绝";
+                    reason = "业务码=" + code + "；返回信息=" + responseMessage(response);
+                    retryable = "3001008".equals(code);
+                }
+            } catch (RestClientException ex) {
+                reason = transportFailureReason(ex);
+                if (ex instanceof RestClientResponseException http) {
+                    int status = http.getStatusCode().value();
+                    category = status == 429 ? "领星限流" : "外部HTTP异常";
+                    retryable = status == 429 || status >= 500;
+                } else if (ex instanceof ResourceAccessException) {
+                    category = hasCause(ex, SocketTimeoutException.class) ? "网络超时" : "网络连接异常";
+                    retryable = !hasCause(ex, javax.net.ssl.SSLHandshakeException.class);
+                } else {
+                    category = "响应读取或解析异常";
+                    retryable = false;
+                }
+                // 原异常可能含带 token/sign 的请求 URL：保留各层堆栈，但用安全原因替换其消息。
+                safeCause = safeSupplierCause(ex);
+            }
+            reason = sanitizeReason(reason);
+            long elapsedMs = (System.nanoTime() - started) / 1_000_000;
+            if (!retryable || attempt == 3) {
+                var failure = new com.scione.scm.bill.common.LingxingSupplierQueryException(
+                        category, supplierId, attempt, elapsedMs, reason, safeCause);
+                log.error("领星供应商查询最终失败：offset={}, {}", offset, failure.getMessage(), failure);
+                throw failure;
+            }
+            log.info("领星供应商查询准备重试：supplierId={}, offset={}, category={}, attempt={}/3, elapsedMs={}, waitMs=2000, reason={}",
+                    supplierId, offset, category, attempt, elapsedMs, reason);
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new com.scione.scm.bill.common.LingxingSupplierQueryException(
+                        "请求中断", supplierId, attempt, elapsedMs, "重试等待被中断，已停止查询", ex);
+            }
+        }
+        throw new IllegalStateException("供应商查询重试状态异常");
+    }
+
+    private Throwable safeSupplierCause(Throwable original) {
+        RuntimeException root = null;
+        RuntimeException previous = null;
+        Throwable current = original;
+        for (int depth = 0; current != null && depth < 10; depth++) {
+            RuntimeException safe = new RuntimeException(current.getClass().getName()
+                    + "：" + sanitizeReason(current.getMessage()));
+            safe.setStackTrace(current.getStackTrace());
+            if (root == null) root = safe;
+            else previous.initCause(safe);
+            previous = safe;
+            if (current.getCause() == current) break;
+            current = current.getCause();
+        }
+        return root;
     }
 
     /**
@@ -777,7 +835,9 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         if (reason == null || reason.isBlank()) {
             return "";
         }
-        String sanitized = reason.replace('\r', ' ').replace('\n', ' ').trim();
+        String sanitized = reason.replace('\r', ' ').replace('\n', ' ').trim()
+                .replaceAll("(?i)(access_token|appSecret|app_secret|sign)=([^&\\s]+)", "$1=***")
+                .replaceAll("(?<!\\d)\\d{12,}(?!\\d)", "[长数字已脱敏]");
         if (!isBlank(properties.getAppSecret())) {
             sanitized = sanitized.replace(properties.getAppSecret(), "***");
         }

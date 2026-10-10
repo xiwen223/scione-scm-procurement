@@ -134,6 +134,18 @@
         SET status = 3, sign_launch_state = 'DONE', sign_launch_error = NULL, contract_date = CURDATE(), sign_complete_time = NOW(), update_time = NOW()
         WHERE id = #{id} AND status = 2 AND is_deleted = 0
     </update>
+    <!-- 取消前冻结当时的文件。创建态保留未盖章版本；签署/履行态保存法大大原任务文件。 -->
+    <update id="saveCancellationSnapshot">
+        UPDATE contract
+        SET contract_pdf_url = CASE WHEN #{expectedStatus} = 1 THEN #{snapshotUrl} ELSE contract_pdf_url END,
+            signed_pdf_url = CASE WHEN #{expectedStatus} = 1 THEN NULL ELSE #{snapshotUrl} END,
+            update_time = NOW()
+        WHERE id = #{id} AND status = #{expectedStatus} AND status IN (1, 2, 3)
+          AND is_deleted = 0 AND fadada_task_id &lt;=&gt; #{taskId}
+          AND (status != 1 OR contract_pdf_url &lt;=&gt; #{originalPdfUrl})
+          AND (status != 1 OR COALESCE(sign_launch_state, '') NOT IN ('QUEUED', 'RUNNING', 'WAIT_CALLBACK', 'UNKNOWN'))
+    </update>
+
     <update id="markCompleted">
         UPDATE contract SET status = 4, complete_time = NOW(), update_time = NOW()
         WHERE id = #{id} AND status = 3 AND is_deleted = 0
