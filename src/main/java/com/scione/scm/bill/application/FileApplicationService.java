@@ -1,37 +1,46 @@
 package com.scione.scm.bill.application;
 
-import com.scione.api.data.client.S3Client;
-import com.scione.api.data.dto.FileInfo;
-import com.scione.common.response.ApiResponse;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
+import com.scione.scm.bill.config.StorageProperties;
+import com.scione.scm.bill.common.FilePathUtils;
+import java.io.IOException;
+import java.io.InputStream;
+import java.time.Duration;
 import com.scione.scm.bill.application.dto.FileUploadResponse;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
-import feign.FeignException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 /**
- * 通用文件服务：封装数据平台对象存储的上传与临时访问地址获取，供各业务模块复用。
+ * 通用文件服务：封装 AWS S3 对象存储的上传与临时访问地址获取，供各业务模块复用。
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class FileApplicationService {
 
-    /** 调用方未指定上传目录时使用的默认目录，与 S3Client#uploadInputStream 的默认值保持一致。 */
+    /** 调用方未指定上传目录时使用的默认目录。 */
     private static final String DEFAULT_UPLOAD_FOLDER = "other";
 
-    /** 文件访问地址默认有效期（分钟），与 S3Client#getPresignedUrl 的默认值保持一致。 */
+    /** 文件访问地址默认有效期（分钟）。 */
     private static final long DEFAULT_URL_MINUTES = 30L;
 
     private static final Pattern UPLOAD_FOLDER_PATTERN = Pattern.compile("[A-Za-z0-9][A-Za-z0-9/_-]{0,99}");
 
     private final S3Client s3Client;
+    private final S3Presigner s3Presigner;
+    private final StorageProperties storageProperties;
 
     /**
      * 上传文件到对象存储，返回 objectKey 与访问地址；
@@ -43,14 +52,18 @@ public class FileApplicationService {
         }
 
         String folder = requireUploadFolder(path);
-        FileInfo fileInfo = callStorage(() -> s3Client.upload(file, folder), "上传文件");
-        if (fileInfo == null || blankToNull(fileInfo.getObjectKey()) == null) {
-            log.error("Storage upload response has no objectKey, path={}", folder);
-            throw storageError("上传文件", "存储服务未返回 objectKey");
+        String objectKey = FilePathUtils.buildObjectKey(folder, file.getOriginalFilename());
+        try (InputStream input = file.getInputStream()) {
+            s3Client.putObject(PutObjectRequest.builder()
+                    .bucket(storageProperties.getBucket()).key(objectKey)
+                    .contentType(file.getContentType()).contentLength(file.getSize()).build(),
+                    RequestBody.fromInputStream(input, file.getSize()));
+            return new FileUploadResponse(objectKey, null, file.getOriginalFilename(),
+                    file.getContentType(), file.getSize());
+        } catch (IOException | RuntimeException exception) {
+            log.error("S3 upload failed, objectKey={}", objectKey, exception);
+            throw storageError("上传文件", "存储操作失败");
         }
-
-        return new FileUploadResponse(fileInfo.getObjectKey(), fileInfo.getUrl(),
-                fileInfo.getOriginalName(), fileInfo.getContentType(), fileInfo.getSize());
     }
 
     /**
@@ -60,13 +73,16 @@ public class FileApplicationService {
         String key = requireText(objectKey, "objectKey 不能为空");
         long effectiveMinutes = minutes == null || minutes <= 0 ? DEFAULT_URL_MINUTES : minutes;
 
-        String url = callStorage(() -> s3Client.getPresignedUrl(key, effectiveMinutes), "获取文件访问地址");
-        if (blankToNull(url) == null) {
-            log.error("Storage presigned url is empty, objectKey={}", key);
-            throw storageError("获取文件访问地址", "存储服务未返回访问地址");
+        try {
+            return s3Presigner.presignGetObject(GetObjectPresignRequest.builder()
+                    .signatureDuration(Duration.ofMinutes(effectiveMinutes))
+                    .getObjectRequest(GetObjectRequest.builder()
+                            .bucket(storageProperties.getBucket()).key(key).build()).build())
+                    .url().toString();
+        } catch (RuntimeException exception) {
+            log.error("S3 presign failed, objectKey={}", key, exception);
+            throw storageError("获取文件访问地址", "存储操作失败");
         }
-
-        return url;
     }
 
     /**
@@ -80,7 +96,13 @@ public class FileApplicationService {
         if (key == null) {
             return;
         }
-        callStorage(() -> s3Client.delete(key), "删除文件");
+        try {
+            s3Client.deleteObject(DeleteObjectRequest.builder()
+                    .bucket(storageProperties.getBucket()).key(key).build());
+        } catch (RuntimeException exception) {
+            log.error("S3 delete failed, objectKey={}", key, exception);
+            throw storageError("删除文件", "存储操作失败");
+        }
     }
 
     /**
@@ -99,30 +121,6 @@ public class FileApplicationService {
             throw new BusinessException(ResultCode.PARAM_ERROR, "上传目录不合法");
         }
         return folder;
-    }
-
-    /**
-     * 调用数据平台对象存储接口：业务码失败、响应为空或服务不可用时统一抛 STORAGE_API_ERROR。
-     */
-    private <T> T callStorage(Supplier<ApiResponse<T>> call, String action) {
-        ApiResponse<T> response;
-        try {
-            response = call.get();
-        } catch (FeignException exception) {
-            log.error("Storage request failed, action={}", action, exception);
-            throw storageError(action, exception.status() > 0 ? "HTTP " + exception.status() : "网络连接失败");
-        }
-        if (response == null) {
-            log.error("Storage service returned no body, action={}", action);
-            throw storageError(action, "存储服务无响应");
-        }
-        if (!response.isSuccess()) {
-            String reason = "业务码 " + response.getCode()
-                    + (blankToNull(response.getMessage()) == null ? "" : "：" + response.getMessage());
-            log.info("Storage request was rejected, action={}, reason={}", action, reason);
-            throw storageError(action, reason);
-        }
-        return response.getData();
     }
 
     private BusinessException storageError(String action, String reason) {

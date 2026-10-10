@@ -1,7 +1,8 @@
 package com.scione.scm.bill.infrastructure.template;
 
-import com.scione.api.data.client.S3Client;
-import com.scione.common.response.ApiResponse;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import com.scione.scm.bill.config.StorageProperties;
 import com.scione.scm.bill.application.port.ContractTemplateService;
 import com.scione.scm.bill.application.port.LingxingSupplierClient;
 import com.scione.scm.bill.common.BusinessException;
@@ -19,16 +20,12 @@ import org.apache.poi.xssf.usermodel.XSSFDrawing;
 import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.openxmlformats.schemas.drawingml.x2006.spreadsheetDrawing.CTMarker;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.math.BigDecimal;
-import java.net.URI;
 import java.time.format.DateTimeFormatter;
 import java.util.Optional;
 
@@ -47,12 +44,11 @@ public class PoiContractTemplateService implements ContractTemplateService {
     @Resource
     private com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractMapper contractMapper;
 
-    @Autowired
-    @Qualifier("com.scione.api.data.client.S3Client")
+    @Resource
     private S3Client s3Client;
 
     @Resource
-    private RestTemplate restTemplate;
+    private StorageProperties storageProperties;
 
     @Resource
     private LingxingSupplierClient lingxingSupplierClient;
@@ -91,40 +87,11 @@ public class PoiContractTemplateService implements ContractTemplateService {
             log.info("  - 是否默认: {}", template.getIsDefault());
             log.info("  - 是否激活: {}", template.getIsActive());
 
-            // 2. 调用Feign客户端获取预签名URL
-            log.info("步骤2：获取模板预签名URL");
-            log.info("  - 调用服务: scione-data-platform");
-            log.info("  - 请求objectKey: {}", template.getObjectKey());
-            log.info("  - 有效期: 30分钟");
-
-            ApiResponse<String> response = s3Client.getPresignedUrl(
-                    template.getObjectKey(),
-                    30L  // 30分钟有效期
-            );
-
-            if (!response.isSuccess() || response.getData() == null) {
-                log.error("步骤2失败 - 获取预签名URL失败：code={}, message={}",
-                        response.getCode(), response.getMessage());
-                throw new BusinessException(
-                        ResultCode.SYSTEM_ERROR,
-                        "获取模板预签名URL失败：" + response.getMessage());
-            }
-
-            String presignedUrl = response.getData();
-            log.info("步骤2完成 - 获取预签名URL成功");
-            log.info("  - URL长度: {} 字符", presignedUrl.length());
-            log.info("  - URL前100字符: {}", presignedUrl.length() > 100 ? presignedUrl.substring(0, 100) + "..." : presignedUrl);
-
-            // 3. 通过URL下载模板到内存
-            log.info("步骤3：下载模板文件");
-            log.info("  - 下载方式: RestTemplate.getForObject");
-            log.info("  - 目标URL: {}", presignedUrl.length() > 100 ? presignedUrl.substring(0, 100) + "..." : presignedUrl);
-
-            // 将预签名URL转换为URI对象，避免RestTemplate二次编码
-            URI templateUri = URI.create(presignedUrl);
-            log.info("  - 使用URI对象避免二次编码");
-
-            byte[] templateBytes = restTemplate.getForObject(templateUri, byte[].class);
+            // 直接使用 AwsS3Config 创建的客户端下载模板。
+            log.info("下载合同模板：objectKey={}", template.getObjectKey());
+            byte[] templateBytes = s3Client.getObjectAsBytes(GetObjectRequest.builder()
+                    .bucket(storageProperties.getBucket()).key(template.getObjectKey()).build())
+                    .asByteArray();
 
             if (templateBytes == null || templateBytes.length == 0) {
                 log.error("步骤3失败 - 下载的模板文件为空");

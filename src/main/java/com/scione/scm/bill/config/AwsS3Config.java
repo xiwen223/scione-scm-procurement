@@ -6,6 +6,7 @@ import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 import java.net.URI;
 
@@ -27,6 +28,16 @@ public class AwsS3Config {
 
         return S3Client.builder()
                 .credentialsProvider(StaticCredentialsProvider.create(credentials))
+                .region(Region.of(properties.getRegion()))
+                .endpointOverride(URI.create(properties.getEndpoint()))
+                .build();
+    }
+
+    @Bean
+    public S3Presigner s3Presigner(StorageProperties properties) {
+        return S3Presigner.builder()
+                .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(
+                        properties.getAccessKey(), properties.getSecretKey())))
                 .region(Region.of(properties.getRegion()))
                 .endpointOverride(URI.create(properties.getEndpoint()))
                 .build();
