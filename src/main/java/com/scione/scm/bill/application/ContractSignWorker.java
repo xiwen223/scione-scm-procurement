@@ -27,10 +27,11 @@ public class ContractSignWorker {
     }
 
     private void startSign(Long id) {
+        // 条件更新只允许 QUEUED → RUNNING；未抢到任务的线程退出，不再次调用法大大。
         if (mapper.claimSign(id) != 1) return;
         String operator = mapper.signOperator(id);
         try {
-            service.startSign(id, operator, true);
+            service.startSign(id, operator);
         } catch (Exception ex) {
             // 建任务结果未知的任务保持 UNKNOWN；只将仍为 RUNNING 的前置失败恢复可编辑。
             String reason = ex.getMessage() == null ? "签署发起失败" : ex.getMessage();
@@ -44,6 +45,7 @@ public class ContractSignWorker {
 
     /** 两类后台任务共用名额和异常处理，任何退出路径都归还名额。 */
     private boolean submit(Long id, String scene, Runnable action) {
+        // 共享名额耗尽就留给下轮调度，避免线程池队列无限堆积；这不是合同创建的命名锁。
         if (!slots.tryAcquire()) return false;
         try {
             executor.execute(() -> {

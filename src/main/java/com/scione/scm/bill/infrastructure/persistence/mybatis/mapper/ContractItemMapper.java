@@ -22,9 +22,6 @@ public interface ContractItemMapper {
      */
     List<ContractItemPO> selectByContractId(@Param("contractId") Long contractId);
 
-    /** 查询相同 SKU 最近一次成功保存的商品图片 URL。 */
-    String selectLatestPicUrlBySku(@Param("sku") String sku);
-
     /**
      * 批量查询每个 SKU 最近一次成功保存的商品图片 URL（一次查询替代逐条查询）。
      * 只回填 sku 与 pic_url 两个字段，其余字段为 null。

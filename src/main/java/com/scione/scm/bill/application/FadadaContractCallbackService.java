@@ -2,45 +2,28 @@ package com.scione.scm.bill.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.scione.scm.bill.config.FadadaOpenApiProperties;
 import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractOperationLog;
 import com.scione.scm.bill.domain.contract.ContractRepository;
 import com.scione.scm.bill.domain.contract.ContractStatus;
-import com.scione.scm.bill.infrastructure.fadada.FadadaRequestSigner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import java.util.LinkedHashMap;
-import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class FadadaContractCallbackService {
-    private final FadadaOpenApiProperties properties;
-    private final FadadaRequestSigner signer;
     private final ObjectMapper objectMapper;
     private final ContractRepository contractRepository;
     private final com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractMapper contractMapper;
 
-    public void handle(Map<String, String> headers, String bizContent) throws Exception {
-        String appId = headers.get("X-FASC-App-Id");
-        String timestamp = headers.get("X-FASC-Timestamp");
-        String signature = headers.get("X-FASC-Sign");
-        String event = headers.get("X-FASC-Event");
-        if (!properties.getAppId().equals(appId) || signature == null || event == null) throw new IllegalArgumentException("非法法大大回调");
-        Map<String, String> params = new LinkedHashMap<>();
-        for (String key : new String[]{"X-FASC-App-Id","X-FASC-Sign-Type","X-FASC-Timestamp","X-FASC-Nonce","X-FASC-Event"}) params.put(key, headers.get(key));
-        params.put("bizContent", bizContent == null ? "" : bizContent);
-        if (!signer.sign(params, timestamp, properties.getAppSecret()).equalsIgnoreCase(signature)) throw new IllegalArgumentException("法大大回调验签失败");
-        handleVerifiedEvent(event, bizContent);
-    }
-
     /** 已由统一回调控制器完成验签后的合同事件处理。 */
     public void handleVerifiedEvent(String event, String bizContent) throws Exception {
+        // 回调步骤1：解析业务内容，兼容外层 data 包装；签名校验已由统一控制器完成。
         JsonNode body = businessNode(objectMapper.readTree(bizContent));
         String contractNo = contractNo(body);
+        // 回调步骤2：优先按业务编号查合同，找不到时按原签署或解除协议任务 ID 匹配。
         Contract contract = findContract(body, contractNo);
         if (contract == null) {
             log.warn("法大大合同回调无法关联合同：event={}, transReferenceIdPresent={}, businessNoPresent={}",
@@ -48,6 +31,7 @@ public class FadadaContractCallbackService {
             return;
         }
         contractNo = contract.getContractNo();
+        // 回调步骤3：我方签完先清除发起标记；合同整体转履行中仍需完整签署任务的完成事件。
         confirmBuyerSign(event, body, contract);
         log.info("法大大合同回调已关联合同：event={}, contractId={}, contractNo={}, currentStatus={}",
                 event, contract.getId(), contractNo, contract.getStatus());
@@ -74,6 +58,7 @@ public class FadadaContractCallbackService {
             details += "；解除协议已完成；合同状态：履行中 → 取消";
             log.info("法大大作废协议已完成，合同已更新为取消：contractId={}, contractNo={}", contract.getId(), contractNo);
         }
+        // 回调步骤4：记录事件及流转结果，便于排查是否收到回调、匹配到哪份合同。
         contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(
                 contract.getId(), contractNo, "fadada", "法大大回调", "签署任务回调", details));
     }

@@ -134,12 +134,6 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!--xxl-->
-        <dependency>
-            <groupId>com.xuxueli</groupId>
-            <artifactId>xxl-job-core</artifactId>
-        </dependency>
-
         <!-- OpenAPI -->
         <dependency>
             <groupId>org.springdoc</groupId>

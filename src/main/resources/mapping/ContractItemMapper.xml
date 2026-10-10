@@ -25,15 +25,6 @@
         ORDER BY id
     </select>
 
-    <select id="selectLatestPicUrlBySku" resultType="string">
-        SELECT pic_url
-        FROM contract_item
-        WHERE sku = #{sku}
-          AND pic_url IS NOT NULL
-          AND pic_url != ''
-        ORDER BY id DESC
-        LIMIT 1
-    </select>
 
     <!-- 批量版：按 sku 取各自 id 最大的那条有图记录，一次查询覆盖整单明细 -->
     <select id="selectLatestPicUrlsBySkus"

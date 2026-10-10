@@ -55,6 +55,7 @@ final class ExcelContractHtmlExporter {
         double total = 0;
         for (int c = area.getFirstColumn(); c <= area.getLastColumn(); c++) if (!sheet.isColumnHidden(c)) total += sheet.getColumnWidthInPixels(c);
         if (total == 0) throw new IllegalArgumentException("打印区域没有可见列");
+        // 导出步骤1：按纸张和页边距计算可用宽度，再按原列比例缩放，不让商品图片宽度决定整表列宽。
         double printableWidth = pageSize(sheet)[0] - (sheet.getMargin(Sheet.LeftMargin) + sheet.getMargin(Sheet.RightMargin)) * 72 - 2;
         double contentScale = printableWidth / (total * 0.75);
         Map<Integer, Double> columnWidths = new HashMap<>();
@@ -83,6 +84,7 @@ final class ExcelContractHtmlExporter {
             out.append("<tr>");
             for (int c = area.getFirstColumn(); c <= area.getLastColumn(); c++) {
                 if (sheet.isColumnHidden(c)) continue;
+                // 导出步骤2：合并区域只输出左上角，并用 colspan/rowspan 表达跨度，避免重复输出同一内容。
                 CellRangeAddress merge = merged(sheet, r, c);
                 if (merge != null && (r != merge.getFirstRow() || c != merge.getFirstColumn())) continue;
                 XSSFCell cell = row == null ? null : (XSSFCell) row.getCell(c);
@@ -105,6 +107,7 @@ final class ExcelContractHtmlExporter {
                 out.append("\">");
                 String content = text(cell, formatter, contentScale);
                 if (!content.isEmpty()) out.append("<div class=\"text\">").append(content).append("</div>");
+                // 导出步骤3：图片按 Excel 锚点绝对定位，不能参与文本流把表格行额外撑大。
                 for (Image image : cellPictures) {
                     boolean fixedProductImage = Math.abs(image.width() - 40) < 0.1 && Math.abs(image.height() - 40) < 0.1;
                     double imageScale = fixedProductImage ? 1 : contentScale;

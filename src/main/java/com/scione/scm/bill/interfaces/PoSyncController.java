@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.LocalDateTime;
 
 /**
- * 采购单同步手动触发接口（联调用；生产由 XXL-Job 定时触发同一逻辑）。
+ * 采购单同步手动触发接口（联调用；定时同步由 NativeProcurementSchedule 触发同一逻辑）。
  */
 @RestController
 @Validated

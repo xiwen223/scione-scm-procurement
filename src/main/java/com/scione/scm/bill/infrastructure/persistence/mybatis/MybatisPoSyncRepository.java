@@ -30,6 +30,7 @@ public class MybatisPoSyncRepository implements PoSyncRepository {
         // 1. 单头 upsert
         recordMapper.upsert(toPO(record));
         // 2. 明细
+        // 替换整套 PO 明细前先删除旧记录；与单头 upsert 共用事务，插入失败会回滚本次删除。
         itemMapper.deleteByOrderNo(record.getPurchaseOrderNo());
         List<PoSyncRecordItem> items = record.getItems();
         if (items != null && !items.isEmpty()) {

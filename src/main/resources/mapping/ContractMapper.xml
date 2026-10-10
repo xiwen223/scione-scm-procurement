@@ -146,9 +146,6 @@
         ORDER BY id ASC
     </select>
 
-    <update id="updateSignedPdfUrl">
-        UPDATE contract SET signed_pdf_url = #{signedPdfUrl}, update_time = NOW() WHERE id = #{id}
-    </update>
 
     <!-- 条件查询 SQL 片段 -->
     <sql id="whereConditions">

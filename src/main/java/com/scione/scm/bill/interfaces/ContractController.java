@@ -4,7 +4,6 @@ import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.ContractAutoCreateService;
 import com.scione.scm.bill.application.PoSyncAppService;
 import com.scione.scm.bill.application.ContractCreateProgressTracker;
-import com.scione.scm.bill.application.ContractLingxingSyncService;
 import com.scione.scm.bill.application.ContractSignAppService;
 import com.scione.scm.bill.application.ContractUpdateService;
 import com.scione.scm.bill.application.dto.ContractCancelRequest;
@@ -12,7 +11,6 @@ import com.scione.scm.bill.application.dto.ContractCreateRequest;
 import com.scione.scm.bill.application.dto.ContractCreateResponse;
 import com.scione.scm.bill.application.dto.ContractBatchDownloadRequest;
 import com.scione.scm.bill.application.dto.ContractDetailResponse;
-import com.scione.scm.bill.application.dto.ContractLingxingSyncDTO;
 import com.scione.scm.bill.application.dto.ContractListItemResponse;
 import com.scione.scm.bill.application.dto.ContractListQueryRequest;
 import com.scione.scm.bill.application.dto.ContractUpdateRequest;
@@ -56,11 +54,10 @@ public class ContractController {
     private final PoSyncAppService poSyncAppService;
     private final ContractUpdateService contractUpdateService;
     private final ContractSignAppService contractSignAppService;
-    private final ContractLingxingSyncService contractLingxingSyncService;
     private final ContractCreateProgressTracker contractCreateProgressTracker;
 
     @PostMapping("/auto-create/trigger")
-    @Operation(summary = "手动触发合同自动创建",
+    @Operation(summary = "合同自动创建",
             description = "同步领星 PO，并为本次同步的待下单 PO 自动创建合同；重复合同由数据库唯一约束拦截")
     public ApiResponse<PoSyncAppService.SyncResult> triggerAutoCreate() {
         // 与定时任务共用同步链路，不再对创建任务加命名锁。
@@ -165,7 +162,7 @@ public class ContractController {
         ContractQueryService.DownloadResult result = contractQueryService.downloadContractFile(contractId, type);
 
         // 根据文件扩展名动态设置 Content-Type
-        MediaType contentType = getContentType(result.fileName());
+        MediaType contentType = MediaType.APPLICATION_PDF;
 
         // 设置响应头
         HttpHeaders headers = new HttpHeaders();
@@ -228,43 +225,6 @@ public class ContractController {
         }
     }
 
-    @PostMapping("/{contractId}/lingxing-sync/compare")
-    @Operation(summary = "查询合同与领星字段差异", description = "返回逐字段差异，前端决定哪些字段应用")
-    public ApiResponse<ContractLingxingSyncDTO.CompareResponse> compareLingxingData(
-            @PathVariable Long contractId) {
-        try {
-            return ApiResponse.success(contractLingxingSyncService.compare(contractId));
-        } catch (BusinessException ex) {
-            return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
-        }
-    }
-
-    @PostMapping("/{contractId}/lingxing-sync/apply")
-    @Operation(summary = "按选择字段同步领星数据", description = "仅更新 selectedFieldKeys 指定字段，不覆盖未选择字段")
-    public ApiResponse<ContractLingxingSyncDTO.ApplyResponse> applyLingxingData(
-            @PathVariable Long contractId,
-            @RequestBody ContractLingxingSyncDTO.ApplyRequest request,
-            @RequestHeader("X-User-Email") String userEmail) {
-        try {
-            return ApiResponse.success(contractLingxingSyncService.apply(contractId, request, userEmail));
-        } catch (BusinessException ex) {
-            return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
-        }
-    }
-
-    @PostMapping("/{contractId}/lingxing-sync/proceed-with-differences")
-    @Operation(summary = "确认领星差异后继续签署", description = "仅记录当前比对结果的完整差异日志，不修改合同数据")
-    public ApiResponse<Void> proceedWithLingxingDifferences(
-            @PathVariable Long contractId,
-            @RequestHeader("X-User-Email") String userEmail) {
-        try {
-            contractLingxingSyncService.recordProceedWithoutSync(contractId, userEmail);
-            return ApiResponse.success(null);
-        } catch (BusinessException ex) {
-            return ApiResponse.fail(ex.getResultCode().getCode(), ex.getMessage());
-        }
-    }
-
     @PostMapping("/{contractId}/urge-sign")
     @Operation(summary = "催办签署", description = "仅签署中合同可催签，调用法大大催办接口")
     public ApiResponse<Void> urgeSign(@PathVariable Long contractId,
@@ -314,7 +274,6 @@ public class ContractController {
     @Operation(summary = "发起合同签署", description = "我方免验证自动盖章并短信通知供应商签署")
     public ApiResponse<ContractSignAppService.StartSignResult> startSign(
             @PathVariable Long contractId,
-            @RequestParam(value = "forceConfirm", defaultValue = "false") boolean forceConfirm,
             @RequestHeader("X-User-Email") String userEmail) {
         try {
             return ApiResponse.success(contractSignAppService.submitStartSign(contractId, userEmail));
@@ -337,18 +296,4 @@ public class ContractController {
         }
     }
 
-    /**
-     * 根据文件名获取 Content-Type。
-     */
-    private MediaType getContentType(String fileName) {
-        if (fileName.endsWith(".pdf")) {
-            return MediaType.APPLICATION_PDF;
-        } else if (fileName.endsWith(".xlsx")) {
-            return MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        } else if (fileName.endsWith(".xls")) {
-            return MediaType.parseMediaType("application/vnd.ms-excel");
-        } else {
-            return MediaType.APPLICATION_OCTET_STREAM;
-        }
-    }
 }

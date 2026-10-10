@@ -48,10 +48,12 @@ public class ContractSignAppService {
         if (contract.getStatus() != ContractStatus.CREATED || contract.isSignLaunching()) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "合同正在发起签署或状态不允许，请勿重复提交");
         }
+        // 受理步骤：以合同关联公司而非页面默认公司校验印章和免验证签配置，防止子公司签错章。
         BuyerCompany buyer = buyerCompanyRepository.findById(contract.getBuyerCompanyId())
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同关联需方不存在"));
         assertFreeSignBusinessIdConfigured(contract, buyer, operatorEmail);
         validateSigningData(contract, buyer, contract.getSupplierPhone(), contract.getSupplierCreditCode());
+        // 先完成本地校验，再用条件 UPDATE 将创建状态推进签署队列；返回的是受理，不是我方已盖章。
         if (contractMapper.enqueueSign(contractId, operatorEmail) != 1) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "合同状态已变化或正在发起签署，请刷新后查看");
         }
@@ -59,8 +61,8 @@ public class ContractSignAppService {
     }
 
     @FadadaAlertContext(FadadaAlertContext.Type.CONTRACT)
-    public StartSignResult startSign(Long contractId, String operatorEmail, boolean forceConfirm) {
-        log.info("开始发起合同签署：contractId={}, forceConfirm={}, operator={}", contractId, forceConfirm, operatorEmail);
+    public StartSignResult startSign(Long contractId, String operatorEmail) {
+        log.info("开始发起合同签署：contractId={}, operator={}", contractId, operatorEmail);
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
         if (contract.getStatus() != ContractStatus.SIGNING || !"RUNNING".equals(contract.getSignLaunchState())) {
@@ -86,12 +88,14 @@ public class ContractSignAppService {
         log.info("签署前需方印章与免验证签配置校验通过：contractNo={}, buyerCompanyId={}", contract.getContractNo(), buyer.getId());
 
         // 签署前始终依据当前合同数据生成新文件，确保折扣等延迟保存的金额已进入法大大签署文档。
+        // 后台步骤1：从当前合同快照生成签署文件，不再比对领星，也不能把用户表单修改覆盖回远端值。
         byte[] fileBytes = loadOrGenerateContractPdfForSigning(contract);
         String fileName = contract.getContractNo() + ".pdf";
         log.info("开始向法大大申请上传地址：contractNo={}, fileName={}, fileType=doc", contract.getContractNo(), fileName);
         FadadaOpenApiClient.UploadUrl upload = fadadaOpenApiClient.getUploadUrl("doc");
         log.info("已获取法大大上传地址：contractNo={}, fddFileUrlPresent={}", contract.getContractNo(), StringUtils.hasText(upload.fddFileUrl()));
         log.info("开始上传合同PDF至法大大：contractNo={}, bytes={}", contract.getContractNo(), fileBytes.length);
+        // 后台步骤2：上传原始 PDF；上传成功后还要做文件处理，才能得到创建任务使用的 fileId。
         fadadaOpenApiClient.uploadFile(upload.uploadUrl(), fileBytes);
         log.info("合同文件已上传法大大：contractNo={}", contract.getContractNo());
         log.info("开始调用法大大文件处理：contractNo={}, sourceType=doc, targetFormat=pdf", contract.getContractNo());
@@ -101,6 +105,7 @@ public class ContractSignAppService {
         log.info("开始创建法大大签署任务：contractNo={}, buyerSealId={}, freeSignCode={}, supplierName={}, supplierCreditCodePresent={}, supplierPhone={}",
                 contract.getContractNo(), mask(buyer.getFadadaSealId()), mask(buyer.getFadadaFreeSignBusinessId()), contract.getSupplierName(),
                 StringUtils.hasText(signingSupplierCreditCode), mask(signingSupplierPhone));
+        // 后台步骤3：创建需方先签、供方后签的任务；外部已创建但本地未确认时必须保留 UNKNOWN，避免重试重复建任务。
         FadadaOpenApiClient.SignTask task;
         try {
         task = fadadaOpenApiClient.createPurchaseContractTask(
@@ -110,6 +115,7 @@ public class ContractSignAppService {
                         buyer.getFadadaSealId(), buyer.getFadadaFreeSignBusinessId(),
                         contract.getSupplierName(), signingSupplierCreditCode, signingSupplierPhone, file.fileTotalPages()));
         log.info("法大大双企业签署任务创建成功：contractNo={}, signTaskId={}", contract.getContractNo(), task.signTaskId());
+        // 创建外部任务成功后保存任务 ID 和等待回调标记；此时尚不能宣称供方已签完。
         contractRepository.markSigning(contractId, task.signTaskId());
         } catch (Exception ex) {
             String message = "创建法大大任务结果需核对：" + ex.getMessage();
@@ -181,18 +187,21 @@ public class ContractSignAppService {
             throw new BusinessException(ResultCode.PARAM_ERROR, "仅创建、签署中或履行中状态的合同可作废");
         }
         String reason = request == null ? null : request.reason();
+        // 分支1：原合同尚未全部签完，调用撤销接口终止原任务，不生成解除协议。
         if (contract.getStatus() == ContractStatus.SIGNING) {
             if (!StringUtils.hasText(contract.getFadadaTaskId())) {
                 throw new BusinessException(ResultCode.PARAM_ERROR, "签署中合同缺少法大大任务ID，无法安全作废");
             }
             fadadaOpenApiClient.cancelSignTask(contract.getFadadaTaskId(), reason);
         }
+        // 分支2：双方已经签完，必须创建解除协议并等待其完成，不能把接口受理当作作废完成。
         if (contract.getStatus() == ContractStatus.EXECUTING) {
             if (!StringUtils.hasText(contract.getFadadaTaskId())) {
                 throw new BusinessException(ResultCode.PARAM_ERROR, "履行中合同缺少法大大任务ID，无法发起作废协议");
             }
             BuyerCompany buyer = buyerCompanyRepository.findById(contract.getBuyerCompanyId())
                     .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同关联的需方公司不存在"));
+            // 履行中作废：读取当前合同需方的场景码，用于我方自动签署解除协议，不是供方公司 ID。
             String businessId = buyer.getFadadaFreeSignBusinessId();
             if (!StringUtils.hasText(businessId)) {
                 throw new BusinessException(ResultCode.CONTRACT_SIGN_FREE_SIGN_NOT_CONFIGURED,
@@ -231,9 +240,11 @@ public class ContractSignAppService {
             // 先持久化平台任务 ID。后续任一配置步骤失败时，仍可从合同记录和日志定位未提交任务。
             // 作废原因一并落库：这个分支要等法大大回调才会变更为「取消」，回调本身不一定带原因，
             // 详情页要展示用户填的原因，只能在这里先存下来。
+            // 先关联解除协议任务并记录原因；主状态仍保持履行中，界面展示正在取消中。
             contractRepository.markFadadaAbolishPending(contractId, abolishedTaskId, trimmedReason);
             String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
             try {
+                // 协议步骤1：获取法大大生成的解除协议文档，再在该文档上配置签章控件。
                 String generatedDocId = fadadaOpenApiClient.getAbolishTaskDocumentId(abolishedTaskId);
                 String buyerSealFieldId = fadadaOpenApiClient.addAbolishBuyerSealField(
                         abolishedTaskId, generatedDocId);
@@ -243,6 +254,7 @@ public class ContractSignAppService {
                 log.info("法大大作废协议供方首次签署短信已在创建任务时配置：contractNo={}, abolishedTaskId={}, supplierActorId={}, supplierPhonePresent={}, notificationType=start",
                         contract.getContractNo(), abolishedTaskId, supplierActorId,
                         StringUtils.hasText(contract.getSupplierPhone()));
+                // 协议步骤2：配置完成才提交任务；我方盖章后供方仍需签署，等待完成回调才改为取消。
                 fadadaOpenApiClient.startSignTask(abolishedTaskId);
             } catch (RuntimeException ex) {
                 String failureDetail = "原签署任务=" + contract.getFadadaTaskId()

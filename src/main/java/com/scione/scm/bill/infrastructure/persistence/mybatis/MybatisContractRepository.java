@@ -184,11 +184,6 @@ public class MybatisContractRepository implements ContractRepository {
         }
     }
 
-    @Override
-    public void updateSignedPdfUrl(long contractId, String signedPdfUrl) {
-        contractMapper.updateSignedPdfUrl(contractId, signedPdfUrl);
-    }
-
     private ContractPO toPO(Contract c) {
         ContractPO po = new ContractPO();
         po.setId(c.getId());
@@ -377,15 +372,6 @@ public class MybatisContractRepository implements ContractRepository {
                 po.getCancelReason(), po.getCancelTime(), po.getSignLaunchState(), po.getSignLaunchError(), po.isAbolishPending(),
                 items
         ));
-    }
-
-    @Override
-    public Optional<String> findLatestItemPicUrlBySku(String sku) {
-        if (sku == null || sku.isBlank()) {
-            return Optional.empty();
-        }
-        return Optional.ofNullable(itemMapper.selectLatestPicUrlBySku(sku))
-                .filter(value -> !value.isBlank());
     }
 
     @Override

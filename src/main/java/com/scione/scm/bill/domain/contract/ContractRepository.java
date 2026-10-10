@@ -90,7 +90,6 @@ public interface ContractRepository {
     void markCompleted(long contractId);
     List<Contract> findExecutingContracts();
 
-    void updateSignedPdfUrl(long contractId, String signedPdfUrl);
 
     /**
      * 分页查询合同列表。
@@ -109,12 +108,7 @@ public interface ContractRepository {
     Optional<Contract> findById(Long contractId);
 
     /**
-     * 按 SKU 复用历史合同明细已经保存的商品图片，避免重复请求领星商品接口。
-     */
-    Optional<String> findLatestItemPicUrlBySku(String sku);
-
-    /**
-     * 批量版 {@link #findLatestItemPicUrlBySku(String)}：一次查询取回多个 SKU 的最新图片，
+     * 批量查询：一次查询取回多个 SKU 的最新图片，
      * 避免详情查询按明细逐条查库。
      *
      * @param skus SKU 集合（为空时直接返回空 Map）

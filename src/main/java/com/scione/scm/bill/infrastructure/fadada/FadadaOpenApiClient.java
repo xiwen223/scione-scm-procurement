@@ -632,6 +632,7 @@ public class FadadaOpenApiClient {
      * 换成该任务所属应用的凭据即可成功，因此这里按 apps 顺序逐套尝试。</p>
      */
     private JsonNode businessPost(String path, Map<String, Object> body, boolean retryable) {
+        // 业务请求步骤1：准备当前可用应用凭证，每个应用使用自己的 token，不能拿主应用 token 配子应用签名。
         List<Credential> credentials = credentialCandidates();
         String lastReason = null;
         for (int index = 0; index < credentials.size(); index++) {
@@ -644,6 +645,7 @@ public class FadadaOpenApiClient {
             }
             lastReason = businessFailureReason(response);
             boolean hasNext = index + 1 < credentials.size();
+            // 只有明确的应用不匹配业务码才切换备用应用；其他业务错误不是换凭证就能修复。
             if (hasNext && APP_MISMATCH_CODES.contains(code)) {
                 log.warn("法大大应用不匹配（业务码 {}），改用备用应用重试：path={}, 失败appId={}, 备用appId={}",
                         code, path, credential.appId(), credentials.get(index + 1).appId());

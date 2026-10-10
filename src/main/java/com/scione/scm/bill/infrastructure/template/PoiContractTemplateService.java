@@ -675,24 +675,5 @@ public class PoiContractTemplateService implements ContractTemplateService {
         return Workbook.PICTURE_TYPE_JPEG;
     }
 
-    /**
-     * 调整图片大小以适应单元格（控制图片不要太大）
-     *
-     * @param picture 图片对象
-     * @param row     行对象
-     */
-    private void resizePictureToFitCell(Picture picture, Row row) {
-        // 设置行高为60 points (1 point = 20 twips)
-        // 这样图片不会太突兀，大约4厘米高
-        if (row.getHeight() < 1200) { // 如果行高小于60 points
-            row.setHeight((short) 1200); // 设置为60 points (约4cm)
-        }
 
-        // 使用resize方法自动缩放图片以适应锚点定义的区域
-        // 由于锚点是从A列到B列，从当前行到下一行，图片会被缩放到这个区域
-        picture.resize();
-
-        // 如果觉得图片还是太大，可以进一步缩小
-        // picture.resize(0.8); // 缩放到80%
-    }
 }

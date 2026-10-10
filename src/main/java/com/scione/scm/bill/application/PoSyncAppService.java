@@ -141,6 +141,7 @@ public class PoSyncAppService {
         // hasContract / contractId 不设置：由建合同流程维护，同步不碰（upsert 也不更新这两列）
         record.setSyncTime(syncTime);
 
+        // 单头 isTax 仅传给明细换算；目前数据库保存税率、原单价、不含税单价，而不保存 is_tax。
         List<PurchaseOrderItemData> items = order.items();
         if (items != null) {
             List<PoSyncRecordItem> recordItems = new ArrayList<>(items.size());

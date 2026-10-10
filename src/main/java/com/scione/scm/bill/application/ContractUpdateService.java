@@ -52,6 +52,7 @@ public class ContractUpdateService {
     /** 统一保存合同主信息、折扣及商品明细，所有变更在同一事务提交。 */
     @Transactional
     public ContractUpdateResponse updateContract(Long contractId, ContractUpdateRequest request, String operatorEmail) {
+        // 只改折扣的判断现在仅选择日志描述，不再分成第二套保存或 PDF 生成流程。
         String operationDesc = isDiscountOnlyRequest(request)
                 ? "修改合同折扣" : "修改合同";
         return updateContractInternal(contractId, request, operatorEmail, operationDesc);
@@ -140,6 +141,7 @@ public class ContractUpdateService {
             contractRepository.updateContractNoReferences(contractId, contractNo);
             log.info("合同编号变更完成并已同步全部引用：contractId={}, {} → {}", contractId, oldContractNo, contractNo);
         }
+        // 旧 PDF 与新数据已不一致：清空地址作为失效标记，而不是删除 S3 历史文件。
         contractRepository.updatePdfUrl(contractId, null);
         contract.setContractPdfUrl(null);
         log.info("合同修改已保存：contractNo={}, changeCount={}", contractNo, changeDetails.size());

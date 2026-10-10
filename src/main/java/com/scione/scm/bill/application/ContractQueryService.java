@@ -85,12 +85,15 @@ public class ContractQueryService {
                 request.getStatus(), request.getPageNum(), request.getPageSize());
 
         // 校验并修正分页参数
+        // 列表步骤1：先规范页码和分页大小，后续 SQL 使用修正后的参数计算 offset。
         request.validateAndFix();
 
         // 查询数据库
+        // 列表步骤2：查询总数和当前页主信息，不在此逐份读取 PDF 或调用法大大。
         ContractPage page = contractRepository.findByPage(request);
 
         // 催办时间不落合同表（只写操作日志），列表展示时按当前页合同批量取最近一次催办时间
+        // 列表步骤3：只汇总本页合同的催办日志，一次补齐展示字段，避免按每行查询。
         Map<Long, LocalDateTime> lastUrgeTimes = contractRepository.findLatestUrgeTimes(
                 page.records().stream().map(Contract::getId).toList());
 
@@ -115,7 +118,9 @@ public class ContractQueryService {
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND,
                         "合同不存在：contractId=" + contractId));
 
+        // 详情步骤2：历史明细缺图时补展示图片；补图不代表重新同步合同价格或供方字段。
         fillMissingItemImages(contract);
+        // 详情步骤3：将领域快照转成对外 DTO，输出日期、金额、主状态及过程标记。
         ContractDetailResponse response = ContractDetailResponse.from(contract);
 
         log.info("查询合同详情成功：contractNo={}", contract.getContractNo());
@@ -241,9 +246,10 @@ public class ContractQueryService {
     }
 
     private DownloadResult downloadContractFileContent(Contract contract, String type) throws IOException {
-        // 仅创建状态允许编辑，因此只对创建状态按当前数据库数据即时生成。
+        // 仅创建状态允许编辑，因此只对创建状态在 URL 为空时按当前数据库数据即时生成。
         // 签署中及之后直接读取已保存文件，避免下载时重复模板填充、PDF 转换及存储上传。
         if (!"signed".equals(type)) {
+            // 下载分支1：创建状态有缓存 URL 就下载；URL 被编辑清空或从未生成时，才按最新数据重建。
             if (contract.getStatus() == ContractStatus.CREATED) {
                 if (!StringUtils.hasText(contract.getContractPdfUrl())) {
                     byte[] latestPdf = generateLatestContractPdf(contract, "下载创建状态合同");
@@ -252,6 +258,7 @@ public class ContractQueryService {
                 byte[] cachedPdf = contractFileStore.download(contract.getContractPdfUrl());
                 return new DownloadResult(cachedPdf, contract.getContractNo() + ".pdf");
             }
+            // 下载分支2：非创建状态不能重新编辑生成原合同，读取已保存文件，缺地址则明确报资源不存在。
             String fileUrl = getOriginalPdfUrl(contract);
             if (!StringUtils.hasText(fileUrl)) {
                 // 合同本身存在、但未保存过合同文件：属于「文件资源不存在」，给 404 而不是系统异常
@@ -288,8 +295,10 @@ public class ContractQueryService {
             log.info("{}：开始按当前合同数据生成文件：contractNo={}, 原价={}, 折扣={}, 实际金额={}",
                     scene, contract.getContractNo(), contract.getOriginalAmount(),
                     contract.getDiscountedAmount(), contract.getContractAmount());
+            // 重建步骤1：按当前数据库快照填充模板并转 PDF，只有生成成功才继续上传和替换 URL。
             byte[] pdfBytes = contractPdfConverter.convert(contractTemplateService.fillTemplate(contract),
                     contract.getContractNo());
+            // 重建步骤2：文件先保存到 S3，再写数据库 URL；这里任一步失败都会进入下载失败日志。
             String fileUrl = contractFileStore.store(contract.getContractNo(), pdfBytes, "pdf");
             contractRepository.updatePdfUrl(contract.getId(), fileUrl);
             contract.setContractPdfUrl(fileUrl);
@@ -486,6 +495,7 @@ public class ContractQueryService {
         log.info("合同批量下载开始: contractIds={}", contractIds);
 
         // 去重
+        // 批量步骤1：去重避免同一合同重复导出；此处去重不改变每份合同的下载来源。
         List<Long> uniqueIds = contractIds.stream().distinct().toList();
         if (uniqueIds.isEmpty()) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "合同ID列表不能为空");
@@ -500,6 +510,7 @@ public class ContractQueryService {
             throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "未找到任何合同");
         }
 
+        // 批量步骤2：创建 ZIP 输出流；所有文件按顺序写入，try-with-resources 负责异常时关闭。
         try (ByteArrayOutputStream output = new ByteArrayOutputStream();
              ZipOutputStream zip = new ZipOutputStream(output)) {
 
@@ -510,6 +521,7 @@ public class ContractQueryService {
                 // 仅创建状态需要按当前可编辑数据生成；其他状态直接读取已保存文件。
                 String fileUrl = null;
                 byte[] fileBytes;
+                // 批量步骤3：每份合同独立按状态取文件，不能把混合状态的一批合同都按同一个来源下载。
                 if (contract.getStatus() == ContractStatus.CREATED) {
                     if (StringUtils.hasText(contract.getContractPdfUrl())) {
                         fileUrl = contract.getContractPdfUrl();
@@ -544,6 +556,7 @@ public class ContractQueryService {
                 log.info("合同文件已添加到ZIP: contractNo={}, fileName={}, size={}",
                         contract.getContractNo(), fileName, fileBytes.length);
                 } catch (Exception ex) {
+                    // 当前策略是单份失败即终止本次导出，不返回不完整 ZIP；记录具体合同便于用户定位。
                     throw recordDownloadFailure(contract, "批量下载", ex);
                 }
             }
@@ -568,6 +581,7 @@ public class ContractQueryService {
     private BusinessException recordDownloadFailure(Contract contract, String scene, Exception exception) {
         String reason = StringUtils.hasText(exception.getMessage()) ? exception.getMessage() : "文件处理失败";
         Throwable cause = exception;
+        // 失败步骤1：沿 cause 查底层异常，最多追溯十层，避免循环引用导致无限遍历。
         for (int depth = 0; depth < 10 && cause.getCause() != null && cause.getCause() != cause; depth++) {
             cause = cause.getCause();
         }
@@ -588,6 +602,7 @@ public class ContractQueryService {
                     "下载方式=" + scene + "；合同状态=" + contract.getStatus() + "；模板ID=" + contract.getTemplateId()
                             + "；失败原因=" + reason.substring(0, Math.min(reason.length(), 1000)));
             operation.setOperationType(ContractOperationLog.TYPE_DOWNLOAD_FAILED);
+            // 失败步骤2：写数据库操作日志；写日志异常单独处理，不能覆盖最初的下载失败。
             contractRepository.saveOperationLog(operation);
         } catch (Exception logException) {
             log.error("下载失败操作日志保存失败：contractId={}, contractNo={}",

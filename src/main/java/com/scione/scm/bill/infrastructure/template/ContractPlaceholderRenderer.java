@@ -76,7 +76,9 @@ final class ContractPlaceholderRenderer {
     void fill(XSSFWorkbook workbook, Contract contract,
               Supplier<Optional<SupplierPaymentAccount>> accountResolver,
               BiConsumer<Cell, ContractItem> imageWriter) {
+        // 填充步骤1：构建合同主字段的占位符值，不从领星重拉整份采购单覆盖合同快照。
         Map<String, Object> values = contractValues(contract);
+        // 填充步骤2：先检查模板占位符，未知字段在生成前明确失败，避免输出带原占位符的合同。
         Set<String> used = validate(workbook, values.keySet());
         // 同一次生成只解析一次默认账户；没有账户占位符就不做额外的远程查询。
         if (used.stream().anyMatch(ACCOUNT_KEYS::contains)) {
@@ -90,12 +92,14 @@ final class ContractPlaceholderRenderer {
         Map<String, CellStyle> styles = new HashMap<>();
         for (int sheetIndex = 0; sheetIndex < workbook.getNumberOfSheets(); sheetIndex++) {
             XSSFSheet sheet = workbook.getSheetAt(sheetIndex);
+            // 填充步骤3：找出明细模板行及可容纳数量，商品多于预留行才扩展模板。
             List<Integer> detailRows = findDetailRows(sheet);
             int first = detailRows.isEmpty() ? -1 : detailRows.get(0);
             int capacity = detailRows.size();
             if (capacity > 0 && contract.getItems().size() > capacity) {
                 int extra = contract.getItems().size() - capacity;
                 int insertAt = first + capacity;
+                // 扩行时同时移动下方条款、绘图锚点和打印范围，避免图片仍留在旧行位置。
                 moveFooter(sheet, insertAt, extra);
                 for (int n = 0; n < extra; n++) {
                     sheet.copyRows(first + capacity - 1, first + capacity - 1, insertAt + n,
@@ -110,12 +114,14 @@ final class ContractPlaceholderRenderer {
                 int itemIndex = row.getRowNum() - first;
                 ContractItem item = detail && itemIndex < contract.getItems().size()
                         ? contract.getItems().get(itemIndex) : null;
+                // 填充步骤4：每行复制主字段字典，再加入本行商品数据，防止上一行的明细值串到下一行。
                 Map<String, Object> rowValues = new HashMap<>(values);
                 if (detail) rowValues.putAll(itemValues(item));
                 for (Cell cell : row) {
                     if (cell.getCellType() != CellType.STRING || !cell.getStringCellValue().contains("${")) continue;
                     String original = cell.getStringCellValue();
                     if (original.equals("${items.picUrl}") || original.equals("${items.productImage}")) {
+                        // 图片占位符不写普通文本：先清空单元格文字，再以锚点插入图片，文字仍由其他列填充。
                         cell.setBlank();
                         if (item != null) imageWriter.accept(cell, item);
                     } else {

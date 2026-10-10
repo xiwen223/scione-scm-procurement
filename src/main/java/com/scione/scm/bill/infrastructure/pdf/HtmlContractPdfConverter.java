@@ -26,16 +26,19 @@ public class HtmlContractPdfConverter implements ContractPdfConverter {
             if (HtmlContractPdfConverter.class.getResource(CHINESE_FONT) == null) {
                 throw new IllegalStateException("JAR 内缺少中文字体资源：" + CHINESE_FONT);
             }
+            // PDF步骤1：先把完整工作簿转 XHTML，列宽、行高和图片布局在导出器中处理。
             String html = new ExcelContractHtmlExporter().export(xlsxBytes);
             ByteArrayOutputStream output = new ByteArrayOutputStream();
             PdfRendererBuilder builder = new PdfRendererBuilder();
             builder.useFastMode();
             // 每次渲染提供新的流，OpenHTMLToPDF 负责关闭。支持 IDE 和 Spring Boot JAR，
             // 不把 JAR 内资源转换成 File，也不依赖操作系统字体或外部路径配置。
+            // PDF步骤2：使用随应用打包的中文字体，避免服务器缺字体时出现乱码或字形缺失。
             builder.useFont(HtmlContractPdfConverter::openChineseFont, "ContractChinese");
             builder.withHtmlContent(html, null);
             builder.toStream(output);
             builder.run();
+            // PDF步骤3：渲染完成后才能知道总页数，最后写页码并校验文件头，再返回字节。
             byte[] pdf = addPageNumbers(output.toByteArray());
             if (pdf.length < 5 || pdf[0] != '%' || pdf[1] != 'P' || pdf[2] != 'D' || pdf[3] != 'F') {
                 throw new IllegalStateException("PDF output is invalid");

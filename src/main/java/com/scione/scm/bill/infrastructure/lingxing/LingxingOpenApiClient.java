@@ -441,6 +441,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     private JsonNode callPurchaseOrderList(
             LocalDateTime startTime, LocalDateTime endTime, String searchFieldTime, int offset,
             List<String> orderSns) {
+        // 采购查询步骤1：构造时间窗口、分页及可选 PO 单号条件；单号查询也须满足日期必传要求。
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("start_date", startTime.format(LINGXING_DATE_TIME));
         body.put("end_date", endTime.format(LINGXING_DATE_TIME));
@@ -456,6 +457,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         String timestamp = Long.toString(Instant.now().getEpochSecond());
         String accessToken = accessToken();
 
+        // 采购查询步骤2：把正文和公共参数一起参与签名，签名后的请求内容不能再变更。
         Map<String, Object> signatureParameters = new HashMap<>();
         signatureParameters.put("timestamp", timestamp);
         signatureParameters.put("access_token", accessToken);
@@ -475,10 +477,12 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         queryParameters.put("access_token", accessToken);
         queryParameters.put("app_key", properties.getAppId());
         queryParameters.put("sign", signature);
+        // 采购查询步骤3：公共鉴权放 query，采购筛选参数放 body，拼接 URI 时由统一方法编码。
         URI uri = requestUri(PURCHASE_ORDER_LIST_PATH, queryParameters);
         try {
             JsonNode response = restClient.post().uri(uri).body(body).retrieve().body(JsonNode.class);
             String code = response == null ? "" : response.path("code").asText();
+            // 采购查询步骤4：检查领星业务码；HTTP 200 也可能是限流或 token 错误，不能按成功数据解析。
             String remoteMessage = responseMessage(response);
             if (!code.isBlank() && !"0".equals(code) && !"200".equals(code)) {
                 String reason = "业务码 " + code + (remoteMessage.isBlank() ? "" : "：" + remoteMessage);

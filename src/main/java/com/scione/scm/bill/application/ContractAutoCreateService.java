@@ -103,8 +103,10 @@ public class ContractAutoCreateService {
         if (!StringUtils.hasText(purchaseOrderNo)) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "采购单号不能为空");
         }
+        // 预填步骤1：规范采购单号，再读取本地 PO；必要的远端补查和 PO 保存封装在 loadManualPo。
         String orderNo = purchaseOrderNo.trim();
         PoSyncRecord po = loadManualPo(orderNo);
+        // 预填步骤2：补供应商档案和收款账户；该查询失败时允许缺字段，交给表单提示用户补录。
         LingxingSupplierClient.SupplierProfile profile = loadSupplierProfile(po.getSupplierId());
 
         String supplierAddress = profile == null ? null : profile.address();
@@ -115,6 +117,7 @@ public class ContractAutoCreateService {
         LingxingSupplierClient.SupplierPaymentAccount account = profile == null
                 ? null : profile.defaultPaymentAccount().orElse(null);
 
+        // 预填步骤3：多个明细交货日取最早值作为合同交货日期；不是创建时间或签署日期。
         LocalDate deliveryDate = po.getItems() == null ? null : po.getItems().stream()
                 .filter(item -> item.getExpectArriveTime() != null)
                 .map(PoSyncRecordItem::getExpectArriveTime)
@@ -123,6 +126,7 @@ public class ContractAutoCreateService {
         BigDecimal contractAmount = originalAmountOf(po);
 
         // 领星没维护的字段要在前端明确提示，否则用户会以为是系统没带出来。
+        // 预填步骤4：收集未维护字段供界面提示，列表非空不等于采购单查询失败。
         List<String> missing = new ArrayList<>();
         if (!StringUtils.hasText(po.getSupplierName())) missing.add("供方名称");
         if (!StringUtils.hasText(po.getSupplierPhone())) missing.add("供方电话");
@@ -150,6 +154,7 @@ public class ContractAutoCreateService {
                 existing == null ? "无" : existing.contractNo() + "(" + existing.statusText() + ")",
                 missing.isEmpty() ? "无" : String.join("、", missing));
 
+        // 预填返回供方信息和商品明细供前端编辑；此处没有创建合同或生成 PDF，PO 补同步仍可能已落库。
         return new ManualPoPrefill(
                 orderNo,
                 po.getSupplierName(),
@@ -183,14 +188,17 @@ public class ContractAutoCreateService {
         if (poItems == null || poItems.isEmpty()) {
             return List.of();
         }
+        // 明细步骤1：只收集缺图片的 SKU 并去重，已有图片不再查领星。
         Set<String> missingPicSkus = poItems.stream()
                 .filter(item -> !StringUtils.hasText(item.getPicUrl()) && StringUtils.hasText(item.getSku()))
                 .map(PoSyncRecordItem::getSku)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
+        // 明细步骤2：整批补图，优先复用历史合同图片，剩余再批量查商品接口。
         Map<String, String> picUrlsBySku = resolvePrefillPicUrls(missingPicSkus);
 
         List<ManualPoItem> items = new ArrayList<>(poItems.size());
         for (PoSyncRecordItem item : poItems) {
+            // 明细步骤3：统一数量口径，并用已换算不含税价计算小计，保持表单与最终合同一致。
             Integer quantity = PurchasePriceCalculator.effectiveQuantity(
                     item.getQuantityReal(), item.getQuantityPlan());
             // 明细自带的 pic_url 优先（采购单列表接口已返回），缺失才用补图结果
@@ -657,7 +665,8 @@ public class ContractAutoCreateService {
             log.error("手动创建首版合同PDF失败：contractNo={}, contractId={}", contractNo, contractId, ex);
         }
 
-        // 11. 返回结果
+        // 首版 PDF 失败不会撤销前面已保存的合同，后续下载可重建；返回成功不代表 fileUrl 一定非空。
+        // 12. 返回结果
         return new ContractCreateResponse(
                 contractId,
                 contractNo,
@@ -673,9 +682,7 @@ public class ContractAutoCreateService {
                 || po.getItems().stream().anyMatch(item -> item.getUnitPriceWithoutTax() == null);
     }
 
-    /**
-     * 应用手动补充的字段（覆盖领星和默认数据）。
-     */
+    /** 从已保存的合同快照生成首版 PDF、上传 S3 并回写地址；不重新同步领星字段。 */
     private String generateInitialContractPdf(Contract contract) {
         try {
             log.info("创建合同后生成首版PDF：contractNo={}", contract.getContractNo());
@@ -694,6 +701,7 @@ public class ContractAutoCreateService {
     private void applyManualOverrides(Contract contract, ContractCreateRequest request) {
         // 明细的数量 / 不含税单价允许人工改：先按 SKU 覆盖并重算金额，再做金额与折扣覆盖，
         // 否则「主表原价 = Σ明细金额」会被打破（合同 PDF 底部的合计直接取主表金额）。
+        // 覆盖顺序：先处理用户修改的明细，再处理主金额和折扣，避免最后的合计仍使用旧明细。
         applyItemOverrides(contract, request.getItems());
 
         if (request.getPrepaymentRatio() != null) {
