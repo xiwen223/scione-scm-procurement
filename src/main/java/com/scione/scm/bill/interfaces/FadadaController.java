@@ -11,6 +11,7 @@ import com.scione.scm.bill.application.dto.FadadaCorpAuthStatusResponse;
 import com.scione.scm.bill.application.dto.FadadaSealFreeSignUrlResponse;
 import com.scione.scm.bill.application.dto.FileUrlRequest;
 import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
+import com.scione.scm.bill.config.FadadaOpenApiProperties;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -58,6 +59,15 @@ import static com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperati
 @RequestMapping("/api/v1/fadada")
 @Tag(name = "法大大", description = "法大大企业授权状态查询、印章上传 / 移除与签章图片访问地址")
 public class FadadaController {
+
+    @Autowired
+    private FadadaOpenApiProperties fadadaOpenApiProperties;
+
+    @GetMapping("/corp/auth-address")
+    @Operation(summary = "获取配置中心维护的企业认证平台地址")
+    public ApiResponse<String> corpAuthAddress() {
+        return ApiResponse.success(fadadaOpenApiProperties.getCorpAuthAddress());
+    }
 
     @Autowired
     private FadadaOpenApiClient fadadaOpenApiClient;

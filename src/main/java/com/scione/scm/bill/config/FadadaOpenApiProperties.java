@@ -22,6 +22,8 @@ public class FadadaOpenApiProperties {
     private String appId;
     private String appSecret;
     private String openCorpId;
+    /** 企业认证平台地址，由配置中心维护。 */
+    private String corpAuthAddress;
     /** 法大大签署完成回调地址；域名未就绪时可留空。 */
     private String notifyUrl;
     private String apiSubVersion = "5.1";
