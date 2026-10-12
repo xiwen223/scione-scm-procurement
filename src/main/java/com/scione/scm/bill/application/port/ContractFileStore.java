@@ -18,10 +18,10 @@ public interface ContractFileStore {
     String store(String contractNo, byte[] fileBytes, String extension) throws IOException;
 
     /**
-     * 从 S3 下载合同文件。
+     * 通过数据平台下载合同文件。
      *
-     * @param fileUrl 对象键或历史文件 URL（来自 contract_pdf_url 或 signed_pdf_url）
+     * @param objectKey 数据平台返回的对象键（来自 contract_pdf_url 或 signed_pdf_url）
      * @return 文件字节数组
      */
-    byte[] download(String fileUrl) throws IOException;
+    byte[] download(String objectKey) throws IOException;
 }
