@@ -362,10 +362,12 @@ public class ContractAutoCreateService {
         int created = 0;
         int skipped = 0;
         int failed = 0;
+        // 仅本批次复用供应商查询结果，批次结束即丢弃；下一批和手动预填仍实时查领星。
+        Map<Long, Optional<LingxingSupplierClient.SupplierProfile>> supplierProfiles = new java.util.HashMap<>();
         for (PoSyncRecord po : pendingPos) {
             String poNo = po.getPurchaseOrderNo();
             try {
-                boolean success = processOnePo(po, buyer);
+                boolean success = processOnePo(po, buyer, supplierProfiles);
                 if (success) {
                     created++;
                 } else {
@@ -390,13 +392,13 @@ public class ContractAutoCreateService {
      * @return true=创建，false=跳过
      */
     @Transactional
-    protected boolean processOnePo(PoSyncRecord po, BuyerCompany buyer) {
+    protected boolean processOnePo(PoSyncRecord po, BuyerCompany buyer,
+                                   Map<Long, Optional<LingxingSupplierClient.SupplierProfile>> supplierProfiles) {
         String poNo = po.getPurchaseOrderNo();
 
         // 外部接口异常向上抛出计入失败；只有查询成功后确实缺资料才算跳过。
         LingxingSupplierClient.SupplierProfile profile = autoCreateStep("查询领星供应商资料及默认账户", () ->
-                po.getSupplierId() == null ? null
-                        : lingxingSupplierClient.findSupplierProfile(po.getSupplierId()).orElse(null));
+                loadBatchSupplierProfile(po.getSupplierId(), supplierProfiles));
         String missingAccount = po.getSupplierId() == null ? "采购单未提供供应商ID"
                 : profile == null ? "领星未找到供应商资料"
                 : profile.defaultPaymentAccount().isEmpty() ? "领星供应商没有可用的默认收款账户"
@@ -511,6 +513,20 @@ public class ContractAutoCreateService {
         // 首次创建完成即保存 PDF；后续未编辑时签署可直接复用，避免再次拉取图片和填充模板。
         autoCreateStep("生成首版PDF并上传S3（合同已保存）", () -> generateInitialContractPdf(contract));
         return true;
+    }
+
+    /** 只有成功返回（包括确认不存在）的查询才缓存，异常不写入缓存，下一张 PO 可重新查询。 */
+    private LingxingSupplierClient.SupplierProfile loadBatchSupplierProfile(
+            Long supplierId, Map<Long, Optional<LingxingSupplierClient.SupplierProfile>> profiles) {
+        if (supplierId == null) return null;
+        Optional<LingxingSupplierClient.SupplierProfile> cached = profiles.get(supplierId);
+        if (cached != null) {
+            log.info("自动创建复用本批次供应商资料：supplierId={}", supplierId);
+            return cached.orElse(null);
+        }
+        Optional<LingxingSupplierClient.SupplierProfile> queried = lingxingSupplierClient.findSupplierProfile(supplierId);
+        profiles.put(supplierId, queried);
+        return queried.orElse(null);
     }
 
     private static <T> T autoCreateStep(String step, java.util.function.Supplier<T> action) {
