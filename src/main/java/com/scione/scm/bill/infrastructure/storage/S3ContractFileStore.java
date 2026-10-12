@@ -12,8 +12,6 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import java.io.IOException;
-import java.net.URI;
-import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 
 /**
  * S3 文件存储实现（合同文档专用）。
@@ -68,9 +66,10 @@ public class S3ContractFileStore implements ContractFileStore {
             log.info("开始下载合同文件：fileUrl={}, objectKey={}", fileUrl, objectKey);
 
             // 从 S3 下载文件
-            byte[] fileBytes = s3Client.getObjectAsBytes(GetObjectRequest.builder()
+            byte[] fileBytes = s3Client.getObjectAsBytes(builder -> builder
                     .bucket(storageProperties.getBucket())
-                    .key(objectKey).build()).asByteArray();
+                    .key(objectKey)
+            ).asByteArray();
 
             log.info("合同文件下载成功：objectKey={}, size={}", objectKey, fileBytes.length);
             return fileBytes;
@@ -90,14 +89,22 @@ public class S3ContractFileStore implements ContractFileStore {
             throw new IllegalArgumentException("文件 URL 不能为空");
         }
 
-        if (!fileUrl.startsWith("http://") && !fileUrl.startsWith("https://")) return fileUrl;
-        String path = URI.create(fileUrl).getPath();
-        // 兼容域名地址、endpoint/bucket 地址和历史预签名地址，保留 contracts 前缀。
-        int contracts = path.indexOf("/contracts/");
-        if (contracts >= 0) return path.substring(contracts + 1);
-        String bucketPrefix = "/" + storageProperties.getBucket() + "/";
-        return path.startsWith(bucketPrefix) ? path.substring(bucketPrefix.length())
-                : path.replaceFirst("^/", "");
+        // 如果是完整 URL，提取路径部分
+        if (fileUrl.startsWith("http://") || fileUrl.startsWith("https://")) {
+            int lastSlashBeforeObjectKey = fileUrl.indexOf('/', 8); // 跳过 "https://"
+            if (lastSlashBeforeObjectKey > 0) {
+                // 找到 bucket 后的第一个 /
+                int bucketEndIndex = fileUrl.indexOf('/', lastSlashBeforeObjectKey + 1);
+                if (bucketEndIndex > 0) {
+                    return fileUrl.substring(bucketEndIndex + 1);
+                }
+                // 如果没有 bucket，直接返回域名后的路径
+                return fileUrl.substring(lastSlashBeforeObjectKey + 1);
+            }
+        }
+
+        // 如果已经是 Object Key 格式，直接返回
+        return fileUrl;
     }
 
     /**
