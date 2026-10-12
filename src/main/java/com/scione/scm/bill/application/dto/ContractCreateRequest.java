@@ -3,6 +3,8 @@ package com.scione.scm.bill.application.dto;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.DecimalMax;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -70,6 +72,8 @@ public class ContractCreateRequest {
     // ========== 合同金额信息（可选，覆盖领星数据） ==========
 
     @Schema(description = "预付款比例（可选，如 0.3 表示30%）", example = "0.0")
+    @DecimalMin(value = "0", message = "预付款比例不能小于0")
+    @DecimalMax(value = "1", message = "预付款比例不能大于1，例如0.3表示30%")
     private BigDecimal prepaymentRatio;
 
     @Schema(description = "结算方式：现结、月结、其他", example = "现结")
