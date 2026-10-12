@@ -362,10 +362,12 @@ public class ContractAutoCreateService {
         int created = 0;
         int skipped = 0;
         int failed = 0;
+        // 仅本批次复用供应商查询结果，批次结束即丢弃；下一批和手动预填仍实时查领星。
+        Map<Long, Optional<LingxingSupplierClient.SupplierProfile>> supplierProfiles = new java.util.HashMap<>();
         for (PoSyncRecord po : pendingPos) {
             String poNo = po.getPurchaseOrderNo();
             try {
-                boolean success = processOnePo(po, buyer);
+                boolean success = processOnePo(po, buyer, supplierProfiles);
                 if (success) {
                     created++;
                 } else {
@@ -390,13 +392,13 @@ public class ContractAutoCreateService {
      * @return true=创建，false=跳过
      */
     @Transactional
-    protected boolean processOnePo(PoSyncRecord po, BuyerCompany buyer) {
+    protected boolean processOnePo(PoSyncRecord po, BuyerCompany buyer,
+                                   Map<Long, Optional<LingxingSupplierClient.SupplierProfile>> supplierProfiles) {
         String poNo = po.getPurchaseOrderNo();
 
         // 外部接口异常向上抛出计入失败；只有查询成功后确实缺资料才算跳过。
         LingxingSupplierClient.SupplierProfile profile = autoCreateStep("查询领星供应商资料及默认账户", () ->
-                po.getSupplierId() == null ? null
-                        : lingxingSupplierClient.findSupplierProfile(po.getSupplierId()).orElse(null));
+                loadBatchSupplierProfile(po.getSupplierId(), supplierProfiles));
         String missingAccount = po.getSupplierId() == null ? "采购单未提供供应商ID"
                 : profile == null ? "领星未找到供应商资料"
                 : profile.defaultPaymentAccount().isEmpty() ? "领星供应商没有可用的默认收款账户"
@@ -406,7 +408,6 @@ public class ContractAutoCreateService {
                     + "，供应商ID=" + po.getSupplierId()
                     + "；分类=资料不完整；步骤=默认收款账户白名单核验；缺失信息=" + missingAccount
                     + "；处理=跳过创建，不自动重试";
-            contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
             log.info("跳过建合同：{}", reason);
             return false;
         }
@@ -416,7 +417,6 @@ public class ContractAutoCreateService {
             String reason = "PO=" + poNo + "，供应商=" + po.getSupplierName() + "，默认收款账户名称="
                     + defaultAccountName + "；分类=业务规则不满足；步骤=默认账户白名单核验"
                     + "；原因=默认收款账户名称不在采购合同签约白名单；处理=跳过创建，不自动重试";
-            contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
             log.info("跳过建合同：{}", reason);
             return false;
         }
@@ -431,7 +431,6 @@ public class ContractAutoCreateService {
         if (!validation.missingFields().isEmpty()) {
             String reason = "PO=" + poNo + "；分类=资料不完整；步骤=合同必填校验；缺失字段="
                     + String.join("、", validation.missingFields()) + "；处理=跳过创建，不自动重试";
-            contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(poNo, reason));
             log.info("跳过建合同：{}", reason);
             return false;
         }
@@ -470,7 +469,6 @@ public class ContractAutoCreateService {
         // 校验 6：唯一性兜底
         if (contractRepository.existsActiveByPurchaseOrderNo(poNo)) {
             log.info("跳过建合同（已存在非取消合同）：poNo={}", poNo);
-            recordDuplicateCreateSkipped(poNo);
             return false;
         }
 
@@ -494,7 +492,6 @@ public class ContractAutoCreateService {
             // 上面的 existsActiveByPurchaseOrderNo 是「先查后写」，与另一个实例的创建存在竞态窗口；
             // contract.uk_contract_active_po_no 是最终兜底，撞上说明确有并发，按「已存在」跳过即可。
             log.info("跳过建合同（并发重复创建，命中唯一约束）：poNo={}", poNo, ex);
-            recordDuplicateCreateSkipped(poNo);
             return false;
         } catch (RuntimeException ex) {
             throw new AutoCreateStepException("保存合同主表、明细及创建日志", ex);
@@ -511,6 +508,20 @@ public class ContractAutoCreateService {
         // 首次创建完成即保存 PDF；后续未编辑时签署可直接复用，避免再次拉取图片和填充模板。
         autoCreateStep("生成首版PDF并上传S3（合同已保存）", () -> generateInitialContractPdf(contract));
         return true;
+    }
+
+    /** 只有成功返回（包括确认不存在）的查询才缓存，异常不写入缓存，下一张 PO 可重新查询。 */
+    private LingxingSupplierClient.SupplierProfile loadBatchSupplierProfile(
+            Long supplierId, Map<Long, Optional<LingxingSupplierClient.SupplierProfile>> profiles) {
+        if (supplierId == null) return null;
+        Optional<LingxingSupplierClient.SupplierProfile> cached = profiles.get(supplierId);
+        if (cached != null) {
+            log.info("自动创建复用本批次供应商资料：supplierId={}", supplierId);
+            return cached.orElse(null);
+        }
+        Optional<LingxingSupplierClient.SupplierProfile> queried = lingxingSupplierClient.findSupplierProfile(supplierId);
+        profiles.put(supplierId, queried);
+        return queried.orElse(null);
     }
 
     private static <T> T autoCreateStep(String step, java.util.function.Supplier<T> action) {
@@ -547,37 +558,11 @@ public class ContractAutoCreateService {
             var transaction = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
             transaction.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
             transaction.executeWithoutResult(status -> {
-                ContractOperationLog operation = ContractOperationLog.ofCreateSkipped(po.getPurchaseOrderNo(), details);
-                operation.setOperationType(ContractOperationLog.TYPE_CREATE_FAILED);
-                operation.setOperationDesc("合同自动创建失败");
+                ContractOperationLog operation = ContractOperationLog.ofCreateFailed(po.getPurchaseOrderNo(), details);
                 contractRepository.saveOperationLog(operation);
             });
         } catch (RuntimeException logFailure) {
             log.error("自动创建失败日志保存失败：poNo={}", po.getPurchaseOrderNo(), logFailure);
-        }
-    }
-
-    /** 重复创建跳过日志独立提交，避免被失败的合同插入事务回滚。 */
-    private void recordDuplicateCreateSkipped(String purchaseOrderNo) {
-        try {
-            var transaction = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
-            transaction.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
-            transaction.executeWithoutResult(status -> {
-                String details = "PO=" + purchaseOrderNo
-                        + "；该采购单已存在未取消的合同，本次自动创建已跳过";
-                try {
-                    ActiveContractRef existing = contractRepository.findActiveByPurchaseOrderNo(purchaseOrderNo).orElse(null);
-                    if (existing != null) {
-                        details += "；已有合同=" + existing.contractNo() + "；合同状态=" + existing.statusText();
-                    }
-                } catch (RuntimeException ex) {
-                    log.info("重复创建跳过日志查询已有合同失败：purchaseOrderNo={}", purchaseOrderNo, ex);
-                }
-                contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(purchaseOrderNo, details));
-            });
-        } catch (RuntimeException ex) {
-            // 审计写入失败保留服务日志，不能阻断剩余采购单的自动创建。
-            log.error("自动创建跳过日志保存失败：purchaseOrderNo={}", purchaseOrderNo, ex);
         }
     }
 

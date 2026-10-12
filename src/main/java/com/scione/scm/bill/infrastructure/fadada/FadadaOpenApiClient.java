@@ -270,9 +270,12 @@ public class FadadaOpenApiClient {
         // 签订日期取需方实际签署时间，由签署平台写入；不以发起时间代替，也不二次修改已签 PDF。
         docFields.add(dateSignField("buyer-sign-date", "签订日期："));
         if (needsCrossPageSeal) {
-            // 骑缝章按法大大规范使用 pixel + positionY；双方使用不同纵向位置，避免控件重叠。
+            // 官方 FieldPosition 使用印章中心点坐标。默认骑缝章高166px，原120px间距仍会重叠。
+            // 保留需方上方位置，将供方下移，中心间距300px；不缩放印章，不改变普通签章位置。
             docFields.add(crossPageSealField("buyer-cross-page-seal", "120"));
-            docFields.add(crossPageSealField("supplier-cross-page-seal", "240"));
+            docFields.add(crossPageSealField("supplier-cross-page-seal", "420"));
+            log.info("合同骑缝章位置：businessNo={}, buyerY=120, supplierY=420, centerGapPx=300",
+                    request.businessNo());
         }
         body.put("docs", List.of(Map.of(
                 "docId", "contract-doc",

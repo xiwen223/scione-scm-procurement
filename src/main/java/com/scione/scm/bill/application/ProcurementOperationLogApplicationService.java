@@ -53,6 +53,8 @@ public class ProcurementOperationLogApplicationService {
 
         String normalizedDataName = blankToNull(dataName);
         String normalizedOperationType = blankToNull(operationType);
+        // 兼容旧页面传入的合同修改类型；新页面统一选择“业务类型=合同、操作类型=修改”。
+        if ("MODIFY".equals(normalizedOperationType)) normalizedOperationType = "UPDATE";
         String normalizedOperator = blankToNull(operator);
         LocalDateTime startTime = startDate == null ? null : startDate.atStartOfDay();
         LocalDateTime endTime = endDate == null ? null : endDate.plusDays(1).atStartOfDay();

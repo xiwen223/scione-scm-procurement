@@ -70,14 +70,17 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     private final LingxingSigner signer;
     private final ObjectMapper objectMapper;
     private final RestClient restClient;
+    private final LingxingRequestCoordinator coordinator;
     private volatile CachedToken cachedToken;
 
     public LingxingOpenApiClient(
             LingxingOpenApiProperties properties,
             LingxingSigner signer,
             ObjectMapper objectMapper,
-            RestClient.Builder restClientBuilder) {
+            RestClient.Builder restClientBuilder,
+            LingxingRequestCoordinator coordinator) {
         this.properties = properties;
+        this.coordinator = coordinator;
         this.signer = signer;
         this.objectMapper = objectMapper;
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
@@ -120,35 +123,8 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     private List<ProductDetail> requestProductBatch(List<String> skus) {
         ensureConfigured();
         Map<String, Object> body = Map.of("skus", skus);
-        String timestamp = Long.toString(Instant.now().getEpochSecond());
-        String accessToken = accessToken();
-
-        Map<String, Object> signatureParameters = new HashMap<>();
-        signatureParameters.put("timestamp", timestamp);
-        signatureParameters.put("access_token", accessToken);
-        signatureParameters.put("app_key", properties.getAppId());
-        signatureParameters.putAll(body);
-
-        final String signature;
         try {
-            signature = signer.sign(signatureParameters, properties.getAppId());
-        } catch (IllegalStateException exception) {
-            log.error("Failed to sign Lingxing product request: {}", exception.getMessage());
-            throw lingxingError("请求签名失败");
-        }
-
-        Map<String, String> queryParameters = new LinkedHashMap<>();
-        queryParameters.put("timestamp", timestamp);
-        queryParameters.put("access_token", accessToken);
-        queryParameters.put("app_key", properties.getAppId());
-        queryParameters.put("sign", signature);
-        URI uri = requestUri(PRODUCT_DETAIL_PATH, queryParameters);
-        try {
-            JsonNode response = restClient.post()
-                    .uri(uri)
-                    .body(body)
-                    .retrieve()
-                    .body(JsonNode.class);
+            JsonNode response = requestQueryWithRetry(PRODUCT_DETAIL_PATH, body);
             String code = response == null ? "" : response.path("code").asText();
             String remoteMessage = responseMessage(response);
             if (!code.isBlank() && !"0".equals(code) && !"200".equals(code)) {
@@ -195,31 +171,8 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         long total;
         do {
             Map<String, Object> body = Map.of("offset", offset, "length", pageSize);
-            String timestamp = Long.toString(Instant.now().getEpochSecond());
-            String accessToken = accessToken();
-
-            Map<String, Object> signatureParameters = new HashMap<>();
-            signatureParameters.put("timestamp", timestamp);
-            signatureParameters.put("access_token", accessToken);
-            signatureParameters.put("app_key", properties.getAppId());
-            signatureParameters.putAll(body);
-
-            final String signature;
             try {
-                signature = signer.sign(signatureParameters, properties.getAppId());
-            } catch (IllegalStateException exception) {
-                log.error("Failed to sign Lingxing supplier request: {}", exception.getMessage());
-                throw lingxingError("请求签名失败");
-            }
-
-            Map<String, String> queryParameters = new LinkedHashMap<>();
-            queryParameters.put("timestamp", timestamp);
-            queryParameters.put("access_token", accessToken);
-            queryParameters.put("app_key", properties.getAppId());
-            queryParameters.put("sign", signature);
-            URI uri = requestUri("/erp/sc/data/local_inventory/supplier", queryParameters);
-            try {
-                JsonNode response = requestSupplierPage(uri, body, supplierId, offset);
+                JsonNode response = requestSupplierPage(body, supplierId, offset);
                 // 重试方法已经确认业务成功和分页结构有效，这里只扫描当前页目标供应商。
                 JsonNode data = response.get("data");
                 long responseTotal = response.path("total").asLong();
@@ -246,7 +199,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     }
 
     /** 只重试当前供应商列表页的临时失败，最多额外两次，每次间隔两秒。 */
-    private JsonNode requestSupplierPage(URI uri, Map<String, Object> body, long supplierId, int offset) {
+    private JsonNode requestSupplierPage(Map<String, Object> body, long supplierId, int offset) {
         long started = System.nanoTime();
         for (int attempt = 1; attempt <= 3; attempt++) {
             String category;
@@ -254,7 +207,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             boolean retryable;
             Throwable safeCause = null;
             try {
-                JsonNode response = restClient.post().uri(uri).body(body).retrieve().body(JsonNode.class);
+                JsonNode response = requestQueued("/erp/sc/data/local_inventory/supplier", body);
                 String code = response == null ? "" : response.path("code").asText();
                 if ("0".equals(code) || "200".equals(code)) {
                     if (response.path("data").isArray() && response.path("total").asLong(-1) >= 0) return response;
@@ -512,33 +465,8 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             body.put("order_sn", orderSns);
         }
 
-        String timestamp = Long.toString(Instant.now().getEpochSecond());
-        String accessToken = accessToken();
-
-        // 采购查询步骤2：把正文和公共参数一起参与签名，签名后的请求内容不能再变更。
-        Map<String, Object> signatureParameters = new HashMap<>();
-        signatureParameters.put("timestamp", timestamp);
-        signatureParameters.put("access_token", accessToken);
-        signatureParameters.put("app_key", properties.getAppId());
-        signatureParameters.putAll(body);
-
-        final String signature;
         try {
-            signature = signer.sign(signatureParameters, properties.getAppId());
-        } catch (IllegalStateException exception) {
-            log.error("Failed to sign Lingxing purchase order request: {}", exception.getMessage());
-            throw lingxingError("请求签名失败");
-        }
-
-        Map<String, String> queryParameters = new LinkedHashMap<>();
-        queryParameters.put("timestamp", timestamp);
-        queryParameters.put("access_token", accessToken);
-        queryParameters.put("app_key", properties.getAppId());
-        queryParameters.put("sign", signature);
-        // 采购查询步骤3：公共鉴权放 query，采购筛选参数放 body，拼接 URI 时由统一方法编码。
-        URI uri = requestUri(PURCHASE_ORDER_LIST_PATH, queryParameters);
-        try {
-            JsonNode response = restClient.post().uri(uri).body(body).retrieve().body(JsonNode.class);
+            JsonNode response = requestQueryWithRetry(PURCHASE_ORDER_LIST_PATH, body);
             String code = response == null ? "" : response.path("code").asText();
             // 采购查询步骤4：检查领星业务码；HTTP 200 也可能是限流或 token 错误，不能按成功数据解析。
             String remoteMessage = responseMessage(response);
@@ -722,7 +650,8 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         queryParameters.put("appSecret", properties.getAppSecret());
         URI uri = requestUri(TOKEN_PATH, queryParameters);
         try {
-            JsonNode response = restClient.post().uri(uri).retrieve().body(JsonNode.class);
+            JsonNode response = coordinator.execute(TOKEN_PATH,
+                    () -> restClient.post().uri(uri).retrieve().body(JsonNode.class));
             JsonNode data = response == null ? null : response.get("data");
             String code = response == null ? "" : response.path("code").asText();
             String token = data == null ? null : text(data, "access_token");
@@ -770,6 +699,56 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
                 text(item, "category_name"), text(item, "status_text"), text(item, "product_developer"),
                 nullableNode(item, "supplier_quote"), nullableNode(item, "aux_relation_list"),
                 nullableNode(item, "custom_fields"), nullableNode(item, "global_tags"), List.copyOf(comboProducts));
+    }
+
+    /** 同接口排队后才签名；一页/一批就是一次请求，响应读取完成后释放名额。 */
+    private JsonNode requestQueued(String path, Map<String, Object> body) {
+        ensureConfigured();
+        // token 获取本身已有独立队列和提前一分钟刷新；不占用业务接口的开始间隔。
+        String token = accessToken();
+        return coordinator.execute(path, () -> {
+            String timestamp = Long.toString(Instant.now().getEpochSecond());
+            Map<String, Object> parameters = new HashMap<>();
+            parameters.put("timestamp", timestamp);
+            parameters.put("access_token", token);
+            parameters.put("app_key", properties.getAppId());
+            parameters.putAll(body);
+            String signature;
+            try {
+                signature = signer.sign(parameters, properties.getAppId());
+            } catch (IllegalStateException ex) {
+                throw lingxingError("请求签名失败；接口=" + path);
+            }
+            Map<String, String> query = new LinkedHashMap<>();
+            query.put("timestamp", timestamp);
+            query.put("access_token", token);
+            query.put("app_key", properties.getAppId());
+            query.put("sign", signature);
+            URI uri = requestUri(path, query);
+            return restClient.post().uri(uri).body(body).retrieve().body(JsonNode.class);
+        });
+    }
+
+    /** 采购单/商品限流最多额外重试两次；仅重试本次查询，不重跑合同创建。 */
+    private JsonNode requestQueryWithRetry(String path, Map<String, Object> body) {
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try {
+                JsonNode response = requestQueued(path, body);
+                if (response == null || !"3001008".equals(response.path("code").asText()) || attempt == 3) {
+                    return response;
+                }
+            } catch (RestClientResponseException ex) {
+                if (ex.getStatusCode().value() != 429 || attempt == 3) throw ex;
+            }
+            log.info("领星接口限流，稍后重新排队：path={}, attempt={}, maxAttempts=3, waitMs=2000", path, attempt);
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw lingxingError("限流重试等待被中断；接口=" + path);
+            }
+        }
+        throw new IllegalStateException("Unreachable retry branch");
     }
 
     private URI requestUri(String path, Map<String, String> queryParameters) {

@@ -10,12 +10,11 @@ import java.time.LocalDateTime;
 @Data
 public class ContractOperationLog {
     public static final String TYPE_CREATE = "CREATE";
-    public static final String TYPE_MODIFY = "MODIFY";
+    public static final String TYPE_UPDATE = "UPDATE";
     public static final String TYPE_START_SIGN = "START_SIGN";
     public static final String TYPE_URGE_SIGN = "URGE_SIGN";
     public static final String TYPE_CANCEL = "CANCEL";
     public static final String TYPE_STATUS_CHANGE = "STATUS_CHANGE";
-    public static final String TYPE_SKIP_CREATE = "SKIP_CREATE";
     public static final String TYPE_CREATE_FAILED = "CREATE_FAILED";
     public static final String TYPE_DOWNLOAD_FAILED = "DOWNLOAD_FAILED";
     /** 发起签署被前置校验拦截（如我司未配置免验证签场景码），合同状态保持不变、未调用法大大。 */
@@ -60,23 +59,23 @@ public class ContractOperationLog {
         log.contractNo = contractNo;
         log.operatorId = operatorId;
         log.operatorName = operatorName;
-        log.operationType = TYPE_MODIFY;
+        log.operationType = TYPE_UPDATE;
         log.operationDesc = desc;
         log.operationDetails = details;
         return log;
     }
 
     /**
-     * 自动建单跳过时合同尚未落库，以 contractId=0、contractNo=PO 单号记录原因。
+     * 自动建单失败时合同可能尚未落库，以 contractId=0、contractNo=PO 单号记录失败原因。
      */
-    public static ContractOperationLog ofCreateSkipped(String purchaseOrderNo, String details) {
+    public static ContractOperationLog ofCreateFailed(String purchaseOrderNo, String details) {
         ContractOperationLog log = new ContractOperationLog();
         log.contractId = 0L;
         log.contractNo = purchaseOrderNo;
         log.operatorId = Contract.SYSTEM_OPERATOR;
         log.operatorName = Contract.SYSTEM_OPERATOR;
-        log.operationType = TYPE_SKIP_CREATE;
-        log.operationDesc = "自动创建采购合同跳过";
+        log.operationType = TYPE_CREATE_FAILED;
+        log.operationDesc = "合同自动创建失败";
         log.operationDetails = details;
         return log;
     }

@@ -1,5 +1,7 @@
 package com.scione.scm.bill.application;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scione.scm.bill.application.dto.ContractItemUpdateRequest;
 import com.scione.scm.bill.application.dto.ContractUpdateRequest;
 import com.scione.scm.bill.application.dto.ContractUpdateResponse;
@@ -46,6 +48,7 @@ public class ContractUpdateService {
     private static final Pattern CONTRACT_NO_PATTERN = Pattern.compile("[A-Za-z0-9_-]{1,32}");
 
     private final ContractRepository contractRepository;
+    private final ObjectMapper objectMapper;
     private final BuyerCompanyRepository buyerCompanyRepository;
     private final ContractTemplateService contractTemplateService;
 
@@ -135,8 +138,7 @@ public class ContractUpdateService {
         for (ContractItem item : changedItems) {
             contractRepository.updateItemPricing(item);
         }
-        // 合同编号变了：主表之外的冗余引用（明细 contract_no、操作日志 data_name）必须一起改，
-        // 否则明细检索和操作日志会挂着一个不存在的编号。
+        // 合同编号变了，同步明细的编号引用；操作日志业务名称使用 PO 单号，不受影响。
         if (!Objects.equals(oldContractNo, contractNo)) {
             contractRepository.updateContractNoReferences(contractId, contractNo);
             log.info("合同编号变更完成并已同步全部引用：contractId={}, {} → {}", contractId, oldContractNo, contractNo);
@@ -588,9 +590,24 @@ public class ContractUpdateService {
         String operatorId = StringUtils.hasText(operatorEmail) ? operatorEmail : "system";
         String operatorName = StringUtils.hasText(operatorEmail) ? operatorEmail : "系统";
 
-        String operationDetails = changeDetails.isEmpty()
-                ? "无变更"
-                : String.join("；", changeDetails);
+        // 每条变更单独保存，不再拼接为长文本，复用公司/模板日志的三列表格弹窗。
+        List<Map<String, Object>> changes = changeDetails.stream().map(detail -> {
+            int colon = detail.indexOf('：');
+            String field = colon >= 0 ? detail.substring(0, colon) : "变更说明";
+            String values = colon >= 0 ? detail.substring(colon + 1) : detail;
+            int arrow = values.indexOf(" → ");
+            Map<String, Object> change = new java.util.LinkedHashMap<>();
+            change.put("field", field);
+            change.put("before", arrow >= 0 ? changeValue(values.substring(0, arrow)) : null);
+            change.put("after", changeValue(arrow >= 0 ? values.substring(arrow + 3) : values));
+            return change;
+        }).toList();
+        String operationDetails;
+        try {
+            operationDetails = objectMapper.writeValueAsString(Map.of("changes", changes));
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("合同修改日志序列化失败", ex);
+        }
 
         ContractOperationLog operationLog = ContractOperationLog.ofUpdate(
                 contract.getId(),
@@ -604,6 +621,10 @@ public class ContractUpdateService {
         contractRepository.saveOperationLog(operationLog);
         log.info("操作日志已保存：contractNo={}, operator={}, changeCount={}",
                 contract.getContractNo(), operatorName, changeDetails.size());
+    }
+
+    private static String changeValue(String value) {
+        return "null".equals(value) ? null : value;
     }
 
 }

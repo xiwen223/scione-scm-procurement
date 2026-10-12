@@ -107,9 +107,9 @@ public class MybatisContractRepository implements ContractRepository {
     @Override
     public void updateContractNoReferences(long contractId, String contractNo) {
         int itemRows = itemMapper.updateContractNoByContractId(contractId, contractNo);
-        int logRows = logMapper.updateDataNameByContractId(contractId, contractNo);
-        log.info("合同编号引用已同步：contractId={}, newContractNo={}, contractItemRows={}, operationLogRows={}",
-                contractId, contractNo, itemRows, logRows);
+        // 日志业务名称使用 PO 单号，不随合同编号变更。
+        log.info("合同编号引用已同步：contractId={}, newContractNo={}, contractItemRows={}",
+                contractId, contractNo, itemRows);
     }
 
     @Override

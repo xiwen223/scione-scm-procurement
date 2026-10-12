@@ -12,17 +12,6 @@ public interface ProcurementOperationLogMapper {
     /** 写入一条操作日志；由 {@code ProcurementOperationLogRecorder} 统一调用。 */
     int insert(ProcurementOperationLogPO log);
 
-    /**
-     * 合同编号变更后同步日志中的编号快照（business_type = 1 合同）。
-     * 按 data_id（合同ID）定位，不会影响以 PO 单号占位的自动建单跳过日志。
-     *
-     * @param contractId 合同 ID
-     * @param contractNo 新的合同编号
-     * @return 影响行数
-     */
-    int updateDataNameByContractId(@Param("contractId") Long contractId,
-                                   @Param("contractNo") String contractNo);
-
     long count(
             @Param("dataName") String dataName,
             @Param("businessType") Integer businessType,
