@@ -8,19 +8,19 @@ import java.io.IOException;
 public interface ContractFileStore {
 
     /**
-     * 存储合同文件，返回访问 URL。
+     * 存储合同文件，返回持久对象键。
      *
      * @param contractNo 合同编号
      * @param fileBytes  文件字节数组
      * @param extension  文件扩展名（如 "xlsx"）
-     * @return 文件访问 URL
+     * @return 文件对象键
      */
     String store(String contractNo, byte[] fileBytes, String extension) throws IOException;
 
     /**
      * 从 S3 下载合同文件。
      *
-     * @param fileUrl 文件 URL（来自 contract_pdf_url 或 signed_pdf_url）
+     * @param fileUrl 对象键或历史文件 URL（来自 contract_pdf_url 或 signed_pdf_url）
      * @return 文件字节数组
      */
     byte[] download(String fileUrl) throws IOException;
