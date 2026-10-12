@@ -3,8 +3,6 @@ package com.scione.scm.bill.application;
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient.PurchaseOrderData;
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient.PurchaseOrderItemData;
-import com.scione.scm.bill.domain.contract.ContractOperationLog;
-import com.scione.scm.bill.domain.contract.ContractRepository;
 import com.scione.scm.bill.domain.contract.PurchasePriceCalculator;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
 import com.scione.scm.bill.domain.posync.PoSyncRecordItem;
@@ -35,7 +33,6 @@ public class PoSyncAppService {
     private final LingxingPurchaseOrderClient purchaseOrderClient;
     private final PoSyncRepository poSyncRepository;
     private final ContractAutoCreateService contractAutoCreateService;
-    private final ContractRepository contractRepository;
 
     /**
      * 拉取最近窗口内变动的采购单并落库。
@@ -80,14 +77,13 @@ public class PoSyncAppService {
             try {
                 poSyncRepository.save(toRecord(order, syncTime));
                 success++;
-                // 只有领星状态=1（待下单）的 PO 才会进入自动创建；其他状态留痕后跳过。
+                // 只有待下单 PO 进入自动创建；其他状态仅记录运行日志，不写数据库操作日志。
                 if (Integer.valueOf(1).equals(order.status())) {
                     successOrderNos.add(orderSn);
                 } else {
                     String reason = "PO=" + orderSn + "，领星采购单状态="
                             + String.valueOf(order.status()) + "（" + String.valueOf(order.statusText())
                             + "），跳过原因：采购单状态不是待下单（1）";
-                    contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(orderSn, reason));
                     log.info("同步 PO 后跳过自动创建：{}", reason);
                 }
             } catch (RuntimeException ex) {

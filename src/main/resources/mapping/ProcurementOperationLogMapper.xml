@@ -7,71 +7,94 @@
         (business_type, data_id, data_name, operator_id, operator_name, operation_type,
          operation_desc, operation_details, ip_address, create_time)
         VALUES
-        (#{businessType}, #{dataId}, #{dataName}, #{operatorId}, #{operatorName}, #{operationType},
+        (#{businessType}, #{dataId},
+         CASE WHEN #{businessType} = 1 AND #{dataId} > 0
+              THEN COALESCE((SELECT NULLIF(purchase_order_no, '') FROM contract WHERE id = #{dataId}), #{dataName})
+              ELSE #{dataName} END,
+         #{operatorId}, #{operatorName}, #{operationType},
          #{operationDesc}, #{operationDetails}, #{ipAddress}, NOW(0))
     </insert>
 
-    <!-- 合同编号变更后同步日志里的编号快照。business_type = 1 即 ProcurementBusinessType.CONTRACT；
-         按 data_id（合同ID）定位而非 data_name，避免误伤自动建单跳过时以 PO 单号占位的日志（其 data_id = 0）。 -->
-    <update id="updateDataNameByContractId">
-        UPDATE procurement_operation_log
-        SET data_name = #{contractNo}
-        WHERE business_type = 1
-          AND data_id = #{contractId}
-    </update>
-
-    <sql id="columns">
-        id,
-        business_type,
-        data_id,
-        data_name,
-        operator_id,
-        operator_name,
-        operation_type,
-        operation_desc,
-        operation_details,
-        ip_address,
-        create_time
+    <!-- 历史合同日志原来存合同编号，查询与筛选统一使用关联的 PO 单号。
+         未建成合同的失败日志（data_id=0）本身已存 PO；公司/模板日志保持原业务名称。 -->
+    <sql id="effectiveDataName">
+        CASE WHEN l.business_type = 1 THEN COALESCE(NULLIF(c.purchase_order_no, ''), l.data_name)
+             ELSE l.data_name END
     </sql>
 
-    <sql id="filters">
-        <if test="dataName != null and dataName != ''">
-            AND data_name LIKE CONCAT('%', #{dataName}, '%')
-        </if>
-        <if test="businessType != null">
-            AND business_type = #{businessType}
-        </if>
-        <if test="operationType != null and operationType != ''">
-            AND operation_type LIKE CONCAT('%', #{operationType}, '%')
-        </if>
-        <if test="operator != null and operator != ''">
-            AND (
-                operator_name LIKE CONCAT('%', #{operator}, '%')
-                OR CAST(operator_id AS CHAR) LIKE CONCAT('%', #{operator}, '%')
-            )
-        </if>
-        <if test="startTime != null">
-            AND create_time <![CDATA[>=]]> #{startTime}
-        </if>
-        <if test="endTime != null">
-            AND create_time <![CDATA[<]]> #{endTime}
-        </if>
+    <!-- 历史合同修改类型归一为 UPDATE，与其他业务共用“修改”选项。 -->
+    <sql id="effectiveOperationType">
+        CASE WHEN l.business_type = 1 AND l.operation_type = 'MODIFY' THEN 'UPDATE'
+             ELSE l.operation_type END
+    </sql>
+
+    <sql id="columns">
+        l.id,
+        l.business_type,
+        l.data_id,
+        <include refid="effectiveDataName"/> AS data_name,
+        l.operator_id,
+        l.operator_name,
+        <include refid="effectiveOperationType"/> AS operation_type,
+        l.operation_desc,
+        l.operation_details,
+        l.ip_address,
+        l.create_time
     </sql>
 
     <select id="count" resultType="long">
         SELECT COUNT(1)
-        FROM procurement_operation_log
+        FROM procurement_operation_log l
+        LEFT JOIN contract c ON l.business_type = 1 AND l.data_id = c.id
         WHERE 1 = 1
-        <include refid="filters"/>
+        <!-- 含参数的条件写在查询节点内，使 IDE 能关联 Mapper 的 @Param；与 findPage 保持一致。 -->
+        <if test="dataName != null and dataName != ''">
+            AND (<include refid="effectiveDataName"/>) LIKE CONCAT('%', #{dataName}, '%')
+        </if>
+        <if test="businessType != null">
+            AND l.business_type = #{businessType}
+        </if>
+        <if test="operationType != null and operationType != ''">
+            AND (<include refid="effectiveOperationType"/>) = #{operationType}
+        </if>
+        <if test="operator != null and operator != ''">
+            AND (l.operator_name LIKE CONCAT('%', #{operator}, '%')
+                 OR CAST(l.operator_id AS CHAR) LIKE CONCAT('%', #{operator}, '%'))
+        </if>
+        <if test="startTime != null">
+            AND l.create_time <![CDATA[>=]]> #{startTime}
+        </if>
+        <if test="endTime != null">
+            AND l.create_time <![CDATA[<]]> #{endTime}
+        </if>
     </select>
 
     <select id="findPage" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.ProcurementOperationLogPO">
         SELECT
             <include refid="columns"/>
-        FROM procurement_operation_log
+        FROM procurement_operation_log l
+        LEFT JOIN contract c ON l.business_type = 1 AND l.data_id = c.id
         WHERE 1 = 1
-        <include refid="filters"/>
-        ORDER BY create_time DESC, id DESC
+        <if test="dataName != null and dataName != ''">
+            AND (<include refid="effectiveDataName"/>) LIKE CONCAT('%', #{dataName}, '%')
+        </if>
+        <if test="businessType != null">
+            AND l.business_type = #{businessType}
+        </if>
+        <if test="operationType != null and operationType != ''">
+            AND (<include refid="effectiveOperationType"/>) = #{operationType}
+        </if>
+        <if test="operator != null and operator != ''">
+            AND (l.operator_name LIKE CONCAT('%', #{operator}, '%')
+                 OR CAST(l.operator_id AS CHAR) LIKE CONCAT('%', #{operator}, '%'))
+        </if>
+        <if test="startTime != null">
+            AND l.create_time <![CDATA[>=]]> #{startTime}
+        </if>
+        <if test="endTime != null">
+            AND l.create_time <![CDATA[<]]> #{endTime}
+        </if>
+        ORDER BY l.create_time DESC, l.id DESC
         LIMIT #{pageSize} OFFSET #{offset}
     </select>
 
