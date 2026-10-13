@@ -1,5 +1,8 @@
 package com.scione.scm.bill.application;
 
+import com.scione.scm.bill.domain.contract.enums.ContractCreateTypeEnum;
+import com.scione.scm.bill.domain.posync.enums.LingxingPurchaseOrderStatusEnum;
+
 import com.scione.scm.bill.application.dto.ContractCreateDTO;
 import com.scione.scm.bill.application.vo.ContractCreateVO;
 import com.scione.scm.bill.application.port.ContractFileStore;
@@ -77,12 +80,12 @@ public class ContractAutoCreateService {
         if (local.isPresent()) {
             PoSyncRecord po = local.get();
             return new ManualPoStatus(po.getPoStatus(), po.getPoStatusText(),
-                    Integer.valueOf(1).equals(po.getPoStatus()));
+                    LingxingPurchaseOrderStatusEnum.APPROVED.matches(po.getPoStatus()));
         }
         LingxingPurchaseOrderClient.PurchaseOrderData po = lingxingPurchaseOrderClient.findByOrderNo(orderNo)
                 .orElseThrow(() -> new BusinessException(ResultCode.PARAM_ERROR,
                         "本地和领星均未找到采购单：" + orderNo));
-        return new ManualPoStatus(po.status(), po.statusText(), Integer.valueOf(1).equals(po.status()));
+        return new ManualPoStatus(po.status(), po.statusText(), LingxingPurchaseOrderStatusEnum.APPROVED.matches(po.status()));
     }
 
     public record ManualPoStatus(Integer status, String statusText, boolean pendingOrder) {
@@ -649,7 +652,7 @@ public class ContractAutoCreateService {
         contract.setTemplateId(contractTemplateService.resolveDefaultTemplateId(contract.getContractType()));
         contract.setCreatorId(creatorEmail);
         contract.setCreatorName(creatorEmail);
-        contract.setCreateType(Contract.CREATE_TYPE_MANUAL);
+        contract.setCreateType(ContractCreateTypeEnum.MANUAL.getCode());
 
         // 7. 手动补充字段（覆盖领星和默认数据）
         applyManualOverrides(contract, request);

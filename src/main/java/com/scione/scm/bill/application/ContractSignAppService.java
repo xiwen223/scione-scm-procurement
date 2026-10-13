@@ -1,5 +1,7 @@
 package com.scione.scm.bill.application;
 
+import com.scione.scm.bill.domain.contract.enums.ContractSignLaunchStateEnum;
+
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.application.dto.ContractCancelDTO;
@@ -66,7 +68,7 @@ public class ContractSignAppService {
         log.info("开始发起合同签署：contractId={}, operator={}", contractId, operatorEmail);
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
-        if (contract.getStatus() != ContractStatus.SIGNING || !"RUNNING".equals(contract.getSignLaunchState())) {
+        if (contract.getStatus() != ContractStatus.SIGNING || !ContractSignLaunchStateEnum.RUNNING.matches(contract.getSignLaunchState())) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "签署后台任务状态不正确，无法执行");
         }
         log.info("签署前合同状态校验通过：contractNo={}, status={}", contract.getContractNo(), contract.getStatus());
@@ -120,7 +122,7 @@ public class ContractSignAppService {
         contractRepository.markSigning(contractId, task.signTaskId());
         } catch (Exception ex) {
             String message = "创建法大大任务结果需核对：" + ex.getMessage();
-            contractMapper.failSign(contractId, "UNKNOWN", message.substring(0, Math.min(1000, message.length())));
+            contractMapper.failSign(contractId, ContractSignLaunchStateEnum.UNKNOWN.getCode(), message.substring(0, Math.min(1000, message.length())));
             throw ex;
         }
         log.info("合同状态已更新为签署中：contractNo={}, signTaskId={}", contract.getContractNo(), task.signTaskId());

@@ -1,5 +1,7 @@
 package com.scione.scm.bill.interfaces;
 
+import com.scione.scm.bill.domain.contract.enums.ContractDownloadTypeEnum;
+
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.ContractAutoCreateService;
 import com.scione.scm.bill.application.PoSyncAppService;
@@ -151,7 +153,7 @@ public class ContractController {
             @PathVariable Long contractId,
             @RequestParam(value = "type", defaultValue = "signed") String type) throws java.io.IOException {
 
-        if ("signed".equals(type)) {
+        if (ContractDownloadTypeEnum.SIGNED.matches(type)) {
             String downloadUrl = contractQueryService.getFadadaSignedDownloadUrl(contractId);
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(downloadUrl))

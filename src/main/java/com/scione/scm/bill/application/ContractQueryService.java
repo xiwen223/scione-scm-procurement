@@ -1,5 +1,7 @@
 package com.scione.scm.bill.application;
 
+import com.scione.scm.bill.domain.contract.enums.ContractDownloadTypeEnum;
+
 import com.scione.scm.bill.application.vo.ContractDetailVO;
 import com.scione.scm.bill.application.vo.ContractListItemVO;
 
@@ -251,7 +253,7 @@ public class ContractQueryService {
     private DownloadResult downloadContractFileContent(Contract contract, String type) throws IOException {
         // 仅创建状态允许编辑，因此只对创建状态在 URL 为空时按当前数据库数据即时生成。
         // 签署中及之后直接读取已保存文件，避免下载时重复模板填充、PDF 转换及存储上传。
-        if (!"signed".equals(type)) {
+        if (!ContractDownloadTypeEnum.SIGNED.matches(type)) {
             // 下载分支1：创建状态有缓存 URL 就下载；URL 被编辑清空或从未生成时，才按最新数据重建。
             if (contract.getStatus() == ContractStatus.CREATED) {
                 if (!StringUtils.hasText(contract.getContractPdfUrl())) {
@@ -275,7 +277,7 @@ public class ContractQueryService {
             log.info("下载非创建状态合同，直接使用已保存文件：contractNo={}, status={}, fileUrl={}",
                     contract.getContractNo(), contract.getStatus(), fileUrl);
             return new DownloadResult(fileBytes, contract.getStatus() == ContractStatus.CANCELLED
-                    ? contract.getContractNo() + ".pdf" : extractFileName(fileUrl, contract.getContractNo(), "original"));
+                    ? contract.getContractNo() + ".pdf" : extractFileName(fileUrl, contract.getContractNo(), ContractDownloadTypeEnum.ORIGINAL.getCode()));
         }
 
         String fileUrl = getSignedPdfUrl(contract);
@@ -329,7 +331,7 @@ public class ContractQueryService {
         }
 
         // 如果提取失败，根据类型生成默认文件名
-        String extension = "signed".equals(type) ? ".pdf" : ".xlsx";
+        String extension = ContractDownloadTypeEnum.SIGNED.matches(type) ? ".pdf" : ".xlsx";
         return contractNo + extension;
     }
 
@@ -338,7 +340,7 @@ public class ContractQueryService {
         try {
             byte[] bytes;
             if (contract.getStatus() == ContractStatus.CREATED) {
-                bytes = downloadContractFileContent(contract, "original").fileBytes();
+                bytes = downloadContractFileContent(contract, ContractDownloadTypeEnum.ORIGINAL.getCode()).fileBytes();
             } else if (contract.getStatus() == ContractStatus.SIGNING || contract.getStatus() == ContractStatus.EXECUTING) {
                 // 必须下载原任务 fadadaTaskId 的文件，而不是另一个解除协议任务。
                 bytes = downloadFadadaDocument(contract);

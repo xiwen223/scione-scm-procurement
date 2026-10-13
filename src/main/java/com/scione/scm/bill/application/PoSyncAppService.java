@@ -1,5 +1,7 @@
 package com.scione.scm.bill.application;
 
+import com.scione.scm.bill.domain.posync.enums.LingxingPurchaseOrderStatusEnum;
+
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient.PurchaseOrderData;
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient.PurchaseOrderItemData;
@@ -84,7 +86,7 @@ public class PoSyncAppService {
                 success++;
                 stage = "同步后处理";
                 // 只有待下单 PO 进入自动创建；其他状态仅记录运行日志，不写数据库操作日志。
-                if (Integer.valueOf(1).equals(order.status())) {
+                if (LingxingPurchaseOrderStatusEnum.APPROVED.matches(order.status())) {
                     successOrderNos.add(orderSn);
                 } else {
                     String reason = "PO=" + orderSn + "，领星采购单状态="

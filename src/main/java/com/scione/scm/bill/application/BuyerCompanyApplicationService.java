@@ -1,5 +1,8 @@
 package com.scione.scm.bill.application;
 
+import com.scione.scm.bill.domain.company.enums.SealFlowStatusEnum;
+import com.scione.scm.bill.domain.company.enums.CompanyIdentificationStatusEnum;
+
 import com.scione.common.model.PageResult;
 import com.scione.scm.bill.application.vo.BuyerCompanyDetailVO;
 import com.scione.scm.bill.application.vo.BuyerCompanyListItemVO;
@@ -34,15 +37,6 @@ import java.util.Locale;
 public class BuyerCompanyApplicationService {
 
     private static final int MAX_SEAL_BYTES = 2 * 1024 * 1024;
-
-    /** 印章审核状态：审核中（法大大侧流程未结束，不允许删除印章） */
-    private static final int SEAL_FLOW_AUDITING = 0;
-
-    /** 印章审核状态：审核成功（法大大侧已存在有效印章，删除前需先停用） */
-    private static final int SEAL_FLOW_APPROVED = 1;
-
-    /** 印章审核状态：审核失败（法大大侧审核未通过，详情页展示失败原因） */
-    private static final int SEAL_FLOW_REJECTED = 2;
 
     /** 印章图片在对象存储中的目录，与前端上传约定一致。 */
     private static final String SEAL_UPLOAD_FOLDER = "company-seal";
@@ -250,12 +244,12 @@ public class BuyerCompanyApplicationService {
         Integer flowStatus = company.getSealFlowStatus();
 
         // 1. 审核中的印章不能删：法大大侧还在审核流程里
-        if (flowStatus != null && flowStatus == SEAL_FLOW_AUDITING) {
+        if (SealFlowStatusEnum.AUDITING.matches(flowStatus)) {
             throw new BusinessException(ResultCode.BUYER_COMPANY_SEAL_AUDITING);
         }
 
         // 2. 审核成功且已拿到法大大印章 ID：先停用再删除
-        if (flowStatus != null && flowStatus == SEAL_FLOW_APPROVED) {
+        if (SealFlowStatusEnum.APPROVED.matches(flowStatus)) {
             String sealId = blankToNull(company.getFadadaSealId());
             if (sealId != null) {
                 String openCorpId = blankToNull(company.getOpenCorpId());
@@ -278,7 +272,7 @@ public class BuyerCompanyApplicationService {
      *
      * <p>按 {@code seal_verify_id}（上传印章时由 {@link #uploadSeal} 写入的法大大 verifyId）定位公司，
      * 写入 {@code fadada_seal_id}（法大大印章 ID）并把 {@code seal_flow_status} 置为
-     * {@value #SEAL_FLOW_APPROVED}（审核成功），同时清空 {@code seal_failed_reason}。
+     * {@link SealFlowStatusEnum#APPROVED}（审核成功），同时清空 {@code seal_failed_reason}。
      * 不再按 {@code open_corpid} 定位 —— 该列允许重复，用它定位会一次命中多行、把审核结果广播到其它公司。</p>
      *
      * <p>回调可能重复投递，更新语句本身幂等；未匹配到记录（印章已被移除、或公司已逻辑删除）时只记日志，
@@ -360,7 +354,7 @@ public class BuyerCompanyApplicationService {
      * 法大大印章审核不通过回调（{@code X-FASC-Event = seal-verify-failed}）的落库入口。
      *
      * <p>按 {@code seal_verify_id}（上传印章时由 {@link #uploadSeal} 写入的法大大 verifyId，与审核通过回调同一套定位键）
-     * 定位公司，把 {@code seal_flow_status} 置为 {@value #SEAL_FLOW_REJECTED}（审核失败），
+     * 定位公司，把 {@code seal_flow_status} 置为 {@link SealFlowStatusEnum#REJECTED}（审核失败），
      * 并把回调携带的 {@code reason} 写入 {@code seal_failed_reason}；详情页只在失败原因非空时展示。
      * 原因可以为空，此时仅更新审核状态。原因超过列宽时按 {@value #MAX_SEAL_FAILED_REASON_LENGTH} 个字符截断 ——
      * 超长值直接入库会被 MySQL 严格模式拒绝，导致整笔回调连状态一起丢失。
@@ -469,7 +463,7 @@ public class BuyerCompanyApplicationService {
 
     /** 库中的 ident_status 数值回推成法大大原值，供差量合并时复用（未点「检测」时前端提交该原值）。 */
     private static String identStatusText(Integer identStatus) {
-        return identStatus != null && identStatus == 1 ? "identified" : "unidentified";
+        return CompanyIdentificationStatusEnum.fromCode(identStatus).getExternalCode();
     }
 
     private static boolean isDefaultCompany(BuyerCompanyPO company) {
@@ -516,7 +510,7 @@ public class BuyerCompanyApplicationService {
         company.setFadadaSealId(blankToNull(request.fadadaSealId()));
         company.setOpenCorpId(blankToNull(request.openCorpId()));
         // 实名认证状态由法大大 identStatus 判定：非空且等于 identified 记 1（已认证），否则记 0（未认证）
-        company.setIdentStatus("identified".equals(blankToNull(request.identStatus())) ? 1 : 0);
+        company.setIdentStatus(CompanyIdentificationStatusEnum.fromExternalCode(blankToNull(request.identStatus())).getCode());
         company.setPriority(isDefault ? 1 : requestedPriority);
         company.setIsActive(active ? 1 : 0);
     }

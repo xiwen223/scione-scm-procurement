@@ -1,5 +1,7 @@
 package com.scione.scm.bill.application;
 
+import com.scione.scm.bill.domain.contract.enums.ContractSignLaunchStateEnum;
+
 import com.scione.scm.bill.domain.contract.*;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractMapper;
 import lombok.RequiredArgsConstructor;
@@ -35,7 +37,7 @@ public class ContractSignWorker {
         } catch (Exception ex) {
             // 建任务结果未知的任务保持 UNKNOWN；只将仍为 RUNNING 的前置失败恢复可编辑。
             String reason = ex.getMessage() == null ? "签署发起失败" : ex.getMessage();
-            mapper.failSign(id, "FAILED", reason.substring(0, Math.min(1000, reason.length())));
+            mapper.failSign(id, ContractSignLaunchStateEnum.FAILED.getCode(), reason.substring(0, Math.min(1000, reason.length())));
             log.error("后台发起签署失败：contractId={}", id, ex);
             repository.findById(id).ifPresent(contract -> repository.saveOperationLog(
                     ContractOperationLog.ofUpdate(id, contract.getContractNo(), operator, operator,

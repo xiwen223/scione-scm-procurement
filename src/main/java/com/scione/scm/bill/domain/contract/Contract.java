@@ -1,5 +1,8 @@
 package com.scione.scm.bill.domain.contract;
 
+import com.scione.scm.bill.domain.contract.enums.ContractCreateTypeEnum;
+import com.scione.scm.bill.domain.contract.enums.ContractSignLaunchStateEnum;
+
 import com.scione.scm.bill.domain.company.BuyerCompany;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
 import com.scione.scm.bill.domain.posync.PoSyncRecordItem;
@@ -64,8 +67,8 @@ public class Contract {
     private boolean abolishPending;
 
     public boolean isSignLaunching() {
-        return "QUEUED".equals(signLaunchState) || "RUNNING".equals(signLaunchState) || "WAIT_CALLBACK".equals(signLaunchState)
-                || "UNKNOWN".equals(signLaunchState);
+        return ContractSignLaunchStateEnum.QUEUED.matches(signLaunchState) || ContractSignLaunchStateEnum.RUNNING.matches(signLaunchState)
+                || ContractSignLaunchStateEnum.WAIT_CALLBACK.matches(signLaunchState) || ContractSignLaunchStateEnum.UNKNOWN.matches(signLaunchState);
     }
     private String creatorId;
     private String creatorName;
@@ -132,7 +135,7 @@ public class Contract {
         c.status = ContractStatus.CREATED;
         c.creatorId = SYSTEM_OPERATOR;
         c.creatorName = SYSTEM_OPERATOR;
-        c.createType = CREATE_TYPE_AUTO;
+        c.createType = ContractCreateTypeEnum.AUTO.getCode();
 
         List<PoSyncRecordItem> poItems = po.getItems();
         if (poItems != null) {

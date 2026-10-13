@@ -1,5 +1,7 @@
 package com.scione.scm.bill.application;
 
+import com.scione.scm.bill.domain.posync.enums.LingxingPurchaseOrderStatusEnum;
+
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
 import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractOperationLog;
@@ -61,7 +63,7 @@ public class ContractCompletionSyncService {
                         }
                         log.info("领星完成状态核验：contractNo={}, purchaseOrderNo={}, poStatus={}, poStatusText={}",
                                 contract.getContractNo(), contract.getPurchaseOrderNo(), po.status(), po.statusText());
-                        if (po.status() == null || po.status() != 9) {
+                        if (!LingxingPurchaseOrderStatusEnum.COMPLETED.matches(po.status())) {
                             continue;
                         }
                         contractRepository.markCompleted(contract.getId());

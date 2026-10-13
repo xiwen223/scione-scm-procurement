@@ -1,5 +1,7 @@
 package com.scione.scm.bill.infrastructure.persistence.mybatis;
 
+import com.scione.scm.bill.domain.contract.enums.ContractCreateTypeEnum;
+
 import com.scione.scm.bill.application.dto.ContractListQueryDTO;
 import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractItem;
@@ -74,7 +76,7 @@ public class MybatisContractRepository implements ContractRepository {
                 contract.getContractNo(),
                 contract.getCreatorId(),
                 contract.getCreatorName(),
-                contract.getCreateType() != null && contract.getCreateType() == Contract.CREATE_TYPE_MANUAL
+                contract.getCreateType() != null && contract.getCreateType() == ContractCreateTypeEnum.MANUAL.getCode()
                         ? "手动创建采购合同" : "自动创建采购合同",
                 buildCreateDetails(contract)
         );
@@ -316,7 +318,7 @@ public class MybatisContractRepository implements ContractRepository {
     private String buildCreateDetails(Contract contract) {
         int itemCount = contract.getItems() == null ? 0 : contract.getItems().size();
         boolean manual = contract.getCreateType() != null
-                && contract.getCreateType() == Contract.CREATE_TYPE_MANUAL;
+                && contract.getCreateType() == ContractCreateTypeEnum.MANUAL.getCode();
         return "PO单号=" + valueOf(contract.getPurchaseOrderNo())
                 + "; 创建方式=" + (manual ? "手动" : "自动")
                 + "; 供方=" + valueOf(contract.getSupplierName())
