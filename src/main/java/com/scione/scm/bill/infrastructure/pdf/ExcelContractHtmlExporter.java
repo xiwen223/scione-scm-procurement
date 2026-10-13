@@ -99,6 +99,7 @@ final class ExcelContractHtmlExporter {
                 for (int column = c; column <= lastColumn; column++) if (!sheet.isColumnHidden(column)) cellWidth += columnWidths.get(column);
                 List<Image> cellPictures = pictures.getOrDefault(r + ":" + c, List.of());
                 out.append(" style=\"width:").append(cellWidth).append("pt;").append(cellStyle(cell, contentScale, cellWidth));
+                if (merge != null) out.append(mergedBorders(sheet, merge, contentScale));
                 if (!cellPictures.isEmpty()) out.append("vertical-align:top;");
                 out.append("\"><div class=\"cell\" style=\"");
                 // Excel 行高作为最小高度；换行文本或较高图片需要时允许行自然增高。
@@ -164,6 +165,43 @@ final class ExcelContractHtmlExporter {
                 .append(border("bottom", style.getBorderBottom(), style.getBottomBorderXSSFColor(), scale))
                 .append(border("left", style.getBorderLeft(), style.getLeftBorderXSSFColor(), scale))
                 .append(border("right", style.getBorderRight(), style.getRightBorderXSSFColor(), scale));
+        return css.toString();
+    }
+
+    /** 合并区域的边框可能存在边缘空白格上；不能只读左上角，否则右边和下边会丢失。 */
+    private String mergedBorders(XSSFSheet sheet, CellRangeAddress merge, double scale) {
+        StringBuilder css = new StringBuilder();
+        for (String side : List.of("top", "bottom", "left", "right")) {
+            boolean horizontal = side.equals("top") || side.equals("bottom");
+            int first = horizontal ? merge.getFirstColumn() : merge.getFirstRow();
+            int last = horizontal ? merge.getLastColumn() : merge.getLastRow();
+            for (int index = first; index <= last; index++) {
+                int rowIndex = horizontal
+                        ? (side.equals("top") ? merge.getFirstRow() : merge.getLastRow()) : index;
+                int columnIndex = horizontal ? index
+                        : (side.equals("left") ? merge.getFirstColumn() : merge.getLastColumn());
+                XSSFRow row = sheet.getRow(rowIndex);
+                XSSFCell edge = row == null ? null : row.getCell(columnIndex);
+                if (edge == null) continue;
+                XSSFCellStyle style = edge.getCellStyle();
+                BorderStyle line = switch (side) {
+                    case "top" -> style.getBorderTop();
+                    case "bottom" -> style.getBorderBottom();
+                    case "left" -> style.getBorderLeft();
+                    default -> style.getBorderRight();
+                };
+                if (line == BorderStyle.NONE) continue;
+                XSSFColor color = switch (side) {
+                    case "top" -> style.getTopBorderXSSFColor();
+                    case "bottom" -> style.getBottomBorderXSSFColor();
+                    case "left" -> style.getLeftBorderXSSFColor();
+                    default -> style.getRightBorderXSSFColor();
+                };
+                // 覆盖该方向的左上角样式；边缘无边框时保留原样，不凭空添加线条。
+                css.append(border(side, line, color, scale));
+                break;
+            }
+        }
         return css.toString();
     }
 
