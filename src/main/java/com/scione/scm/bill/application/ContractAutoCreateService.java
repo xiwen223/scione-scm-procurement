@@ -30,7 +30,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
@@ -389,11 +389,10 @@ public class ContractAutoCreateService {
     }
 
     /**
-     * 处理一条 PO（加事务：合同创建 + PO 标记原子）。
+     * 处理一条 PO；合同创建与 PO 标记由独立持久化服务原子提交。
      *
      * @return true=创建，false=跳过
      */
-    @Transactional
     protected boolean processOnePo(PoSyncRecord po, BuyerCompany buyer,
                                    Map<Long, Optional<LingxingSupplierClient.SupplierProfile>> supplierProfiles) {
         String poNo = po.getPurchaseOrderNo();
@@ -489,21 +488,15 @@ public class ContractAutoCreateService {
         // 原子保存：合同主表 + 明细 + CREATE 日志
         long contractId;
         try {
-            contractId = contractRepository.create(contract);
+            contractId = saveContractAndMarkPo(contract, poNo);
         } catch (DuplicateKeyException ex) {
             // 上面的 existsActiveByPurchaseOrderNo 是「先查后写」，与另一个实例的创建存在竞态窗口；
             // contract.uk_contract_active_po_no 是最终兜底，撞上说明确有并发，按「已存在」跳过即可。
             log.info("跳过建合同（并发重复创建，命中唯一约束）：poNo={}", poNo, ex);
             return false;
         } catch (RuntimeException ex) {
-            throw new AutoCreateStepException("保存合同主表、明细及创建日志", ex);
+            throw new AutoCreateStepException("保存合同主表、明细、创建日志及采购单创建标记", ex);
         }
-
-        // 回写 PO 标记
-        autoCreateStep("回写采购单创建标记", () -> {
-            poSyncRepository.markContractCreated(poNo, contractId);
-            return null;
-        });
 
         log.info("合同创建成功：poNo={}, contractNo={}, contractId={}", poNo, contractNo, contractId);
 
@@ -670,7 +663,7 @@ public class ContractAutoCreateService {
         // 10. 原子保存：合同主表 + 明细 + CREATE 日志
         long contractId;
         try {
-            contractId = contractRepository.create(contract);
+            contractId = saveContractAndMarkPo(contract, purchaseOrderNo);
         } catch (DuplicateKeyException ex) {
             // 第 4 步的 findActiveByPurchaseOrderNo 是「先查后写」，而本方法在检查之后还要
             // 改明细、批量查领星图片、压图，窗口有几秒到几十秒；若期间定时任务或另一次点击
@@ -678,9 +671,6 @@ public class ContractAutoCreateService {
             log.info("手动创建合同命中唯一约束（并发重复创建）：purchaseOrderNo={}", purchaseOrderNo, ex);
             throw new BusinessException(ResultCode.CONTRACT_PURCHASE_ORDER_ALREADY_EXISTS);
         }
-
-        // 11. 回写 PO 标记
-        poSyncRepository.markContractCreated(purchaseOrderNo, contractId);
 
         log.info("合同创建成功：poNo={}, contractNo={}, contractId={}", purchaseOrderNo, contractNo, contractId);
 
@@ -704,6 +694,17 @@ public class ContractAutoCreateService {
                 fileUrl,
                 "合同创建成功"
         );
+    }
+
+    /** 在同一事务中创建合同并关联采购单，任一步抛出异常则一起回滚。 */
+    private long saveContractAndMarkPo(Contract contract, String purchaseOrderNo) {
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+        Long contractId = transactionTemplate.execute(status -> {
+            long createdContractId = contractRepository.create(contract);
+            poSyncRepository.markContractCreated(purchaseOrderNo, createdContractId);
+            return createdContractId;
+        });
+        return contractId;
     }
 
     /** 从已保存的合同快照生成首版 PDF、上传 S3 并回写地址；不重新同步领星字段。 */

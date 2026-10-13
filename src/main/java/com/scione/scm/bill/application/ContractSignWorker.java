@@ -8,6 +8,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import java.util.concurrent.*;
 
 /** 数据库队列不随页面关闭丢失；条件更新保证多个实例不重复领取任务。 */
@@ -18,6 +20,7 @@ public class ContractSignWorker {
     private final ContractMapper mapper;
     private final ContractRepository repository;
     private final ContractSignAppService service;
+    private final PlatformTransactionManager transactionManager;
     private final ExecutorService executor = Executors.newFixedThreadPool(2);
     private final Semaphore slots = new Semaphore(2);
 
@@ -37,11 +40,18 @@ public class ContractSignWorker {
         } catch (Exception ex) {
             // 建任务结果未知的任务保持 UNKNOWN；只将仍为 RUNNING 的前置失败恢复可编辑。
             String reason = ex.getMessage() == null ? "签署发起失败" : ex.getMessage();
-            mapper.failSign(id, ContractSignLaunchStateEnum.FAILED.getCode(), reason.substring(0, Math.min(1000, reason.length())));
             log.error("后台发起签署失败：contractId={}", id, ex);
-            repository.findById(id).ifPresent(contract -> repository.saveOperationLog(
-                    ContractOperationLog.ofUpdate(id, contract.getContractNo(), operator, operator,
-                            "后台签署发起失败", reason)));
+            TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+            // 先提交失败状态，避免日志故障使已结束的任务回滚到 RUNNING。
+            transactionTemplate.executeWithoutResult(status ->
+                    mapper.failSign(id, ContractSignLaunchStateEnum.FAILED.getCode(), reason.substring(0, Math.min(1000, reason.length()))));
+            try {
+                repository.findById(id).ifPresent(contract -> repository.saveOperationLog(
+                        ContractOperationLog.ofUpdate(id, contract.getContractNo(), operator, operator,
+                                "后台签署发起失败", reason)));
+            } catch (RuntimeException logFailure) {
+                log.error("后台签署失败日志保存失败，失败状态已提交：contractId={}", id, logFailure);
+            }
         }
     }
 

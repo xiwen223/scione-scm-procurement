@@ -11,6 +11,7 @@ import com.scione.scm.bill.domain.contract.ContractStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
@@ -21,6 +22,7 @@ public class FadadaContractCallbackService {
     private final com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractMapper contractMapper;
 
     /** 已由统一回调控制器完成验签后的合同事件处理。 */
+    @Transactional(rollbackFor = Exception.class)
     public void handleVerifiedEvent(String event, String bizContent) throws Exception {
         // 回调步骤1：解析业务内容，兼容外层 data 包装；签名校验已由统一控制器完成。
         JsonNode body = businessNode(objectMapper.readTree(bizContent));

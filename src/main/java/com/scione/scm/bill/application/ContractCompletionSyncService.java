@@ -9,6 +9,8 @@ import com.scione.scm.bill.domain.contract.ContractRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -23,6 +25,7 @@ public class ContractCompletionSyncService {
     private static final int ORDER_QUERY_BATCH_SIZE = 500;
     private final ContractRepository contractRepository;
     private final LingxingPurchaseOrderClient lingxingPurchaseOrderClient;
+    private final PlatformTransactionManager transactionManager;
 
     public SyncResult sync() {
         int scanned = 0, completed = 0, failed = 0;
@@ -66,9 +69,14 @@ public class ContractCompletionSyncService {
                         if (!LingxingPurchaseOrderStatusEnum.COMPLETED.matches(po.status())) {
                             continue;
                         }
-                        contractRepository.markCompleted(contract.getId());
                         String text = po.statusText() == null ? "" : po.statusText();
-                        contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(contract.getId(), contract.getContractNo(), Contract.SYSTEM_OPERATOR, Contract.SYSTEM_OPERATOR, "领星采购单完成同步", "采购单状态=9(" + text + ")；合同状态：履行中 → 完成；同步来源=领星实时查询"));
+                        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+                        transactionTemplate.executeWithoutResult(status -> {
+                            contractRepository.markCompleted(contract.getId());
+                            contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(
+                                    contract.getId(), contract.getContractNo(), Contract.SYSTEM_OPERATOR, Contract.SYSTEM_OPERATOR,
+                                    "领星采购单完成同步", "采购单状态=9(" + text + ")；合同状态：履行中 → 完成；同步来源=领星实时查询"));
+                        });
                         completed++;
                     } catch (Exception ex) {
                         failed++;
