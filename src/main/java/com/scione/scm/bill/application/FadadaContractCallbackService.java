@@ -1,5 +1,7 @@
 package com.scione.scm.bill.application;
 
+import com.scione.scm.bill.infrastructure.fadada.enums.FadadaCallbackEventEnum;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scione.scm.bill.domain.contract.Contract;
@@ -9,6 +11,7 @@ import com.scione.scm.bill.domain.contract.ContractStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
@@ -19,6 +22,7 @@ public class FadadaContractCallbackService {
     private final com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ContractMapper contractMapper;
 
     /** 已由统一回调控制器完成验签后的合同事件处理。 */
+    @Transactional(rollbackFor = Exception.class)
     public void handleVerifiedEvent(String event, String bizContent) throws Exception {
         // 回调步骤1：解析业务内容，兼容外层 data 包装；签名校验已由统一控制器完成。
         JsonNode body = businessNode(objectMapper.readTree(bizContent));
@@ -52,7 +56,7 @@ public class FadadaContractCallbackService {
                 && !callbackTaskId.isBlank()
                 && contractRepository.findFadadaAbolishedTaskId(contract.getId())
                     .filter(callbackTaskId::equals).isPresent();
-        if (("sign-task-abolish".equals(event) || abolishAgreementFinished)
+        if ((FadadaCallbackEventEnum.SIGN_TASK_ABOLISH.matches(event) || abolishAgreementFinished)
                 && contract.getStatus() == ContractStatus.EXECUTING) {
             contractRepository.markFadadaAbolished(contract.getId(), reason);
             details += "；解除协议已完成；合同状态：履行中 → 取消";
@@ -67,7 +71,7 @@ public class FadadaContractCallbackService {
     private void confirmBuyerSign(String event, JsonNode body, Contract contract) {
         String taskId = body.path("signTaskId").asText("");
         String actorId = body.path("actorId").asText(body.path("actorInfo").path("actorId").asText(""));
-        boolean buyerSigned = "sign-task-signed".equals(event)
+        boolean buyerSigned = FadadaCallbackEventEnum.SIGN_TASK_SIGNED.matches(event)
                 && ("BUYER_" + contract.getContractNo()).equals(actorId);
         if ((buyerSigned || isSignTaskFinished(event, body)) && !taskId.isBlank()) {
             int updated = contractMapper.confirmSignLaunch(contract.getId(), taskId);
@@ -89,8 +93,8 @@ public class FadadaContractCallbackService {
      * 不能只依赖可能未单独推送的 sign-task-finished 事件。
      */
     private boolean isSignTaskFinished(String event, JsonNode body) {
-        return "sign-task-finished".equals(event)
-                || ("sign-task-signed".equals(event)
+        return FadadaCallbackEventEnum.SIGN_TASK_FINISHED.matches(event)
+                || (FadadaCallbackEventEnum.SIGN_TASK_SIGNED.matches(event)
                 && "task_finished".equals(body.path("signTaskStatus").asText()));
     }
 

@@ -1,5 +1,8 @@
 package com.scione.scm.bill.domain.contract;
 
+import com.scione.scm.bill.domain.contract.enums.ContractCreateTypeEnum;
+import com.scione.scm.bill.domain.contract.enums.ContractSignLaunchStateEnum;
+
 import com.scione.scm.bill.domain.company.BuyerCompany;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
 import com.scione.scm.bill.domain.posync.PoSyncRecordItem;
@@ -64,8 +67,8 @@ public class Contract {
     private boolean abolishPending;
 
     public boolean isSignLaunching() {
-        return "QUEUED".equals(signLaunchState) || "RUNNING".equals(signLaunchState) || "WAIT_CALLBACK".equals(signLaunchState)
-                || "UNKNOWN".equals(signLaunchState);
+        return ContractSignLaunchStateEnum.QUEUED.matches(signLaunchState) || ContractSignLaunchStateEnum.RUNNING.matches(signLaunchState)
+                || ContractSignLaunchStateEnum.WAIT_CALLBACK.matches(signLaunchState) || ContractSignLaunchStateEnum.UNKNOWN.matches(signLaunchState);
     }
     private String creatorId;
     private String creatorName;
@@ -117,7 +120,7 @@ public class Contract {
         // 最终导致列表里的合同金额与合同 PDF 底部的合计不一致。
         c.originalAmount = po.getItems() == null ? BigDecimal.ZERO : po.getItems().stream()
                 .map(item -> PurchasePriceCalculator.lineAmount(item.getUnitPriceWithoutTax(),
-                        PurchasePriceCalculator.effectiveQuantity(item.getQuantityReal(), item.getQuantityPlan())))
+                        item.getQuantityReal()))
                 .filter(java.util.Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         c.discountedAmount = null;
@@ -132,7 +135,7 @@ public class Contract {
         c.status = ContractStatus.CREATED;
         c.creatorId = SYSTEM_OPERATOR;
         c.creatorName = SYSTEM_OPERATOR;
-        c.createType = CREATE_TYPE_AUTO;
+        c.createType = ContractCreateTypeEnum.AUTO.getCode();
 
         List<PoSyncRecordItem> poItems = po.getItems();
         if (poItems != null) {
@@ -226,8 +229,7 @@ public class Contract {
         item.setProductName(src.getProductName());
         item.setSpecification(src.getModel());
         // 合同数量取领星“采购量”（实际采购量），对应 quantity_real；不能使用计划采购量 quantity_plan。
-        // 领星还没回填实际采购量时退回计划采购量：两边都取不到会让数量与金额整列变成 null。
-        Integer quantity = PurchasePriceCalculator.effectiveQuantity(src.getQuantityReal(), src.getQuantityPlan());
+        Integer quantity = src.getQuantityReal();
         item.setQuantity(quantity);
         item.setUnit(null);
         item.setUnitPrice(src.getUnitPriceWithoutTax());

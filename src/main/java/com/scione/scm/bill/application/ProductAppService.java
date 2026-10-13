@@ -1,6 +1,6 @@
 package com.scione.scm.bill.application;
 
-import com.scione.scm.bill.application.dto.ProductDetailDTO;
+import com.scione.scm.bill.application.vo.ProductDetailVO;
 import com.scione.scm.bill.application.port.LingxingProductClient;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
@@ -16,10 +16,10 @@ public class ProductAppService {
 
     private final LingxingProductClient productClient;
 
-    public ProductDetailDTO findDetail(String sku) {
+    public ProductDetailVO findDetail(String sku) {
         String normalizedSku = sku.trim();
         return productClient.findBySku(normalizedSku)
-                .map(ProductDetailDTO::from)
+                .map(ProductDetailVO::from)
                 .orElseThrow(() -> new BusinessException(ResultCode.PRODUCT_NOT_FOUND));
     }
 }

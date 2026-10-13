@@ -1,6 +1,6 @@
 package com.scione.scm.bill.application;
 
-import com.scione.scm.bill.application.dto.ShippingMarkPreviewDTO;
+import com.scione.scm.bill.application.vo.ShippingMarkPreviewVO;
 import com.scione.scm.bill.application.port.ShippingMarkFileStore;
 import com.scione.scm.bill.application.port.ShippingMarkLabelRenderer;
 import com.scione.scm.bill.common.BusinessException;
@@ -38,10 +38,10 @@ public class ShippingMarkDownloadAppService {
     private final ShippingMarkLabelRenderer labelRenderer;
     private final ShippingMarkFileStore fileStore;
 
-    public ShippingMarkPreviewDTO preview(Long detailId) {
+    public ShippingMarkPreviewVO preview(Long detailId) {
         ShippingMarkDetail detail = requireGeneratedDetail(detailId);
         try {
-            return new ShippingMarkPreviewDTO(
+            return new ShippingMarkPreviewVO(
                     detail.getId(), detail.getPurchaseOrderNo(), detail.getSkuCode(), detail.getSkuName(),
                     detail.getSkuImage(), labelRenderer.barcodeDataUrl(detail.getSkuCode()));
         } catch (IOException exception) {

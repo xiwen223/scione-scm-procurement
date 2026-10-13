@@ -1,5 +1,7 @@
 package com.scione.scm.bill.interfaces;
 
+import com.scione.scm.bill.infrastructure.fadada.enums.FadadaCallbackEventEnum;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -59,13 +61,13 @@ import java.util.Map;
 public class FadadaCallBackController {
 
     /** 印章审核通过事件。 */
-    private static final String EVENT_SEAL_VERIFY_SUCCESS = "seal-verify-successed";
+    private static final String EVENT_SEAL_VERIFY_SUCCESS = FadadaCallbackEventEnum.SEAL_VERIFY_SUCCESS.getCode();
 
     /** 印章审核不通过事件。 */
-    private static final String EVENT_SEAL_VERIFY_FAILED = "seal-verify-failed";
+    private static final String EVENT_SEAL_VERIFY_FAILED = FadadaCallbackEventEnum.SEAL_VERIFY_FAILED.getCode();
 
     /** 印章免验证签授权事件。 */
-    private static final String EVENT_SEAL_AUTHORIZE_FREE_SIGN = "seal-authorize-free-sign";
+    private static final String EVENT_SEAL_AUTHORIZE_FREE_SIGN = FadadaCallbackEventEnum.SEAL_AUTHORIZE_FREE_SIGN.getCode();
 
     /** 回调验签固定使用 HMAC-SHA256，与官方示例一致（不取请求头的实际值做二次信任）。 */
     private static final String SIGN_TYPE = "HMAC-SHA256";
@@ -98,12 +100,12 @@ public class FadadaCallBackController {
         }
         log.info("法大大回调验签通过：event={}, bizContentLength={}", event, bizContent.length());
 
-        switch (event == null ? "" : event) {
-            case EVENT_SEAL_VERIFY_SUCCESS -> handleSealVerifySuccess(bizContent);
-            case EVENT_SEAL_VERIFY_FAILED -> handleSealVerifyFailed(bizContent);
-            case EVENT_SEAL_AUTHORIZE_FREE_SIGN -> handleSealAuthorizeFreeSign(bizContent);
-            case "sign-task-signed", "sign-task-finished", "sign-task-sign-failed", "sign-task-sign-rejected",
-                    "sign-task-canceled", "sign-task-expire", "sign-task-abolish" ->
+        switch (FadadaCallbackEventEnum.fromCode(event)) {
+            case SEAL_VERIFY_SUCCESS -> handleSealVerifySuccess(bizContent);
+            case SEAL_VERIFY_FAILED -> handleSealVerifyFailed(bizContent);
+            case SEAL_AUTHORIZE_FREE_SIGN -> handleSealAuthorizeFreeSign(bizContent);
+            case SIGN_TASK_SIGNED, SIGN_TASK_FINISHED, SIGN_TASK_SIGN_FAILED, SIGN_TASK_SIGN_REJECTED,
+                    SIGN_TASK_CANCELED, SIGN_TASK_EXPIRE, SIGN_TASK_ABOLISH ->
                     fadadaContractCallbackService.handleVerifiedEvent(event, bizContent);
 
             default -> log.info("收到法大大未处理事件：event={}", event);
