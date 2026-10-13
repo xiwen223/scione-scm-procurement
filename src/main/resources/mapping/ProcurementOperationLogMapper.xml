@@ -18,8 +18,12 @@
     <!-- 历史合同日志原来存合同编号，查询与筛选统一使用关联的 PO 单号。
          未建成合同的失败日志（data_id=0）本身已存 PO；公司/模板日志保持原业务名称。 -->
     <sql id="effectiveDataName">
-        CASE WHEN l.business_type = 1 THEN COALESCE(NULLIF(c.purchase_order_no, ''), l.data_name)
-             ELSE l.data_name END
+        <!-- 两张表的列可能采用不同排序规则；先统一各分支，再合并，避免 LIKE 报 1267。
+             仅转换查询表达式，不修改列定义或已保存的数据。 -->
+        CASE WHEN l.business_type = 1 THEN COALESCE(
+                 NULLIF(CONVERT(c.purchase_order_no USING utf8mb4) COLLATE utf8mb4_unicode_ci, ''),
+                 CONVERT(l.data_name USING utf8mb4) COLLATE utf8mb4_unicode_ci)
+             ELSE CONVERT(l.data_name USING utf8mb4) COLLATE utf8mb4_unicode_ci END
     </sql>
 
     <!-- 历史合同修改类型归一为 UPDATE，与其他业务共用“修改”选项。 -->
@@ -49,7 +53,8 @@
         WHERE 1 = 1
         <!-- 含参数的条件写在查询节点内，使 IDE 能关联 Mapper 的 @Param；与 findPage 保持一致。 -->
         <if test="dataName != null and dataName != ''">
-            AND (<include refid="effectiveDataName"/>) LIKE CONCAT('%', #{dataName}, '%')
+            AND (<include refid="effectiveDataName"/>) LIKE
+                (CONVERT(CONCAT('%', #{dataName}, '%') USING utf8mb4) COLLATE utf8mb4_unicode_ci)
         </if>
         <if test="businessType != null">
             AND l.business_type = #{businessType}
@@ -76,7 +81,8 @@
         LEFT JOIN contract c ON l.business_type = 1 AND l.data_id = c.id
         WHERE 1 = 1
         <if test="dataName != null and dataName != ''">
-            AND (<include refid="effectiveDataName"/>) LIKE CONCAT('%', #{dataName}, '%')
+            AND (<include refid="effectiveDataName"/>) LIKE
+                (CONVERT(CONCAT('%', #{dataName}, '%') USING utf8mb4) COLLATE utf8mb4_unicode_ci)
         </if>
         <if test="businessType != null">
             AND l.business_type = #{businessType}
