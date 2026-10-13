@@ -1,5 +1,8 @@
 package com.scione.scm.bill.application;
 
+import com.scione.scm.bill.application.vo.ContractDetailVO;
+import com.scione.scm.bill.application.vo.ContractListItemVO;
+
 import com.scione.scm.bill.application.dto.*;
 import com.scione.scm.bill.application.port.ContractFileStore;
 import com.scione.scm.bill.application.port.ContractPdfConverter;
@@ -79,7 +82,7 @@ public class ContractQueryService {
     /**
      * 分页查询合同列表。
      */
-    public PageResult<ContractListItemResponse> queryContractList(ContractListQueryRequest request) {
+    public PageResult<ContractListItemVO> queryContractList(ContractListQueryDTO request) {
         log.info("查询合同列表：contractNo={}, purchaseOrderNo={}, supplierName={}, status={}, pageNum={}, pageSize={}",
                 request.getContractNo(), request.getPurchaseOrderNo(), request.getSupplierName(),
                 request.getStatus(), request.getPageNum(), request.getPageSize());
@@ -98,8 +101,8 @@ public class ContractQueryService {
                 page.records().stream().map(Contract::getId).toList());
 
         // Domain 转 DTO
-        List<ContractListItemResponse> items = page.records().stream()
-                .map(contract -> ContractListItemResponse.from(contract, lastUrgeTimes.get(contract.getId())))
+        List<ContractListItemVO> items = page.records().stream()
+                .map(contract -> ContractListItemVO.from(contract, lastUrgeTimes.get(contract.getId())))
                 .collect(Collectors.toList());
 
         log.info("查询合同列表成功：total={}, records={}", page.total(), items.size());
@@ -109,7 +112,7 @@ public class ContractQueryService {
     /**
      * 查询合同详情。
      */
-    public ContractDetailResponse getContractDetail(Long contractId) {
+    public ContractDetailVO getContractDetail(Long contractId) {
         log.info("查询合同详情：contractId={}", contractId);
 
         // 合同不存在属于业务上的「资源不存在」，必须抛 BusinessException，
@@ -121,7 +124,7 @@ public class ContractQueryService {
         // 详情步骤2：历史明细缺图时补展示图片；补图不代表重新同步合同价格或供方字段。
         fillMissingItemImages(contract);
         // 详情步骤3：将领域快照转成对外 DTO，输出日期、金额、主状态及过程标记。
-        ContractDetailResponse response = ContractDetailResponse.from(contract);
+        ContractDetailVO response = ContractDetailVO.from(contract);
 
         log.info("查询合同详情成功：contractNo={}", contract.getContractNo());
         return response;

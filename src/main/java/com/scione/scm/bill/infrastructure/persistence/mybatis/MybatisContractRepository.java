@@ -1,6 +1,6 @@
 package com.scione.scm.bill.infrastructure.persistence.mybatis;
 
-import com.scione.scm.bill.application.dto.ContractListQueryRequest;
+import com.scione.scm.bill.application.dto.ContractListQueryDTO;
 import com.scione.scm.bill.domain.contract.Contract;
 import com.scione.scm.bill.domain.contract.ContractItem;
 import com.scione.scm.bill.domain.contract.ActiveContractRef;
@@ -334,7 +334,7 @@ public class MybatisContractRepository implements ContractRepository {
     }
 
     @Override
-    public ContractPage findByPage(ContractListQueryRequest request) {
+    public ContractPage findByPage(ContractListQueryDTO request) {
         // 1. 统计总数
         long total = contractMapper.countByCondition(request);
 

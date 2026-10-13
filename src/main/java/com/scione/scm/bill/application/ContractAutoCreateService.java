@@ -1,7 +1,7 @@
 package com.scione.scm.bill.application;
 
-import com.scione.scm.bill.application.dto.ContractCreateRequest;
-import com.scione.scm.bill.application.dto.ContractCreateResponse;
+import com.scione.scm.bill.application.dto.ContractCreateDTO;
+import com.scione.scm.bill.application.vo.ContractCreateVO;
 import com.scione.scm.bill.application.port.ContractFileStore;
 import com.scione.scm.bill.application.port.ContractPdfConverter;
 import com.scione.scm.bill.application.port.ContractTemplateService;
@@ -200,8 +200,7 @@ public class ContractAutoCreateService {
         List<ManualPoItem> items = new ArrayList<>(poItems.size());
         for (PoSyncRecordItem item : poItems) {
             // 明细步骤3：统一数量口径，并用已换算不含税价计算小计，保持表单与最终合同一致。
-            Integer quantity = PurchasePriceCalculator.effectiveQuantity(
-                    item.getQuantityReal(), item.getQuantityPlan());
+            Integer quantity = item.getQuantityReal();
             // 明细自带的 pic_url 优先（采购单列表接口已返回），缺失才用补图结果
             String picUrl = StringUtils.hasText(item.getPicUrl())
                     ? item.getPicUrl() : picUrlsBySku.get(item.getSku());
@@ -274,11 +273,11 @@ public class ContractAutoCreateService {
         if (po.getItems() == null || po.getItems().isEmpty()) {
             return null;
         }
-        // 与建合同时的口径保持一致（数量取实际采购量，缺失退回计划采购量），
+        // 与建合同时的口径保持一致，数量只取实际采购量 quantity_real，
         // 否则创建表单里提示的合同金额会和真正建出来的合同金额不一致。
         BigDecimal total = po.getItems().stream()
                 .map(item -> PurchasePriceCalculator.lineAmount(item.getUnitPriceWithoutTax(),
-                        PurchasePriceCalculator.effectiveQuantity(item.getQuantityReal(), item.getQuantityPlan())))
+                        item.getQuantityReal()))
                 .filter(java.util.Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         return total.signum() > 0 ? total : null;
@@ -593,7 +592,7 @@ public class ContractAutoCreateService {
      * @param progressKey  前端生成的进度标识，可为 null
      * @return 创建结果（包含合同ID、合同编号、文件URL） 响应对象
      */
-    public ContractCreateResponse createContract(ContractCreateRequest request, String creatorEmail, String progressKey) {
+    public ContractCreateVO createContract(ContractCreateDTO request, String creatorEmail, String progressKey) {
         String purchaseOrderNo = request.getPurchaseOrderNo();
         log.info("手动创建合同开始：purchaseOrderNo={}, progressKeyPresent={}",
                 purchaseOrderNo, StringUtils.hasText(progressKey));
@@ -606,7 +605,7 @@ public class ContractAutoCreateService {
         }
     }
 
-    private ContractCreateResponse doCreateContract(ContractCreateRequest request, String creatorEmail, String progressKey) {
+    private ContractCreateVO doCreateContract(ContractCreateDTO request, String creatorEmail, String progressKey) {
         String purchaseOrderNo = request.getPurchaseOrderNo();
         // 1. 不传需方公司时使用 priority=1；传入时使用页面下拉框选中的公司。
         BuyerCompany buyer = resolveManualBuyerCompany(request.getBuyerCompanyId());
@@ -695,7 +694,7 @@ public class ContractAutoCreateService {
 
         // 首版 PDF 失败不会撤销前面已保存的合同，后续下载可重建；返回成功不代表 fileUrl 一定非空。
         // 12. 返回结果
-        return new ContractCreateResponse(
+        return new ContractCreateVO(
                 contractId,
                 contractNo,
                 purchaseOrderNo,
@@ -720,7 +719,7 @@ public class ContractAutoCreateService {
         }
     }
 
-    private void applyManualOverrides(Contract contract, ContractCreateRequest request) {
+    private void applyManualOverrides(Contract contract, ContractCreateDTO request) {
         // 明细的数量 / 不含税单价允许人工改：先按 SKU 覆盖并重算金额，再做金额与折扣覆盖，
         // 否则「主表原价 = Σ明细金额」会被打破（合同 PDF 底部的合计直接取主表金额）。
         // 覆盖顺序：先处理用户修改的明细，再处理主金额和折扣，避免最后的合计仍使用旧明细。
@@ -811,7 +810,7 @@ public class ContractAutoCreateService {
      * <p>金额始终按「不含税单价 × 数量」重算：任一项为空就置空，交给后面的必填校验报错，
      * 而不是保留旧金额 —— 否则会出现「数量改了、金额还是旧的」这种对不上账的合同。</p>
      */
-    private void applyItemOverrides(Contract contract, List<ContractCreateRequest.ItemOverride> overrides) {
+    private void applyItemOverrides(Contract contract, List<ContractCreateDTO.ItemOverride> overrides) {
         if (overrides == null || overrides.isEmpty()
                 || contract.getItems() == null || contract.getItems().isEmpty()) {
             return;
@@ -820,7 +819,7 @@ public class ContractAutoCreateService {
 
         int matched = 0;
         int ignored = 0;
-        for (ContractCreateRequest.ItemOverride override : overrides) {
+        for (ContractCreateDTO.ItemOverride override : overrides) {
             if (override == null) {
                 continue;
             }
@@ -864,7 +863,7 @@ public class ContractAutoCreateService {
      * 定位一条明细：优先按「序号 + SKU」命中（同一 SKU 可能重复出现，序号才唯一），
      * 序号缺失或该位置 SKU 对不上时退回按 SKU 匹配第一条。
      */
-    private ContractItem matchItem(List<ContractItem> items, ContractCreateRequest.ItemOverride override) {
+    private ContractItem matchItem(List<ContractItem> items, ContractCreateDTO.ItemOverride override) {
         String sku = override.getSku() == null ? null : override.getSku().trim();
         Integer index = override.getIndex();
         if (index != null && index >= 0 && index < items.size()) {

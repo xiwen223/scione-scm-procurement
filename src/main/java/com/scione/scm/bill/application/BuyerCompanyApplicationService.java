@@ -1,12 +1,12 @@
 package com.scione.scm.bill.application;
 
 import com.scione.common.model.PageResult;
-import com.scione.scm.bill.application.dto.BuyerCompanyDetailResponse;
-import com.scione.scm.bill.application.dto.BuyerCompanyListItemResponse;
-import com.scione.scm.bill.application.dto.BuyerCompanySealUploadResponse;
-import com.scione.scm.bill.application.dto.BuyerCompanyUpsertRequest;
-import com.scione.scm.bill.application.dto.FileUploadResponse;
-import com.scione.scm.bill.application.dto.FadadaSealFreeSignUrlResponse;
+import com.scione.scm.bill.application.vo.BuyerCompanyDetailVO;
+import com.scione.scm.bill.application.vo.BuyerCompanyListItemVO;
+import com.scione.scm.bill.application.vo.BuyerCompanySealUploadVO;
+import com.scione.scm.bill.application.dto.BuyerCompanyUpsertDTO;
+import com.scione.scm.bill.application.vo.FileUploadVO;
+import com.scione.scm.bill.application.vo.FadadaSealFreeSignUrlVO;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.infrastructure.fadada.FadadaOpenApiClient;
@@ -59,7 +59,7 @@ public class BuyerCompanyApplicationService {
     private final FadadaOpenApiClient fadadaOpenApiClient;
     private final FileApplicationService fileApplicationService;
 
-    public PageResult<BuyerCompanyListItemResponse> findPage(
+    public PageResult<BuyerCompanyListItemVO> findPage(
             String keyword,
             Boolean isActive,
             boolean defaultOnly,
@@ -80,7 +80,7 @@ public class BuyerCompanyApplicationService {
                         .toList());
     }
 
-    public BuyerCompanyDetailResponse getById(Long id) {
+    public BuyerCompanyDetailVO getById(Long id) {
         BuyerCompanyPO company = requireCompany(id);
         return toDetail(company);
     }
@@ -90,7 +90,7 @@ public class BuyerCompanyApplicationService {
      * 该方法不直接授予权限，企业超管仍需在法大大页面确认。
      */
     @FadadaAlertContext(FadadaAlertContext.Type.COMPANY)
-    public FadadaSealFreeSignUrlResponse getSealFreeSignAuthorizationUrl(Long id, String clientUserId) {
+    public FadadaSealFreeSignUrlVO getSealFreeSignAuthorizationUrl(Long id, String clientUserId) {
         BuyerCompanyPO company = requireCompany(id);
         String openCorpId = requireText(company.getOpenCorpId(), "法大大 openCorpId 为空，请先完成企业授权");
         String sealId = requireText(company.getFadadaSealId(), "法大大印章 ID 为空，请先完成印章审核");
@@ -100,11 +100,11 @@ public class BuyerCompanyApplicationService {
                         blankToNull(clientUserId), null));
         log.info("已生成法大大印章免验证签授权链接：companyId={}, openCorpIdPresent=true, sealIdPresent=true, businessIdPresent=true",
                 id);
-        return new FadadaSealFreeSignUrlResponse(result.freeSignUrl(), result.freeSignShortUrl());
+        return new FadadaSealFreeSignUrlVO(result.freeSignUrl(), result.freeSignShortUrl());
     }
 
     @Transactional
-    public BuyerCompanyDetailResponse create(BuyerCompanyUpsertRequest request) {
+    public BuyerCompanyDetailVO create(BuyerCompanyUpsertDTO request) {
         BuyerCompanyPO company = toNewPO(request);
         validateUnique(company, null);
 
@@ -121,7 +121,7 @@ public class BuyerCompanyApplicationService {
     }
 
     @Transactional
-    public BuyerCompanyDetailResponse update(Long id, BuyerCompanyUpsertRequest request) {
+    public BuyerCompanyDetailVO update(Long id, BuyerCompanyUpsertDTO request) {
         BuyerCompanyPO current = requireCompany(id);
         BuyerCompanyPO company = toUpdatedPO(current, request);
         validateUnique(company, id);
@@ -167,7 +167,7 @@ public class BuyerCompanyApplicationService {
      * 回调线程才能读到「已持有签章且审核中」的那一行。</p>
      */
     @FadadaAlertContext(FadadaAlertContext.Type.COMPANY)
-    public BuyerCompanySealUploadResponse uploadSeal(Long id, MultipartFile file, String sealName) {
+    public BuyerCompanySealUploadVO uploadSeal(Long id, MultipartFile file, String sealName) {
         BuyerCompanyPO company = requireCompany(id);
 
         // 先判断公司是否已认证：未认证不允许创建印章
@@ -186,7 +186,7 @@ public class BuyerCompanyApplicationService {
         byte[] content = readSealImage(file);
 
         // 1. 对象存储：先落图片，此时库内还没有任何改动，上传失败无需回滚
-        FileUploadResponse uploaded = fileApplicationService.upload(file, SEAL_UPLOAD_FOLDER);
+        FileUploadVO uploaded = fileApplicationService.upload(file, SEAL_UPLOAD_FOLDER);
 
         // 2. 落库：写入 objectKey 与印章名称，并把审核状态初始化回「审核中」。
         //    必须先于第 3 步提交，回调到达时才能匹配到这一行（见方法注释的时序说明）
@@ -210,7 +210,7 @@ public class BuyerCompanyApplicationService {
         Long verifyId = creation.verifyId();
         mapper.updateSealCreateResult(id, verifyId, creation.entityId());
 
-        return new BuyerCompanySealUploadResponse(verifyId, toDetail(requireCompany(id)));
+        return new BuyerCompanySealUploadVO(verifyId, toDetail(requireCompany(id)));
     }
 
     /**
@@ -245,7 +245,7 @@ public class BuyerCompanyApplicationService {
      * seal_name / seal_url / seal_base64 / fadada_seal_id / seal_flow_status。</p>
      */
     @FadadaAlertContext(FadadaAlertContext.Type.COMPANY)
-    public BuyerCompanyDetailResponse removeSeal(Long id) {
+    public BuyerCompanyDetailVO removeSeal(Long id) {
         BuyerCompanyPO company = requireCompany(id);
         Integer flowStatus = company.getSealFlowStatus();
 
@@ -425,13 +425,13 @@ public class BuyerCompanyApplicationService {
         return SEAL_IMAGE_EXTENSIONS.contains(fileName.substring(dot + 1).toLowerCase(Locale.ROOT));
     }
 
-    private BuyerCompanyPO toNewPO(BuyerCompanyUpsertRequest request) {
+    private BuyerCompanyPO toNewPO(BuyerCompanyUpsertDTO request) {
         BuyerCompanyPO company = new BuyerCompanyPO();
         apply(company, request);
         return company;
     }
 
-    private BuyerCompanyPO toUpdatedPO(BuyerCompanyPO current, BuyerCompanyUpsertRequest request) {
+    private BuyerCompanyPO toUpdatedPO(BuyerCompanyPO current, BuyerCompanyUpsertDTO request) {
         BuyerCompanyPO company = new BuyerCompanyPO();
         company.setId(current.getId());
         apply(company, mergeForUpdate(current, request));
@@ -444,8 +444,8 @@ public class BuyerCompanyApplicationService {
      *
      * <p>这样前端只需提交变化字段，编辑时也不会因为漏传某个字段而把库里的值清掉。</p>
      */
-    private static BuyerCompanyUpsertRequest mergeForUpdate(BuyerCompanyPO current, BuyerCompanyUpsertRequest request) {
-        return new BuyerCompanyUpsertRequest(
+    private static BuyerCompanyUpsertDTO mergeForUpdate(BuyerCompanyPO current, BuyerCompanyUpsertDTO request) {
+        return new BuyerCompanyUpsertDTO(
                 request.companyName() == null ? current.getCompanyName() : request.companyName(),
                 request.companyShortName() == null ? current.getCompanyShortName() : request.companyShortName(),
                 request.creditCode() == null ? current.getCreditCode() : request.creditCode(),
@@ -480,7 +480,7 @@ public class BuyerCompanyApplicationService {
         return company.getIsActive() != null && company.getIsActive() == 1;
     }
 
-    private void apply(BuyerCompanyPO company, BuyerCompanyUpsertRequest request) {
+    private void apply(BuyerCompanyPO company, BuyerCompanyUpsertDTO request) {
         String companyName = requireText(request.companyName(), "公司名称不能为空");
         String address = requireText(request.address(), "公司地址不能为空");
         boolean active = request.isActive() == null || request.isActive();
@@ -556,11 +556,11 @@ public class BuyerCompanyApplicationService {
                 .orElseThrow(() -> new BusinessException(ResultCode.BUYER_COMPANY_NOT_FOUND));
     }
 
-    private BuyerCompanyDetailResponse toDetail(BuyerCompanyPO po) {
+    private BuyerCompanyDetailVO toDetail(BuyerCompanyPO po) {
         boolean isDefault = po.getPriority() != null && po.getPriority() == 1;
         boolean isActive = po.getIsActive() != null && po.getIsActive() == 1;
 
-        return new BuyerCompanyDetailResponse(
+        return new BuyerCompanyDetailVO(
                 String.valueOf(po.getId()),
                 po.getCompanyName(),
                 po.getCompanyShortName(),
@@ -589,11 +589,11 @@ public class BuyerCompanyApplicationService {
                 po.getUpdateTime());
     }
 
-    private BuyerCompanyListItemResponse toListItem(BuyerCompanyPO po) {
+    private BuyerCompanyListItemVO toListItem(BuyerCompanyPO po) {
         boolean isDefault = po.getPriority() != null && po.getPriority() == 1;
         boolean isActive = po.getIsActive() != null && po.getIsActive() == 1;
 
-        return new BuyerCompanyListItemResponse(
+        return new BuyerCompanyListItemVO(
                 String.valueOf(po.getId()),
                 po.getCompanyName(),
                 po.getCompanyShortName(),

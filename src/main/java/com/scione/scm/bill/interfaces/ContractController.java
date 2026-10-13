@@ -6,15 +6,15 @@ import com.scione.scm.bill.application.PoSyncAppService;
 import com.scione.scm.bill.application.ContractCreateProgressTracker;
 import com.scione.scm.bill.application.ContractSignAppService;
 import com.scione.scm.bill.application.ContractUpdateService;
-import com.scione.scm.bill.application.dto.ContractCancelRequest;
-import com.scione.scm.bill.application.dto.ContractCreateRequest;
-import com.scione.scm.bill.application.dto.ContractCreateResponse;
-import com.scione.scm.bill.application.dto.ContractBatchDownloadRequest;
-import com.scione.scm.bill.application.dto.ContractDetailResponse;
-import com.scione.scm.bill.application.dto.ContractListItemResponse;
-import com.scione.scm.bill.application.dto.ContractListQueryRequest;
-import com.scione.scm.bill.application.dto.ContractUpdateRequest;
-import com.scione.scm.bill.application.dto.ContractUpdateResponse;
+import com.scione.scm.bill.application.dto.ContractCancelDTO;
+import com.scione.scm.bill.application.dto.ContractCreateDTO;
+import com.scione.scm.bill.application.vo.ContractCreateVO;
+import com.scione.scm.bill.application.dto.ContractBatchDownloadDTO;
+import com.scione.scm.bill.application.vo.ContractDetailVO;
+import com.scione.scm.bill.application.vo.ContractListItemVO;
+import com.scione.scm.bill.application.dto.ContractListQueryDTO;
+import com.scione.scm.bill.application.dto.ContractUpdateDTO;
+import com.scione.scm.bill.application.vo.ContractUpdateVO;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import io.swagger.v3.oas.annotations.Operation;
@@ -98,15 +98,15 @@ public class ContractController {
     @PostMapping("/create")
     @Operation(summary = "手动创建合同",
             description = "指定采购单号创建合同，用于测试或补建合同；可选 progressKey 用于配合 /create/progress 展示创建步骤")
-    public ApiResponse<ContractCreateResponse> createContract(
-            @RequestBody @Validated ContractCreateRequest request,
+    public ApiResponse<ContractCreateVO> createContract(
+            @RequestBody @Validated ContractCreateDTO request,
             @RequestHeader("X-User-Email") String userEmail,
             @RequestParam(value = "progressKey", required = false) String progressKey) {
 
         log.info("手动创建合同请求：purchaseOrderNo={}", request.getPurchaseOrderNo());
 
         try {
-            ContractCreateResponse response = contractAutoCreateService.createContract(request, userEmail, progressKey);
+            ContractCreateVO response = contractAutoCreateService.createContract(request, userEmail, progressKey);
             return ApiResponse.success(response);
 
         } catch (BusinessException ex) {
@@ -133,16 +133,16 @@ public class ContractController {
 
     @GetMapping
     @Operation(summary = "分页查询合同列表", description = "支持按合同号、采购单号、供应商名称、状态、日期范围筛选")
-    public ResponseEntity<PageResult<ContractListItemResponse>> queryContractList(
-            @ModelAttribute ContractListQueryRequest request) {
-        PageResult<ContractListItemResponse> result = contractQueryService.queryContractList(request);
+    public ResponseEntity<PageResult<ContractListItemVO>> queryContractList(
+            @ModelAttribute ContractListQueryDTO request) {
+        PageResult<ContractListItemVO> result = contractQueryService.queryContractList(request);
         return ResponseEntity.ok(result);
     }
     @GetMapping("/{contractId}")
     @Operation(summary = "查询合同详情", description = "查看合同完整信息，包含明细")
-    public ResponseEntity<ContractDetailResponse> getContractDetail(
+    public ResponseEntity<ContractDetailVO> getContractDetail(
             @PathVariable Long contractId) {
-        ContractDetailResponse response = contractQueryService.getContractDetail(contractId);
+        ContractDetailVO response = contractQueryService.getContractDetail(contractId);
         return ResponseEntity.ok(response);
     }
     @GetMapping("/{contractId}/download")
@@ -178,7 +178,7 @@ public class ContractController {
     @PostMapping("/download-batch")
     @Operation(summary = "批量下载合同", description = "批量下载合同文件，返回ZIP压缩包")
     public ResponseEntity<byte[]> downloadContractBatch(
-            @RequestBody @Validated ContractBatchDownloadRequest request) throws java.io.IOException {
+            @RequestBody @Validated ContractBatchDownloadDTO request) throws java.io.IOException {
 
         log.info("批量下载合同请求: contractIds={}", request.contractIds());
 
@@ -198,15 +198,15 @@ public class ContractController {
 
     @PutMapping("/{contractId}")
     @Operation(summary = "修改合同", description = "统一保存合同信息、折扣和商品数量/单价；仅更新发生变化的数据，下载或发起签署时才生成最新合同文件")
-    public ApiResponse<ContractUpdateResponse> updateContract(
+    public ApiResponse<ContractUpdateVO> updateContract(
             @PathVariable Long contractId,
-            @RequestBody @Validated ContractUpdateRequest request,
+            @RequestBody @Validated ContractUpdateDTO request,
             @RequestHeader("X-User-Email") String userEmail) {
 
         log.info("修改合同请求：contractId={}", contractId);
 
         try {
-            ContractUpdateResponse response =
+            ContractUpdateVO response =
                     contractUpdateService.updateContract(contractId, request, userEmail);
             return ApiResponse.success(response);
 
@@ -286,7 +286,7 @@ public class ContractController {
     @Operation(summary = "作废合同", description = "创建状态直接作废；签署中撤销法大大任务；履行中发起解除协议，待法大大作废回调后置为取消")
     public ApiResponse<Void> cancelContract(
             @PathVariable Long contractId,
-            @RequestBody(required = false) @Validated ContractCancelRequest request,
+            @RequestBody(required = false) @Validated ContractCancelDTO request,
             @RequestHeader("X-User-Email") String userEmail) {
         try {
             contractSignAppService.cancel(contractId, request, userEmail);

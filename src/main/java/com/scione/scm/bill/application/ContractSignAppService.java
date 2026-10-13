@@ -2,7 +2,7 @@ package com.scione.scm.bill.application;
 
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
-import com.scione.scm.bill.application.dto.ContractCancelRequest;
+import com.scione.scm.bill.application.dto.ContractCancelDTO;
 import com.scione.scm.bill.application.port.ContractFileStore;
 import com.scione.scm.bill.application.port.ContractPdfConverter;
 import com.scione.scm.bill.application.port.ContractTemplateService;
@@ -176,7 +176,7 @@ public class ContractSignAppService {
     }
 
     @FadadaAlertContext(FadadaAlertContext.Type.CONTRACT)
-    public void cancel(Long contractId, ContractCancelRequest request, String operatorEmail) {
+    public void cancel(Long contractId, ContractCancelDTO request, String operatorEmail) {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
         if (contract.isSignLaunching()) {
