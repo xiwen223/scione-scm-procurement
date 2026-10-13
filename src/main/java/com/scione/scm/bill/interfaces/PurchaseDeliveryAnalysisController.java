@@ -3,13 +3,13 @@ package com.scione.scm.bill.interfaces;
 import com.scione.common.model.PageResult;
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.PurchaseDeliveryAnalysisAppService;
-import com.scione.scm.bill.application.dto.PurchaseDeliveryFilterOptionsDTO;
-import com.scione.scm.bill.application.dto.PurchaseDeliveryOrderDTO;
-import com.scione.scm.bill.application.dto.PurchaseDeliveryOrderDetailDTO;
-import com.scione.scm.bill.application.dto.PurchaseDeliveryOrderSkuLineDTO;
-import com.scione.scm.bill.application.dto.PurchaseDeliveryPlanDTO;
-import com.scione.scm.bill.application.dto.PurchaseDeliveryPlanDetailDTO;
-import com.scione.scm.bill.application.dto.PurchaseDeliverySummaryDTO;
+import com.scione.scm.bill.application.vo.PurchaseDeliveryFilterOptionsVO;
+import com.scione.scm.bill.application.vo.PurchaseDeliveryOrderVO;
+import com.scione.scm.bill.application.vo.PurchaseDeliveryOrderDetailVO;
+import com.scione.scm.bill.application.vo.PurchaseDeliveryOrderSkuLineVO;
+import com.scione.scm.bill.application.vo.PurchaseDeliveryPlanVO;
+import com.scione.scm.bill.application.vo.PurchaseDeliveryPlanDetailVO;
+import com.scione.scm.bill.application.vo.PurchaseDeliverySummaryVO;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.domain.deliveryanalysis.PurchaseDeliveryAnalysisQuery;
@@ -57,7 +57,7 @@ public class PurchaseDeliveryAnalysisController {
     private final PurchaseDeliveryAnalysisAppService appService;
 
     @GetMapping
-    public ApiResponse<PageResult<PurchaseDeliveryPlanDTO>> list(
+    public ApiResponse<PageResult<PurchaseDeliveryPlanVO>> list(
             @RequestParam(required = false) @Size(max = 100) String keyword,
             @RequestParam(required = false) @Size(max = 32) String node,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdStart,
@@ -77,7 +77,7 @@ public class PurchaseDeliveryAnalysisController {
     }
 
     @GetMapping("/summary")
-    public ApiResponse<PurchaseDeliverySummaryDTO> summary(
+    public ApiResponse<PurchaseDeliverySummaryVO> summary(
             @RequestParam(required = false) @Size(max = 100) String keyword,
             @RequestParam(required = false) @Size(max = 32) String node,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdStart,
@@ -92,14 +92,14 @@ public class PurchaseDeliveryAnalysisController {
     }
 
     @GetMapping("/filter-options")
-    public ApiResponse<PurchaseDeliveryFilterOptionsDTO> filterOptions() {
+    public ApiResponse<PurchaseDeliveryFilterOptionsVO> filterOptions() {
         PurchaseDeliveryAnalysisQuery query = query(null, null, null, null, null, null, null,
                 null, null, "createdAt", "desc", 1, 1);
         return ApiResponse.success(appService.filterOptions(query));
     }
 
     @GetMapping("/{planSn}/orders")
-    public ApiResponse<List<PurchaseDeliveryOrderDTO>> orders(
+    public ApiResponse<List<PurchaseDeliveryOrderVO>> orders(
             @PathVariable @NotBlank @Size(max = 64) String planSn,
             @RequestParam(required = false) @Size(max = 100) String keyword,
             @RequestParam(required = false) List<String> buyers,
@@ -112,7 +112,7 @@ public class PurchaseDeliveryAnalysisController {
     }
 
     @GetMapping("/{planSn}/order-sku-lines")
-    public ApiResponse<List<PurchaseDeliveryOrderSkuLineDTO>> orderSkuLines(
+    public ApiResponse<List<PurchaseDeliveryOrderSkuLineVO>> orderSkuLines(
             @PathVariable @NotBlank @Size(max = 64) String planSn,
             @RequestParam(required = false) @Size(max = 100) String keyword,
             @RequestParam(required = false) List<String> buyers,
@@ -125,13 +125,13 @@ public class PurchaseDeliveryAnalysisController {
     }
 
     @GetMapping("/{planSn}")
-    public ApiResponse<PurchaseDeliveryPlanDetailDTO> planDetail(
+    public ApiResponse<PurchaseDeliveryPlanDetailVO> planDetail(
             @PathVariable @NotBlank @Size(max = 64) String planSn) {
         return ApiResponse.success(appService.findPlanDetail(planSn.trim(), emptyQuery()));
     }
 
     @GetMapping("/orders/{orderSn}")
-    public ApiResponse<PurchaseDeliveryOrderDetailDTO> orderDetail(
+    public ApiResponse<PurchaseDeliveryOrderDetailVO> orderDetail(
             @PathVariable @NotBlank @Size(max = 64) String orderSn,
             @RequestParam(required = false) @Size(max = 64) String planSn,
             @RequestParam(required = false) @Size(max = 100) String sku) {

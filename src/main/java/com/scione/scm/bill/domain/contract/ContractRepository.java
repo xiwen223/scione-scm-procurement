@@ -1,5 +1,7 @@
 package com.scione.scm.bill.domain.contract;
 
+import com.scione.scm.bill.application.dto.ContractListQueryDTO;
+
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.Map;
@@ -97,7 +99,7 @@ public interface ContractRepository {
      * @param request 查询条件
      * @return 分页结果
      */
-    ContractPage findByPage(com.scione.scm.bill.application.dto.ContractListQueryRequest request);
+    ContractPage findByPage(com.scione.scm.bill.application.dto.ContractListQueryDTO request);
 
     /**
      * 按 ID 查询合同详情（含明细）。

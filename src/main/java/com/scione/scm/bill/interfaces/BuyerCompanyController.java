@@ -4,9 +4,9 @@ import com.scione.common.model.PageResult;
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.BuyerCompanyApplicationService;
 import com.scione.scm.bill.application.ProcurementOperationLogRecorder;
-import com.scione.scm.bill.application.dto.BuyerCompanyDetailResponse;
-import com.scione.scm.bill.application.dto.BuyerCompanyListItemResponse;
-import com.scione.scm.bill.application.dto.BuyerCompanyUpsertRequest;
+import com.scione.scm.bill.application.vo.BuyerCompanyDetailVO;
+import com.scione.scm.bill.application.vo.BuyerCompanyListItemVO;
+import com.scione.scm.bill.application.dto.BuyerCompanyUpsertDTO;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -54,13 +54,13 @@ public class BuyerCompanyController {
      * @return
      */
     @GetMapping
-    public ApiResponse<PageResult<BuyerCompanyListItemResponse>> list(
+    public ApiResponse<PageResult<BuyerCompanyListItemVO>> list(
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Boolean isActive,
             @RequestParam(defaultValue = "false") boolean defaultOnly,
             @RequestParam(defaultValue = "1") @Min(1) int pageNum,
             @RequestParam(defaultValue = "10") @Min(1) @Max(100) int pageSize) {
-        PageResult<BuyerCompanyListItemResponse> result = service.findPage(
+        PageResult<BuyerCompanyListItemVO> result = service.findPage(
                 keyword,
                 isActive,
                 defaultOnly,
@@ -75,8 +75,8 @@ public class BuyerCompanyController {
      * @return
      */
     @GetMapping("/{id}")
-    public ApiResponse<BuyerCompanyDetailResponse> detail(@PathVariable @Min(1) Long id) {
-        BuyerCompanyDetailResponse result = service.getById(id);
+    public ApiResponse<BuyerCompanyDetailVO> detail(@PathVariable @Min(1) Long id) {
+        BuyerCompanyDetailVO result = service.getById(id);
         return ApiResponse.success(result);
     }
 
@@ -87,10 +87,10 @@ public class BuyerCompanyController {
      * @return
      */
     @PostMapping
-    public ResponseEntity<ApiResponse<BuyerCompanyDetailResponse>> create(
+    public ResponseEntity<ApiResponse<BuyerCompanyDetailVO>> create(
             @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail,
-            @Valid @RequestBody BuyerCompanyUpsertRequest request) {
-        BuyerCompanyDetailResponse result = service.create(request);
+            @Valid @RequestBody BuyerCompanyUpsertDTO request) {
+        BuyerCompanyDetailVO result = service.create(request);
         operationLog.record(BUYER_COMPANY, Long.valueOf(result.id()), result.companyName(), CREATE, operatorEmail);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success(result));
@@ -104,13 +104,13 @@ public class BuyerCompanyController {
      * @return
      */
     @PutMapping("/{id}")
-    public ApiResponse<BuyerCompanyDetailResponse> update(
+    public ApiResponse<BuyerCompanyDetailVO> update(
             @PathVariable @Min(1) Long id,
             @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail,
-            @Valid @RequestBody BuyerCompanyUpsertRequest request) {
+            @Valid @RequestBody BuyerCompanyUpsertDTO request) {
         // 变更前快照：日志只记录本次真正变化的字段，需要拿到修改前的值（与模板删除的取快照方式一致）
-        BuyerCompanyDetailResponse before = service.getById(id);
-        BuyerCompanyDetailResponse result = service.update(id, request);
+        BuyerCompanyDetailVO before = service.getById(id);
+        BuyerCompanyDetailVO result = service.update(id, request);
         // 日志记录
         operationLog.record(BUYER_COMPANY, id, result.companyName(), UPDATE, operatorEmail,
                 companyChanges(before, result));
@@ -123,7 +123,7 @@ public class BuyerCompanyController {
      * <p>签章相关字段（sealName / sealUrl / sealBase64 / fadadaSealId / sealFlowStatus）由签章维护接口负责，
      * 不在这里记录 —— 其中 sealBase64 还可能很长，落进日志没有检索价值。</p>
      */
-    private static Map<String, Object> companyChanges(BuyerCompanyDetailResponse before, BuyerCompanyDetailResponse after) {
+    private static Map<String, Object> companyChanges(BuyerCompanyDetailVO before, BuyerCompanyDetailVO after) {
         return changes(
                 of("companyName", before.companyName(), after.companyName()),
                 of("companyShortName", before.companyShortName(), after.companyShortName()),

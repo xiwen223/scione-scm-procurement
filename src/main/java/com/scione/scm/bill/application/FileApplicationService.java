@@ -3,7 +3,7 @@ package com.scione.scm.bill.application;
 import com.scione.api.data.client.S3Client;
 import com.scione.api.data.dto.FileInfo;
 import com.scione.common.response.ApiResponse;
-import com.scione.scm.bill.application.dto.FileUploadResponse;
+import com.scione.scm.bill.application.vo.FileUploadVO;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import feign.FeignException;
@@ -37,7 +37,7 @@ public class FileApplicationService {
      * 上传文件到对象存储，返回 objectKey 与访问地址；
      * 上传接口不落库，objectKey 由调用方在保存业务数据时写入。
      */
-    public FileUploadResponse upload(MultipartFile file, String path) {
+    public FileUploadVO upload(MultipartFile file, String path) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "上传文件不能为空");
         }
@@ -49,7 +49,7 @@ public class FileApplicationService {
             throw storageError("上传文件", "存储服务未返回 objectKey");
         }
 
-        return new FileUploadResponse(fileInfo.getObjectKey(), fileInfo.getUrl(),
+        return new FileUploadVO(fileInfo.getObjectKey(), fileInfo.getUrl(),
                 fileInfo.getOriginalName(), fileInfo.getContentType(), fileInfo.getSize());
     }
 

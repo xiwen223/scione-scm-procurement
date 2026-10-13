@@ -4,12 +4,12 @@ import com.scione.common.model.PageResult;
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.ContractTemplateApplicationService;
 import com.scione.scm.bill.application.ProcurementOperationLogRecorder;
-import com.scione.scm.bill.application.dto.ContractTemplateDetailResponse;
-import com.scione.scm.bill.application.dto.ContractTemplateIdRequest;
-import com.scione.scm.bill.application.dto.ContractTemplateListItemResponse;
-import com.scione.scm.bill.application.dto.ContractTemplatePageRequest;
-import com.scione.scm.bill.application.dto.ContractTemplateUpdateRequest;
-import com.scione.scm.bill.application.dto.ContractTemplateUpsertRequest;
+import com.scione.scm.bill.application.vo.ContractTemplateDetailVO;
+import com.scione.scm.bill.application.dto.ContractTemplateIdDTO;
+import com.scione.scm.bill.application.vo.ContractTemplateListItemVO;
+import com.scione.scm.bill.application.dto.ContractTemplatePageDTO;
+import com.scione.scm.bill.application.dto.ContractTemplateUpdateDTO;
+import com.scione.scm.bill.application.dto.ContractTemplateUpsertDTO;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -46,9 +46,9 @@ public class ContractTemplateController {
     private final ProcurementOperationLogRecorder operationLog;
 
     @PostMapping("/page")
-    public ApiResponse<PageResult<ContractTemplateListItemResponse>> page(
-            @Valid @RequestBody ContractTemplatePageRequest request) {
-        PageResult<ContractTemplateListItemResponse> result = service.findPage(
+    public ApiResponse<PageResult<ContractTemplateListItemVO>> page(
+            @Valid @RequestBody ContractTemplatePageDTO request) {
+        PageResult<ContractTemplateListItemVO> result = service.findPage(
                 request.keyword(),
                 request.contractType(),
                 request.isActive(),
@@ -59,17 +59,17 @@ public class ContractTemplateController {
     }
 
     @PostMapping("/detail")
-    public ApiResponse<ContractTemplateDetailResponse> detail(
-            @Valid @RequestBody ContractTemplateIdRequest request) {
-        ContractTemplateDetailResponse result = service.getById(request.id());
+    public ApiResponse<ContractTemplateDetailVO> detail(
+            @Valid @RequestBody ContractTemplateIdDTO request) {
+        ContractTemplateDetailVO result = service.getById(request.id());
         return ApiResponse.success(result);
     }
 
     @PostMapping("/create")
-    public ResponseEntity<ApiResponse<ContractTemplateDetailResponse>> create(
+    public ResponseEntity<ApiResponse<ContractTemplateDetailVO>> create(
             @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail,
-            @Valid @RequestBody ContractTemplateUpsertRequest request) {
-        ContractTemplateDetailResponse result = service.create(request);
+            @Valid @RequestBody ContractTemplateUpsertDTO request) {
+        ContractTemplateDetailVO result = service.create(request);
         operationLog.record(CONTRACT_TEMPLATE, Long.valueOf(result.id()), result.templateName(), CREATE,
                 operatorEmail);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -77,12 +77,12 @@ public class ContractTemplateController {
     }
 
     @PostMapping("/update")
-    public ApiResponse<ContractTemplateDetailResponse> update(
+    public ApiResponse<ContractTemplateDetailVO> update(
             @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail,
-            @Valid @RequestBody ContractTemplateUpdateRequest request) {
+            @Valid @RequestBody ContractTemplateUpdateDTO request) {
         // 变更前快照：日志只记录本次真正变化的字段，需要拿到修改前的值（与公司编辑、模板删除一致）
-        ContractTemplateDetailResponse before = service.getById(request.id());
-        ContractTemplateDetailResponse result = service.update(request.id(), request.toUpsertRequest());
+        ContractTemplateDetailVO before = service.getById(request.id());
+        ContractTemplateDetailVO result = service.update(request.id(), request.toUpsertRequest());
         operationLog.record(CONTRACT_TEMPLATE, request.id(), result.templateName(), UPDATE,
                 operatorEmail, templateChanges(before, result));
         return ApiResponse.success(result);
@@ -91,7 +91,7 @@ public class ContractTemplateController {
     @PostMapping("/delete")
     public ApiResponse<Void> delete(
             @RequestHeader(value = OPERATOR_HEADER, required = false) String operatorEmail,
-            @Valid @RequestBody ContractTemplateIdRequest request) {
+            @Valid @RequestBody ContractTemplateIdDTO request) {
         // 逻辑删除不会清掉名称，但日志要留名称快照，所以在删除前先读取一次
         String templateName = service.getById(request.id()).templateName();
         service.delete(request.id());
@@ -100,8 +100,8 @@ public class ContractTemplateController {
     }
 
     /** 编辑模板的变更详情：只记录本次真正变化的字段及其修改前后值。 */
-    private static Map<String, Object> templateChanges(ContractTemplateDetailResponse before,
-                                                       ContractTemplateDetailResponse after) {
+    private static Map<String, Object> templateChanges(ContractTemplateDetailVO before,
+                                                       ContractTemplateDetailVO after) {
         return changes(
                 of("templateName", before.templateName(), after.templateName()),
                 of("contractType", before.contractType(), after.contractType()),

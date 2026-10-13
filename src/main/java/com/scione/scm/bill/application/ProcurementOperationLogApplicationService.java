@@ -1,9 +1,9 @@
 package com.scione.scm.bill.application;
 
 import com.scione.common.model.PageResult;
-import com.scione.scm.bill.application.dto.ProcurementBusinessTypeResponse;
-import com.scione.scm.bill.application.dto.ProcurementOperationLogListItemResponse;
-import com.scione.scm.bill.application.dto.ProcurementOperationTypeResponse;
+import com.scione.scm.bill.application.vo.ProcurementBusinessTypeVO;
+import com.scione.scm.bill.application.vo.ProcurementOperationLogListItemVO;
+import com.scione.scm.bill.application.vo.ProcurementOperationTypeVO;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.domain.procurementlog.enums.ProcurementBusinessType;
@@ -24,20 +24,20 @@ public class ProcurementOperationLogApplicationService {
 
     private final ProcurementOperationLogMapper mapper;
 
-    public List<ProcurementBusinessTypeResponse> businessTypes() {
+    public List<ProcurementBusinessTypeVO> businessTypes() {
         return Arrays.stream(ProcurementBusinessType.values())
-                .map(type -> new ProcurementBusinessTypeResponse(type.getCode(), type.getName()))
+                .map(type -> new ProcurementBusinessTypeVO(type.getCode(), type.getName()))
                 .toList();
     }
 
     /** 操作类型下拉选项：前端筛选下拉与列表「操作类型」列的展示共用这一份数据。 */
-    public List<ProcurementOperationTypeResponse> operationTypes() {
+    public List<ProcurementOperationTypeVO> operationTypes() {
         return Arrays.stream(ProcurementOperationType.values())
-                .map(type -> new ProcurementOperationTypeResponse(type.getCode(), type.getLabel()))
+                .map(type -> new ProcurementOperationTypeVO(type.getCode(), type.getLabel()))
                 .toList();
     }
 
-    public PageResult<ProcurementOperationLogListItemResponse> findPage(
+    public PageResult<ProcurementOperationLogListItemVO> findPage(
             String dataName,
             Integer businessType,
             String operationType,
@@ -83,11 +83,11 @@ public class ProcurementOperationLogApplicationService {
                         .toList());
     }
 
-    private ProcurementOperationLogListItemResponse toListItem(ProcurementOperationLogPO log) {
+    private ProcurementOperationLogListItemVO toListItem(ProcurementOperationLogPO log) {
         String businessTypeText = ProcurementBusinessType.findByCode(log.getBusinessType())
                 .map(ProcurementBusinessType::getName)
                 .orElse("未知业务");
-        return new ProcurementOperationLogListItemResponse(
+        return new ProcurementOperationLogListItemVO(
                 log.getId(),
                 log.getBusinessType(),
                 businessTypeText,

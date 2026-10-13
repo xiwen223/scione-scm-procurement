@@ -58,8 +58,8 @@ public class PoSyncAppService {
         List<PurchaseOrderData> orders;
         try {
             orders = purchaseOrderClient.fetchPurchaseOrders(startTime, endTime, SEARCH_FIELD_UPDATE_TIME);
-            //todo:异常捕获大一点
-        } catch (RuntimeException ex) {
+            if (orders == null) throw new IllegalStateException("领星采购单接口返回空响应列表");
+        } catch (Exception ex) {
             // 拉取本身失败（网络/签名/限流等）：整批放弃，记错误日志，不抛给调度器让它反复报警
             log.error("采购单拉取失败，窗口 [{} ~ {}]", startTime, endTime, ex);
             return new SyncResult(0, 0, 0,
@@ -71,16 +71,21 @@ public class PoSyncAppService {
         List<String> successOrderNos = new ArrayList<>();
 
         for (PurchaseOrderData order : orders) {
-            String orderSn = order.orderSn();
-            if (!StringUtils.hasText(orderSn)) {
-                // 采购单号是唯一键、非空，缺了无法落库，只能跳过
-                failed++;
-                log.info("跳过无采购单号的记录：{}", order);
-                continue;
-            }
+            String orderSn = null;
+            String stage = "记录校验";
+            boolean saved = false;
             try {
-                poSyncRepository.save(toRecord(order, syncTime));
+                // 每条记录从取单号起独立捕获，脏记录不能中断后续采购单。
+                if (order == null) throw new IllegalArgumentException("采购单记录为空");
+                orderSn = order.orderSn();
+                if (!StringUtils.hasText(orderSn)) throw new IllegalArgumentException("采购单号为空");
+                stage = "数据转换";
+                PoSyncRecord record = toRecord(order, syncTime);
+                stage = "保存采购单及明细";
+                poSyncRepository.save(record);
+                saved = true;
                 success++;
+                stage = "同步后处理";
                 //todo：状态做成枚举
                 // 只有领星状态=1（待下单）的 PO 才会进入自动创建；其他状态留痕后跳过。
                 if (Integer.valueOf(1).equals(order.status())) {
@@ -93,9 +98,14 @@ public class PoSyncAppService {
                     contractRepository.saveOperationLog(ContractOperationLog.ofCreateSkipped(orderSn, reason));
                     log.info("同步 PO 后跳过自动创建：{}", reason);
                 }
-            } catch (RuntimeException ex) {
-                failed++;
-                log.error("采购单落库失败，orderSn={}", orderSn, ex);
+            } catch (Exception ex) {
+                // 已保存的 PO 仍计同步成功；后续日志等操作失败不能重复计入 failed。
+                if (saved) {
+                    log.error("采购单已同步，后续处理失败：orderSn={}, stage={}，继续处理下一条", orderSn, stage, ex);
+                } else {
+                    failed++;
+                    log.error("采购单同步失败：orderSn={}, stage={}，继续处理下一条", orderSn, stage, ex);
+                }
             }
         }
 

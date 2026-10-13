@@ -1,8 +1,8 @@
 package com.scione.scm.bill.application;
 
-import com.scione.scm.bill.application.dto.ContractItemUpdateRequest;
-import com.scione.scm.bill.application.dto.ContractUpdateRequest;
-import com.scione.scm.bill.application.dto.ContractUpdateResponse;
+import com.scione.scm.bill.application.dto.ContractItemUpdateDTO;
+import com.scione.scm.bill.application.dto.ContractUpdateDTO;
+import com.scione.scm.bill.application.vo.ContractUpdateVO;
 import com.scione.scm.bill.application.port.ContractTemplateService;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
@@ -51,7 +51,7 @@ public class ContractUpdateService {
 
     /** 统一保存合同主信息、折扣及商品明细，所有变更在同一事务提交。 */
     @Transactional
-    public ContractUpdateResponse updateContract(Long contractId, ContractUpdateRequest request, String operatorEmail) {
+    public ContractUpdateVO updateContract(Long contractId, ContractUpdateDTO request, String operatorEmail) {
         // 只改折扣的判断现在仅选择日志描述，不再分成第二套保存或 PDF 生成流程。
         // todo：取消这个私有方法
         String operationDesc = isDiscountOnlyRequest(request)
@@ -59,7 +59,7 @@ public class ContractUpdateService {
         return updateContractInternal(contractId, request, operatorEmail, operationDesc);
     }
 
-    private boolean isDiscountOnlyRequest(ContractUpdateRequest request) {
+    private boolean isDiscountOnlyRequest(ContractUpdateDTO request) {
         return request.getDiscountedAmount() != null
                 && request.getOriginalAmount() == null
                 && !StringUtils.hasText(request.getContractNo())
@@ -86,7 +86,7 @@ public class ContractUpdateService {
                 && (request.getItems() == null || request.getItems().isEmpty());
     }
 
-    private ContractUpdateResponse updateContractInternal(Long contractId, ContractUpdateRequest request,
+    private ContractUpdateVO updateContractInternal(Long contractId, ContractUpdateDTO request,
                                                           String operatorEmail, String operationDesc) {
         log.info("开始修改合同：contractId={}", contractId);
 
@@ -123,7 +123,7 @@ public class ContractUpdateService {
             recalculateContractAmount(contract, changeDetails);
         }
         if (changeDetails.isEmpty()) {
-            return new ContractUpdateResponse(contractId, contract.getContractNo(), contract.getContractPdfUrl(), "合同无变更");
+            return new ContractUpdateVO(contractId, contract.getContractNo(), contract.getContractPdfUrl(), "合同无变更");
         }
         String contractNo = contract.getContractNo();
         if (mainChanged) {
@@ -156,7 +156,7 @@ public class ContractUpdateService {
         log.info("合同编辑完成，跳过 PDF 重生成：contractNo={}, operation={}, originalAmount={}, discountAmount={}, actualAmount={}",
                 contractNo, operationDesc, contract.getOriginalAmount(), contract.getDiscountedAmount(), contract.getContractAmount());
 
-        return new ContractUpdateResponse(
+        return new ContractUpdateVO(
                 contractId,
                 contractNo,
                 fileUrl,
@@ -168,7 +168,7 @@ public class ContractUpdateService {
     /**
      * 应用字段更新。
      */
-    private boolean applyFieldUpdates(Contract contract, ContractUpdateRequest request, List<String> changeDetails) {
+    private boolean applyFieldUpdates(Contract contract, ContractUpdateDTO request, List<String> changeDetails) {
         String contractNo = contract.getContractNo();
 
         // 合同编号：主表 + 明细冗余列 + 操作日志快照三处都要一致。
@@ -439,7 +439,7 @@ public class ContractUpdateService {
     /**
      * 应用明细修改。
      */
-    private List<ContractItem> applyItemUpdates(Contract contract, ContractUpdateRequest request, List<String> changeDetails) {
+    private List<ContractItem> applyItemUpdates(Contract contract, ContractUpdateDTO request, List<String> changeDetails) {
         if (request.getItems() == null || request.getItems().isEmpty()) {
             return List.of();
         }
@@ -454,7 +454,7 @@ public class ContractUpdateService {
 
         log.info("开始修改合同明细：contractNo={}, requestItemCount={}", contractNo, request.getItems().size());
 
-        for (ContractItemUpdateRequest itemRequest : request.getItems()) {
+        for (ContractItemUpdateDTO itemRequest : request.getItems()) {
             Long itemId = itemRequest.getId();
             if (itemId == null) {
                 throw new BusinessException(ResultCode.PARAM_ERROR,
@@ -524,7 +524,7 @@ public class ContractUpdateService {
      * <p>只允许改数量和不含税单价；金额一律由系统按 数量 × 单价 重算，不接受调用方传入；
      * 交货日期与备注暂不支持修改，传了就明确报错而不是悄悄忽略。</p>
      */
-    private void validateItemUpdate(ContractItemUpdateRequest itemRequest) {
+    private void validateItemUpdate(ContractItemUpdateDTO itemRequest) {
         if (itemRequest.getQuantity() != null && itemRequest.getQuantity() <= 0) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "明细数量必须大于0");
         }

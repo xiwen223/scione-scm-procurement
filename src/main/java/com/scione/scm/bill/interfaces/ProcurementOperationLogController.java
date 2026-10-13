@@ -3,9 +3,9 @@ package com.scione.scm.bill.interfaces;
 import com.scione.common.model.PageResult;
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.ProcurementOperationLogApplicationService;
-import com.scione.scm.bill.application.dto.ProcurementBusinessTypeResponse;
-import com.scione.scm.bill.application.dto.ProcurementOperationLogListItemResponse;
-import com.scione.scm.bill.application.dto.ProcurementOperationTypeResponse;
+import com.scione.scm.bill.application.vo.ProcurementBusinessTypeVO;
+import com.scione.scm.bill.application.vo.ProcurementOperationLogListItemVO;
+import com.scione.scm.bill.application.vo.ProcurementOperationTypeVO;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -30,7 +30,7 @@ public class ProcurementOperationLogController {
     private final ProcurementOperationLogApplicationService service;
 
     @GetMapping
-    public ApiResponse<PageResult<ProcurementOperationLogListItemResponse>> page(
+    public ApiResponse<PageResult<ProcurementOperationLogListItemVO>> page(
             @RequestParam(required = false) String dataName,
             @RequestParam(required = false) Integer businessType,
             @RequestParam(required = false) String operationType,
@@ -51,13 +51,13 @@ public class ProcurementOperationLogController {
     }
 
     @GetMapping("/business-types")
-    public ApiResponse<List<ProcurementBusinessTypeResponse>> businessTypes() {
+    public ApiResponse<List<ProcurementBusinessTypeVO>> businessTypes() {
         return ApiResponse.success(service.businessTypes());
     }
 
     /** 操作类型下拉选项：供列表筛选下拉与「操作类型」列的中文名使用。 */
     @GetMapping("/operation-types")
-    public ApiResponse<List<ProcurementOperationTypeResponse>> operationTypes() {
+    public ApiResponse<List<ProcurementOperationTypeVO>> operationTypes() {
         return ApiResponse.success(service.operationTypes());
     }
 }
