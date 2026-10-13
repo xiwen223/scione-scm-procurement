@@ -1,9 +1,9 @@
 package com.scione.scm.bill.application;
 
 import com.scione.common.model.PageResult;
-import com.scione.scm.bill.application.dto.ContractTemplateDetailResponse;
-import com.scione.scm.bill.application.dto.ContractTemplateListItemResponse;
-import com.scione.scm.bill.application.dto.ContractTemplateUpsertRequest;
+import com.scione.scm.bill.application.vo.ContractTemplateDetailVO;
+import com.scione.scm.bill.application.vo.ContractTemplateListItemVO;
+import com.scione.scm.bill.application.dto.ContractTemplateUpsertDTO;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.domain.contract.enums.ContractType;
@@ -24,7 +24,7 @@ public class ContractTemplateApplicationService {
 
     private final ContractTemplateMapper mapper;
 
-    public PageResult<ContractTemplateListItemResponse> findPage(
+    public PageResult<ContractTemplateListItemVO> findPage(
             String keyword,
             Integer contractType,
             Boolean isActive,
@@ -46,13 +46,13 @@ public class ContractTemplateApplicationService {
                         .toList());
     }
 
-    public ContractTemplateDetailResponse getById(Long id) {
+    public ContractTemplateDetailVO getById(Long id) {
         ContractTemplatePO template = requireTemplate(id);
         return toDetail(template);
     }
 
     @Transactional
-    public ContractTemplateDetailResponse create(ContractTemplateUpsertRequest request) {
+    public ContractTemplateDetailVO create(ContractTemplateUpsertDTO request) {
         ContractTemplatePO template = toNewPO(request);
 
         if (isDefault(template)) {
@@ -64,7 +64,7 @@ public class ContractTemplateApplicationService {
     }
 
     @Transactional
-    public ContractTemplateDetailResponse update(Long id, ContractTemplateUpsertRequest request) {
+    public ContractTemplateDetailVO update(Long id, ContractTemplateUpsertDTO request) {
         ContractTemplatePO current = requireTemplate(id);
         ContractTemplatePO template = toUpdatedPO(current, request);
         validateDefaultTransition(current, template);
@@ -91,13 +91,13 @@ public class ContractTemplateApplicationService {
         mapper.deleteById(id);
     }
 
-    private ContractTemplatePO toNewPO(ContractTemplateUpsertRequest request) {
+    private ContractTemplatePO toNewPO(ContractTemplateUpsertDTO request) {
         ContractTemplatePO template = new ContractTemplatePO();
         apply(template, request);
         return template;
     }
 
-    private ContractTemplatePO toUpdatedPO(ContractTemplatePO current, ContractTemplateUpsertRequest request) {
+    private ContractTemplatePO toUpdatedPO(ContractTemplatePO current, ContractTemplateUpsertDTO request) {
         ContractTemplatePO template = new ContractTemplatePO();
         template.setId(current.getId());
         apply(template, mergeForUpdate(current, request));
@@ -110,9 +110,9 @@ public class ContractTemplateApplicationService {
      *
      * <p>这样前端只需提交变化字段，编辑时也不会因为漏传某个字段而把库里的值清掉。</p>
      */
-    private static ContractTemplateUpsertRequest mergeForUpdate(ContractTemplatePO current,
-                                                               ContractTemplateUpsertRequest request) {
-        return new ContractTemplateUpsertRequest(
+    private static ContractTemplateUpsertDTO mergeForUpdate(ContractTemplatePO current,
+                                                               ContractTemplateUpsertDTO request) {
+        return new ContractTemplateUpsertDTO(
                 request.templateName() == null ? current.getTemplateName() : request.templateName(),
                 request.contractType() == null ? current.getContractType() : request.contractType(),
                 request.objectKey() == null ? current.getObjectKey() : request.objectKey(),
@@ -120,7 +120,7 @@ public class ContractTemplateApplicationService {
                 request.isActive() == null ? Boolean.valueOf(isActive(current)) : request.isActive());
     }
 
-    private void apply(ContractTemplatePO template, ContractTemplateUpsertRequest request) {
+    private void apply(ContractTemplatePO template, ContractTemplateUpsertDTO request) {
         String templateName = requireText(request.templateName(), "模板名称不能为空");
         if (!ContractType.supports(request.contractType())) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "合同类型不合法");
@@ -167,8 +167,8 @@ public class ContractTemplateApplicationService {
                 .orElseThrow(() -> new BusinessException(ResultCode.CONTRACT_TEMPLATE_NOT_FOUND));
     }
 
-    private ContractTemplateDetailResponse toDetail(ContractTemplatePO po) {
-        return new ContractTemplateDetailResponse(
+    private ContractTemplateDetailVO toDetail(ContractTemplatePO po) {
+        return new ContractTemplateDetailVO(
                 String.valueOf(po.getId()),
                 po.getTemplateName(),
                 po.getContractType(),
@@ -180,8 +180,8 @@ public class ContractTemplateApplicationService {
                 po.getUpdateTime());
     }
 
-    private ContractTemplateListItemResponse toListItem(ContractTemplatePO po) {
-        return new ContractTemplateListItemResponse(
+    private ContractTemplateListItemVO toListItem(ContractTemplatePO po) {
+        return new ContractTemplateListItemVO(
                 String.valueOf(po.getId()),
                 po.getTemplateName(),
                 po.getContractType(),

@@ -1,7 +1,7 @@
 package com.scione.scm.bill.application;
 
-import com.scione.scm.bill.application.dto.ShippingMarkImportDTO;
-import com.scione.scm.bill.application.dto.ShippingMarkParseDTO;
+import com.scione.scm.bill.application.vo.ShippingMarkImportVO;
+import com.scione.scm.bill.application.vo.ShippingMarkParseVO;
 import com.scione.scm.bill.application.port.ShippingMarkFileStore;
 import com.scione.scm.bill.application.port.ShippingMarkImportParser;
 import com.scione.scm.bill.application.port.ShippingMarkImportParser.ImageData;
@@ -37,7 +37,7 @@ public class ShippingMarkImportAppService {
     private final ShippingMarkRepository repository;
     private final ShippingMarkTaskDispatcher taskDispatcher;
 
-    public ShippingMarkImportDTO importFile(ImportDocument document, String createdBy, String creator) {
+    public ShippingMarkImportVO importFile(ImportDocument document, String createdBy, String creator) {
         ShippingMarkImportParser.ParsedImport parsed = importParser.parse(document);
         String operatorId = createdBy == null || createdBy.isBlank() ? SYSTEM_OPERATOR_ID : createdBy.trim();
         String operatorName = creator == null || creator.isBlank() ? SYSTEM_OPERATOR_NAME : creator.trim();
@@ -52,16 +52,16 @@ public class ShippingMarkImportAppService {
         mark.start();
         repository.save(mark);
         taskDispatcher.dispatch(mark.getId());
-        return new ShippingMarkImportDTO(mark.getId(), billNo, parsed.fileName(), mark.getDetails().size());
+        return new ShippingMarkImportVO(mark.getId(), billNo, parsed.fileName(), mark.getDetails().size());
     }
 
-    public ShippingMarkParseDTO parse(ImportDocument document) {
+    public ShippingMarkParseVO parse(ImportDocument document) {
         ShippingMarkImportParser.ParsedImport parsed = importParser.parse(document);
-        List<ShippingMarkParseDTO.Detail> details = parsed.details().stream()
-                .map(detail -> new ShippingMarkParseDTO.Detail(
+        List<ShippingMarkParseVO.Detail> details = parsed.details().stream()
+                .map(detail -> new ShippingMarkParseVO.Detail(
                         detail.purchaseOrderNo(), detail.skuCode(), detail.skuName(), toDataUri(detail.image())))
                 .toList();
-        return new ShippingMarkParseDTO(parsed.fileName(), details);
+        return new ShippingMarkParseVO(parsed.fileName(), details);
     }
 
     private String toDataUri(ImageData image) {

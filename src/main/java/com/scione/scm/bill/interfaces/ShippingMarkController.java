@@ -1,5 +1,11 @@
 package com.scione.scm.bill.interfaces;
 
+import com.scione.scm.bill.application.vo.ShippingMarkImportVO;
+import com.scione.scm.bill.application.vo.ShippingMarkListItemVO;
+import com.scione.scm.bill.application.vo.ShippingMarkParseVO;
+import com.scione.scm.bill.application.vo.ShippingMarkPreviewVO;
+import com.scione.scm.bill.application.vo.ShippingMarkVO;
+
 import com.scione.common.model.PageResult;
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.ShippingMarkAppService;
@@ -42,12 +48,12 @@ public class ShippingMarkController {
     private final ShippingMarkFileAppService fileAppService;
 
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<ApiResponse<ShippingMarkImportDTO>> importFile(
+    public ResponseEntity<ApiResponse<ShippingMarkImportVO>> importFile(
             @RequestPart("file") MultipartFile file,
             @RequestParam(value = "operatorId", required = false) String operatorId,
             @RequestParam(value = "operatorName", required = false) String operatorName) {
         try {
-            ShippingMarkImportDTO result = importAppService.importFile(importDocument(file), operatorId, operatorName);
+            ShippingMarkImportVO result = importAppService.importFile(importDocument(file), operatorId, operatorName);
             return ResponseEntity.status(HttpStatus.ACCEPTED)
                     .body(ApiResponse.success("导入任务已创建", result));
         } catch (BusinessException exception) {
@@ -57,7 +63,7 @@ public class ShippingMarkController {
     }
 
     @PostMapping(value = "/parse", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ApiResponse<ShippingMarkParseDTO> parse(@RequestPart("file") MultipartFile file) {
+    public ApiResponse<ShippingMarkParseVO> parse(@RequestPart("file") MultipartFile file) {
         try {
             return ApiResponse.success(importAppService.parse(importDocument(file)));
         } catch (BusinessException exception) {
@@ -66,7 +72,7 @@ public class ShippingMarkController {
     }
 
     @GetMapping
-    public ApiResponse<PageResult<ShippingMarkListItemDTO>> list(
+    public ApiResponse<PageResult<ShippingMarkListItemVO>> list(
             @RequestParam(value = "bill_no", required = false) String billNo,
             @RequestParam(value = "bill_name", required = false) String billName,
             @RequestParam(value = "creator", required = false) String creator,
@@ -78,7 +84,7 @@ public class ShippingMarkController {
     }
 
     @GetMapping("/{markId}")
-    public ApiResponse<ShippingMarkDTO> detail(@PathVariable Long markId) {
+    public ApiResponse<ShippingMarkVO> detail(@PathVariable Long markId) {
         return ApiResponse.success(shippingMarkAppService.getById(markId));
     }
 
@@ -92,7 +98,7 @@ public class ShippingMarkController {
      * 也支持包含主单 ID 的显式明细路径，方便调用方避免 ID 语义歧义。
      */
     @GetMapping({"/{detailId}/preview"})
-    public ApiResponse<ShippingMarkPreviewDTO> preview(@PathVariable Long detailId) {
+    public ApiResponse<ShippingMarkPreviewVO> preview(@PathVariable Long detailId) {
         return ApiResponse.success(downloadAppService.preview(detailId));
     }
 
@@ -103,7 +109,7 @@ public class ShippingMarkController {
     }
 
     @PostMapping("/download")
-    public ResponseEntity<byte[]> downloadBatch(@Valid @org.springframework.web.bind.annotation.RequestBody BatchDownloadCmd command) {
+    public ResponseEntity<byte[]> downloadBatch(@Valid @org.springframework.web.bind.annotation.RequestBody BatchDownloadDTO command) {
         return attachment(downloadAppService.downloadBatch(command.markIds()), "shipping-marks.zip", MediaType.APPLICATION_OCTET_STREAM);
     }
 

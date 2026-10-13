@@ -1,0 +1,38 @@
+package com.scione.scm.bill.application.vo;
+
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.scione.scm.bill.domain.deliveryanalysis.PurchaseDeliveryEvent;
+import lombok.Data;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+@Data
+public class PurchaseDeliveryEventVO {
+    private String eventId;
+    private String sourceType;
+    private String sourceSn;
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private LocalDateTime eventTime;
+    private String title;
+    private String description;
+    private String operator;
+    private Long quantity;
+    private Long cumulativeQuantity;
+    private BigDecimal amount;
+
+    public static PurchaseDeliveryEventVO from(PurchaseDeliveryEvent event) {
+        PurchaseDeliveryEventVO dto = new PurchaseDeliveryEventVO();
+        dto.setEventId(event.eventId());
+        dto.setSourceType(event.sourceType());
+        dto.setSourceSn(event.sourceSn());
+        dto.setEventTime(event.eventTime());
+        dto.setTitle(event.title());
+        dto.setDescription(event.description());
+        dto.setOperator(event.operator());
+        dto.setQuantity(event.quantity());
+        dto.setCumulativeQuantity(event.cumulativeQuantity());
+        dto.setAmount(event.amount());
+        return dto;
+    }
+}

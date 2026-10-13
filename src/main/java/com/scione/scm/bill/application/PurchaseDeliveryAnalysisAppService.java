@@ -1,13 +1,13 @@
 package com.scione.scm.bill.application;
 
 import com.scione.common.model.PageResult;
-import com.scione.scm.bill.application.dto.PurchaseDeliveryFilterOptionsDTO;
-import com.scione.scm.bill.application.dto.PurchaseDeliveryOrderDTO;
-import com.scione.scm.bill.application.dto.PurchaseDeliveryOrderDetailDTO;
-import com.scione.scm.bill.application.dto.PurchaseDeliveryOrderSkuLineDTO;
-import com.scione.scm.bill.application.dto.PurchaseDeliveryPlanDTO;
-import com.scione.scm.bill.application.dto.PurchaseDeliveryPlanDetailDTO;
-import com.scione.scm.bill.application.dto.PurchaseDeliverySummaryDTO;
+import com.scione.scm.bill.application.vo.PurchaseDeliveryFilterOptionsVO;
+import com.scione.scm.bill.application.vo.PurchaseDeliveryOrderVO;
+import com.scione.scm.bill.application.vo.PurchaseDeliveryOrderDetailVO;
+import com.scione.scm.bill.application.vo.PurchaseDeliveryOrderSkuLineVO;
+import com.scione.scm.bill.application.vo.PurchaseDeliveryPlanVO;
+import com.scione.scm.bill.application.vo.PurchaseDeliveryPlanDetailVO;
+import com.scione.scm.bill.application.vo.PurchaseDeliverySummaryVO;
 import com.scione.scm.bill.config.PurchaseDeliveryAnalysisProperties;
 import com.scione.scm.bill.domain.deliveryanalysis.PurchaseDeliveryAnalysisQuery;
 import com.scione.scm.bill.domain.deliveryanalysis.PurchaseDeliveryAnalysisRepository;
@@ -25,47 +25,47 @@ public class PurchaseDeliveryAnalysisAppService {
     private final PurchaseDeliveryAnalysisRepository repository;
     private final PurchaseDeliveryAnalysisProperties properties;
 
-    public PageResult<PurchaseDeliveryPlanDTO> findPage(PurchaseDeliveryAnalysisQuery query) {
+    public PageResult<PurchaseDeliveryPlanVO> findPage(PurchaseDeliveryAnalysisQuery query) {
         PurchaseDeliveryAnalysisQuery scopedQuery = withConfiguredStartDate(query);
         PurchaseDeliveryPage page = repository.findPage(scopedQuery);
         return PageResult.of(scopedQuery.pageNum(), scopedQuery.pageSize(), page.total(),
-                page.records().stream().map(PurchaseDeliveryPlanDTO::from).toList());
+                page.records().stream().map(PurchaseDeliveryPlanVO::from).toList());
     }
 
-    public PurchaseDeliverySummaryDTO summary(PurchaseDeliveryAnalysisQuery query) {
-        return PurchaseDeliverySummaryDTO.from(repository.summary(withConfiguredStartDate(query)));
+    public PurchaseDeliverySummaryVO summary(PurchaseDeliveryAnalysisQuery query) {
+        return PurchaseDeliverySummaryVO.from(repository.summary(withConfiguredStartDate(query)));
     }
 
-    public PurchaseDeliveryFilterOptionsDTO filterOptions(PurchaseDeliveryAnalysisQuery query) {
+    public PurchaseDeliveryFilterOptionsVO filterOptions(PurchaseDeliveryAnalysisQuery query) {
         PurchaseDeliveryAnalysisQuery scopedQuery = withConfiguredStartDate(query);
-        PurchaseDeliveryFilterOptionsDTO dto = new PurchaseDeliveryFilterOptionsDTO();
+        PurchaseDeliveryFilterOptionsVO dto = new PurchaseDeliveryFilterOptionsVO();
         dto.setBuyers(repository.findDistinctBuyers(scopedQuery));
         dto.setSuppliers(repository.findDistinctSuppliers(scopedQuery));
         dto.setWarehouses(repository.findDistinctWarehouses(scopedQuery));
         return dto;
     }
 
-    public List<PurchaseDeliveryOrderDTO> findOrders(String planSn, PurchaseDeliveryAnalysisQuery query) {
+    public List<PurchaseDeliveryOrderVO> findOrders(String planSn, PurchaseDeliveryAnalysisQuery query) {
         return repository.findOrders(planSn, withConfiguredStartDate(query)).stream()
-                .map(PurchaseDeliveryOrderDTO::from)
+                .map(PurchaseDeliveryOrderVO::from)
                 .toList();
     }
 
-    public List<PurchaseDeliveryOrderSkuLineDTO> findOrderSkuLines(
+    public List<PurchaseDeliveryOrderSkuLineVO> findOrderSkuLines(
             String planSn, PurchaseDeliveryAnalysisQuery query) {
         return repository.findOrderSkuLines(planSn, withConfiguredStartDate(query)).stream()
-                .map(PurchaseDeliveryOrderSkuLineDTO::from)
+                .map(PurchaseDeliveryOrderSkuLineVO::from)
                 .toList();
     }
 
-    public PurchaseDeliveryPlanDetailDTO findPlanDetail(String planSn, PurchaseDeliveryAnalysisQuery query) {
-        return PurchaseDeliveryPlanDetailDTO.from(
+    public PurchaseDeliveryPlanDetailVO findPlanDetail(String planSn, PurchaseDeliveryAnalysisQuery query) {
+        return PurchaseDeliveryPlanDetailVO.from(
                 repository.findPlanDetail(planSn, withConfiguredStartDate(query)));
     }
 
-    public PurchaseDeliveryOrderDetailDTO findOrderDetail(String orderSn, String planSn, String sku,
+    public PurchaseDeliveryOrderDetailVO findOrderDetail(String orderSn, String planSn, String sku,
                                                           PurchaseDeliveryAnalysisQuery query) {
-        return PurchaseDeliveryOrderDetailDTO.from(
+        return PurchaseDeliveryOrderDetailVO.from(
                 repository.findOrderDetail(orderSn, planSn, sku, withConfiguredStartDate(query)));
     }
 

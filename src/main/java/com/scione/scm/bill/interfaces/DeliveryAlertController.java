@@ -3,12 +3,12 @@ package com.scione.scm.bill.interfaces;
 import com.scione.common.model.PageResult;
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.DeliveryAlertAppService;
-import com.scione.scm.bill.application.dto.DeliveryAlertComponentDTO;
-import com.scione.scm.bill.application.dto.DeliveryAlertDetailDTO;
-import com.scione.scm.bill.application.dto.DeliveryAlertListItemDTO;
-import com.scione.scm.bill.application.dto.DeliveryAlertSummaryDTO;
-import com.scione.scm.bill.application.dto.DeliveryAlertSyncTimeDTO;
-import com.scione.scm.bill.application.dto.FilterOptionsDTO;
+import com.scione.scm.bill.application.vo.DeliveryAlertComponentVO;
+import com.scione.scm.bill.application.vo.DeliveryAlertDetailVO;
+import com.scione.scm.bill.application.vo.DeliveryAlertListItemVO;
+import com.scione.scm.bill.application.vo.DeliveryAlertSummaryVO;
+import com.scione.scm.bill.application.vo.DeliveryAlertSyncTimeVO;
+import com.scione.scm.bill.application.vo.FilterOptionsVO;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertQuery;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Max;
@@ -38,7 +38,7 @@ public class DeliveryAlertController {
     private final DeliveryAlertAppService deliveryAlertAppService;
 
     @GetMapping
-    public ApiResponse<PageResult<DeliveryAlertListItemDTO>> list(
+    public ApiResponse<PageResult<DeliveryAlertListItemVO>> list(
             @RequestParam(value = "keyword", required = false) String keyword,
             @RequestParam(value = "types", required = false) List<String> types,
             @RequestParam(value = "suppliers", required = false) List<String> suppliers,
@@ -61,7 +61,7 @@ public class DeliveryAlertController {
     }
 
     @GetMapping("/summary")
-    public ApiResponse<DeliveryAlertSummaryDTO> summary(
+    public ApiResponse<DeliveryAlertSummaryVO> summary(
             @RequestParam(value = "keyword", required = false) String keyword,
             @RequestParam(value = "types", required = false) List<String> types,
             @RequestParam(value = "suppliers", required = false) List<String> suppliers,
@@ -80,30 +80,30 @@ public class DeliveryAlertController {
     }
 
     @GetMapping("/filter-options")
-    public ApiResponse<FilterOptionsDTO> filterOptions() {
+    public ApiResponse<FilterOptionsVO> filterOptions() {
         DeliveryAlertQuery query = new DeliveryAlertQuery(
                 null, null, null, null, null, null, null, null, null, null, 1, 1);
         return ApiResponse.success(deliveryAlertAppService.filterOptions(query));
     }
 
     @GetMapping("/last-sync-time")
-    public ApiResponse<DeliveryAlertSyncTimeDTO> lastSyncTime() {
+    public ApiResponse<DeliveryAlertSyncTimeVO> lastSyncTime() {
         return ApiResponse.success(deliveryAlertAppService.lastSyncTime());
     }
 
     @GetMapping("/components")
-    public ApiResponse<List<DeliveryAlertComponentDTO>> components(
+    public ApiResponse<List<DeliveryAlertComponentVO>> components(
             @RequestParam(value = "groupKey") String groupKey) {
         return ApiResponse.success(deliveryAlertAppService.findComponents(groupKey));
     }
 
     @GetMapping("/{groupKey}")
-    public ApiResponse<DeliveryAlertDetailDTO> detail(@PathVariable String groupKey) {
+    public ApiResponse<DeliveryAlertDetailVO> detail(@PathVariable String groupKey) {
         return ApiResponse.success(deliveryAlertAppService.findDetail(groupKey));
     }
 
     @GetMapping("/{groupKey}/components/{componentId}")
-    public ApiResponse<DeliveryAlertDetailDTO> componentDetail(
+    public ApiResponse<DeliveryAlertDetailVO> componentDetail(
             @PathVariable String groupKey,
             @PathVariable Long componentId) {
         return ApiResponse.success(deliveryAlertAppService.findComponentDetail(groupKey, componentId));

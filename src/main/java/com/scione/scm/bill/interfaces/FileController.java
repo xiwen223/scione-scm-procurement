@@ -2,8 +2,8 @@ package com.scione.scm.bill.interfaces;
 
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.FileApplicationService;
-import com.scione.scm.bill.application.dto.FileUploadResponse;
-import com.scione.scm.bill.application.dto.FileUrlRequest;
+import com.scione.scm.bill.application.vo.FileUploadVO;
+import com.scione.scm.bill.application.dto.FileUrlDTO;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -34,7 +34,7 @@ public class FileController {
      * path 为对象存储目录，不传时使用默认目录 other。
      */
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ApiResponse<FileUploadResponse> upload(
+    public ApiResponse<FileUploadVO> upload(
             @RequestPart("file") MultipartFile file,
             @RequestParam(value = "path", required = false) String path) {
         return ApiResponse.success(service.upload(file, path));
@@ -44,7 +44,7 @@ public class FileController {
      * 按 objectKey 获取文件的临时访问地址（预签名 URL），用于页面预览或下载。
      */
     @PostMapping("/file-url")
-    public ApiResponse<String> fileUrl(@Valid @RequestBody FileUrlRequest request) {
+    public ApiResponse<String> fileUrl(@Valid @RequestBody FileUrlDTO request) {
         return ApiResponse.success(service.presignedUrl(request.objectKey(), request.minutes()));
     }
 }

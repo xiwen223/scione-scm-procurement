@@ -1,9 +1,9 @@
 package com.scione.scm.bill.application;
 
 import com.scione.common.model.PageResult;
-import com.scione.scm.bill.application.dto.CreateShippingMarkCmd;
-import com.scione.scm.bill.application.dto.ShippingMarkDTO;
-import com.scione.scm.bill.application.dto.ShippingMarkListItemDTO;
+import com.scione.scm.bill.application.dto.CreateShippingMarkDTO;
+import com.scione.scm.bill.application.vo.ShippingMarkVO;
+import com.scione.scm.bill.application.vo.ShippingMarkListItemVO;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.domain.shippingmark.*;
@@ -24,7 +24,7 @@ public class ShippingMarkAppService {
 
     private final ShippingMarkRepository repository;
 
-    public ShippingMarkDTO create(CreateShippingMarkCmd cmd) {
+    public ShippingMarkVO create(CreateShippingMarkDTO cmd) {
         if (repository.findByBillNo(cmd.getBillNo()).isPresent()) {
             throw new BusinessException(ResultCode.SHIPPING_MARK_ALREADY_EXISTS);
         }
@@ -33,32 +33,32 @@ public class ShippingMarkAppService {
                 cmd.getBillNo(), detail.getPurchaseOrderNo(), detail.getSkuCode(), detail.getSkuName(), detail.getSkuImage(),
                 cmd.getCreatedBy(), cmd.getCreator())));
         repository.save(mark);
-        return ShippingMarkDTO.from(mark);
+        return ShippingMarkVO.from(mark);
     }
 
-    public ShippingMarkDTO getById(Long id) {
+    public ShippingMarkVO getById(Long id) {
         return repository.findById(id)
-                .map(ShippingMarkDTO::from)
+                .map(ShippingMarkVO::from)
                 .orElseThrow(() -> new BusinessException(ResultCode.SHIPPING_MARK_NOT_FOUND));
     }
 
-    public ShippingMarkDTO getByBillNo(String billNo) {
+    public ShippingMarkVO getByBillNo(String billNo) {
         return repository.findByBillNo(billNo)
-                .map(ShippingMarkDTO::from)
+                .map(ShippingMarkVO::from)
                 .orElseThrow(() -> new BusinessException(ResultCode.SHIPPING_MARK_NOT_FOUND));
     }
 
-    public PageResult<ShippingMarkListItemDTO> findPage(
+    public PageResult<ShippingMarkListItemVO> findPage(
             String billNo, String billName, String creator, String status, int pageNum, int pageSize) {
         ShippingMarkQuery query = new ShippingMarkQuery(
                 billNo, billName, creator, parseStatuses(status), pageNum, pageSize);
         ShippingMarkPage page = repository.findPage(query);
         return PageResult.of(pageNum, pageSize, page.total(),
-                page.records().stream().map(ShippingMarkListItemDTO::from).toList());
+                page.records().stream().map(ShippingMarkListItemVO::from).toList());
     }
 
-    public List<ShippingMarkDTO> list() {
-        return repository.findAll().stream().map(ShippingMarkDTO::from).toList();
+    public List<ShippingMarkVO> list() {
+        return repository.findAll().stream().map(ShippingMarkVO::from).toList();
     }
 
     public List<String> listCreators() {

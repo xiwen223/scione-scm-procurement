@@ -1,8 +1,10 @@
 package com.scione.scm.bill.application;
 
+import com.scione.scm.bill.domain.contract.enums.ContractSignLaunchStateEnum;
+
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
-import com.scione.scm.bill.application.dto.ContractCancelRequest;
+import com.scione.scm.bill.application.dto.ContractCancelDTO;
 import com.scione.scm.bill.application.port.ContractFileStore;
 import com.scione.scm.bill.application.port.ContractPdfConverter;
 import com.scione.scm.bill.application.port.ContractTemplateService;
@@ -19,6 +21,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -33,6 +37,7 @@ public class ContractSignAppService {
 
 
     private final ContractRepository contractRepository;
+    private final PlatformTransactionManager transactionManager;
     private final BuyerCompanyRepository buyerCompanyRepository;
     private final ContractFileStore contractFileStore;
     private final ContractPdfConverter contractPdfConverter;
@@ -66,7 +71,7 @@ public class ContractSignAppService {
         log.info("开始发起合同签署：contractId={}, operator={}", contractId, operatorEmail);
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
-        if (contract.getStatus() != ContractStatus.SIGNING || !"RUNNING".equals(contract.getSignLaunchState())) {
+        if (contract.getStatus() != ContractStatus.SIGNING || !ContractSignLaunchStateEnum.RUNNING.matches(contract.getSignLaunchState())) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "签署后台任务状态不正确，无法执行");
         }
         log.info("签署前合同状态校验通过：contractNo={}, status={}", contract.getContractNo(), contract.getStatus());
@@ -109,27 +114,26 @@ public class ContractSignAppService {
         // 后台步骤3：创建需方先签、供方后签的任务；外部已创建但本地未确认时必须保留 UNKNOWN，避免重试重复建任务。
         FadadaOpenApiClient.SignTask task;
         try {
-        task = fadadaOpenApiClient.createPurchaseContractTask(
-                new FadadaOpenApiClient.PurchaseContractTaskRequest(
-                        "采购合同-" + contract.getContractNo(), file.fileId(), contract.getContractNo(),
-                        fadadaProperties.getNotifyUrl(), buyer.getCompanyName(), buyer.getCreditCode(), buyer.getOpenCorpId(), buyer.getEntityId(),
-                        buyer.getFadadaSealId(), buyer.getFadadaFreeSignBusinessId(),
-                        contract.getSupplierName(), signingSupplierCreditCode, signingSupplierPhone, file.fileTotalPages()));
-        log.info("法大大双企业签署任务创建成功：contractNo={}, signTaskId={}", contract.getContractNo(), task.signTaskId());
-        // 创建外部任务成功后保存任务 ID 和等待回调标记；此时尚不能宣称供方已签完。
-        contractRepository.markSigning(contractId, task.signTaskId());
+            task = fadadaOpenApiClient.createPurchaseContractTask(
+                    new FadadaOpenApiClient.PurchaseContractTaskRequest(
+                            "采购合同-" + contract.getContractNo(), file.fileId(), contract.getContractNo(),
+                            fadadaProperties.getNotifyUrl(), buyer.getCompanyName(), buyer.getCreditCode(), buyer.getOpenCorpId(), buyer.getEntityId(),
+                            buyer.getFadadaSealId(), buyer.getFadadaFreeSignBusinessId(),
+                            contract.getSupplierName(), signingSupplierCreditCode, signingSupplierPhone, file.fileTotalPages()));
+            log.info("法大大双企业签署任务创建成功：contractNo={}, signTaskId={}", contract.getContractNo(), task.signTaskId());
+            // 先提交远端任务 ID；日志失败不能回滚它，否则会丢失后续核对依据。
+            TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+            transactionTemplate.executeWithoutResult(status -> contractRepository.markSigning(contractId, task.signTaskId()));
         } catch (Exception ex) {
             String message = "创建法大大任务结果需核对：" + ex.getMessage();
-            contractMapper.failSign(contractId, "UNKNOWN", message.substring(0, Math.min(1000, message.length())));
+            contractMapper.failSign(contractId, ContractSignLaunchStateEnum.UNKNOWN.getCode(), message.substring(0, Math.min(1000, message.length())));
             throw ex;
         }
         log.info("合同状态已更新为签署中：contractNo={}, signTaskId={}", contract.getContractNo(), task.signTaskId());
         logCreatedSignTaskStatus(contract.getContractNo(), task.signTaskId());
         String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
-        contractRepository.saveOperationLog(ContractOperationLog.ofStartSign(
-                contractId, contract.getContractNo(), operator, operator, task.signTaskId(),
-                null));
-        log.info("发起签署操作日志已写入：contractNo={}, signTaskId={}", contract.getContractNo(), task.signTaskId());
+        saveOperationLogSafely(ContractOperationLog.ofStartSign(
+                contractId, contract.getContractNo(), operator, operator, task.signTaskId(), null));
         return new StartSignResult(true, false, List.of());
     }
 
@@ -176,7 +180,7 @@ public class ContractSignAppService {
     }
 
     @FadadaAlertContext(FadadaAlertContext.Type.CONTRACT)
-    public void cancel(Long contractId, ContractCancelRequest request, String operatorEmail) {
+    public void cancel(Long contractId, ContractCancelDTO request, String operatorEmail) {
         Contract contract = contractRepository.findById(contractId)
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同不存在"));
         if (contract.isSignLaunching()) {
@@ -283,11 +287,30 @@ public class ContractSignAppService {
         if (contract.getStatus() == ContractStatus.CREATED) {
             contractQueryService.preserveCancellationSnapshot(contract, operatorEmail);
         }
-        contractRepository.cancel(contractId, reason);
         String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
-        contractRepository.saveOperationLog(ContractOperationLog.ofCancel(
+        ContractOperationLog cancellationLog = ContractOperationLog.ofCancel(
                 contractId, contract.getContractNo(), operator, operator, contract.getStatus().getDesc(), reason,
-                contract.getFadadaTaskId()));
+                contract.getFadadaTaskId());
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+        if (contract.getStatus() == ContractStatus.SIGNING) {
+            // 远端撤销已经成功，本地取消结果必须先提交，不能被日志失败撤销。
+            transactionTemplate.executeWithoutResult(status -> contractRepository.cancel(contractId, reason));
+            saveOperationLogSafely(cancellationLog);
+            return;
+        }
+        transactionTemplate.executeWithoutResult(status -> {
+            contractRepository.cancel(contractId, reason);
+            contractRepository.saveOperationLog(cancellationLog);
+        });
+    }
+
+    /** 远端操作已成功时，审计日志失败只记录错误，不撤销已保存的业务结果。 */
+    private void saveOperationLogSafely(ContractOperationLog operationLog) {
+        try {
+            contractRepository.saveOperationLog(operationLog);
+        } catch (RuntimeException ex) {
+            log.error("合同操作日志保存失败，业务结果已提交：contractId={}", operationLog.getContractId(), ex);
+        }
     }
 
     public record StartSignResult(boolean started, boolean needConfirm, List<String> differences) {
@@ -371,12 +394,18 @@ public class ContractSignAppService {
                 String actorId = actor.path("actorInfo").path("actorId").asText(actor.path("actorId").asText());
                 if (("BUYER_" + contract.getContractNo()).equals(actorId)
                         && "signed".equalsIgnoreCase(actor.path("signStatus").asText())) {
-                    updated = contractMapper.confirmSignLaunch(contractId, contract.getFadadaTaskId()) > 0;
+                    String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
+                    TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+                    updated = Boolean.TRUE.equals(transactionTemplate.execute(status -> {
+                        boolean confirmed = contractMapper.confirmSignLaunch(contractId, contract.getFadadaTaskId()) > 0;
+                        if (confirmed) {
+                            contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(contractId,
+                                    contract.getContractNo(), operator, operator, "我方签署状态兜底同步",
+                                    "法大大确认我方已签署；清除发起签署中子状态；任务ID=" + contract.getFadadaTaskId()));
+                        }
+                        return confirmed;
+                    }));
                     if (updated) {
-                        String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
-                        contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(contractId,
-                                contract.getContractNo(), operator, operator, "我方签署状态兜底同步",
-                                "法大大确认我方已签署；清除发起签署中子状态；任务ID=" + contract.getFadadaTaskId()));
                         log.info("我方签署已确认，兜底清除发起签署中子状态：contractId={}, contractNo={}, taskId={}",
                                 contractId, contract.getContractNo(), contract.getFadadaTaskId());
                     }
@@ -385,11 +414,14 @@ public class ContractSignAppService {
             }
         }
         if (finished && contract.getStatus() == ContractStatus.SIGNING) {
-            contractRepository.markExecuting(contract.getId());
             String operator = StringUtils.hasText(operatorEmail) ? operatorEmail : Contract.SYSTEM_OPERATOR;
-            contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(
-                    contract.getId(), contract.getContractNo(), operator, operator,
-                    "签署状态兜底同步", "法大大任务状态=task_finished；合同状态：签署中 → 履行中"));
+            TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+            transactionTemplate.executeWithoutResult(status -> {
+                contractRepository.markExecuting(contract.getId());
+                contractRepository.saveOperationLog(ContractOperationLog.ofUpdate(
+                        contract.getId(), contract.getContractNo(), operator, operator,
+                        "签署状态兜底同步", "法大大任务状态=task_finished；合同状态：签署中 → 履行中"));
+            });
             updated = true;
             log.info("法大大签署任务兜底同步完成：contractId={}, contractNo={}, signTaskId={}",
                     contract.getId(), contract.getContractNo(), contract.getFadadaTaskId());

@@ -41,6 +41,9 @@ buildNumber.properties
 # Runtime output
 logs/
 
+# AI agent scratch & memory (not project code)
+.workbuddy/
+
 # Local configuration and secrets
 application-local.yml
 application-*.local.yml
