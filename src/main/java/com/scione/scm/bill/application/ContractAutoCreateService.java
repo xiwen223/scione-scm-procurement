@@ -407,17 +407,15 @@ public class ContractAutoCreateService {
         if (missingAccount != null) {
             String reason = "PO=" + poNo + "，供应商=" + po.getSupplierName()
                     + "，供应商ID=" + po.getSupplierId()
-                    + "；分类=资料不完整；步骤=默认收款账户白名单核验；缺失信息=" + missingAccount
+                    + "；分类=资料不完整；步骤=默认收款账户资料核验；缺失信息=" + missingAccount
                     + "；处理=跳过创建，不自动重试";
             log.info("跳过建合同：{}", reason);
             return false;
         }
-        String defaultAccountName = profile.defaultPaymentAccount().get().accountName();
-
-        if (!supplierWhitelist.contains(defaultAccountName)) {
-            String reason = "PO=" + poNo + "，供应商=" + po.getSupplierName() + "，默认收款账户名称="
-                    + defaultAccountName + "；分类=业务规则不满足；步骤=默认账户白名单核验"
-                    + "；原因=默认收款账户名称不在采购合同签约白名单；处理=跳过创建，不自动重试";
+        if (!supplierWhitelist.contains(po.getSupplierName())) {
+            String reason = "PO=" + poNo + "，供应商=" + po.getSupplierName()
+                    + "；分类=业务规则不满足；步骤=供应商名称白名单核验"
+                    + "；原因=供应商名称为空或不在采购合同签约白名单；处理=跳过创建，不自动重试";
             log.info("跳过建合同：{}", reason);
             return false;
         }
