@@ -7,7 +7,7 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
- * 可自动或手动创建采购合同的供应商白名单。
+ * 自动创建采购合同的供应商名称白名单。
  *
  * <p>默认值来自当前业务提供的日常签约供应商清单；可由 Nacos 或应用配置中的
  * {@code contract.supplier-whitelist.names} 覆盖。</p>
@@ -33,12 +33,12 @@ public class ContractSupplierWhitelistProperties {
         this.names = names == null ? new LinkedHashSet<>() : new LinkedHashSet<>(names);
     }
 
-    /** 白名单匹配的是领星供应商默认收款账户的 account_name，不是 supplier_name。 */
-    public boolean contains(String accountName) {
-        if (accountName == null || accountName.isBlank()) {
+    /** 按采购单中的供应商名称 supplier_name 匹配，去除首尾空格后完全相等。 */
+    public boolean contains(String supplierName) {
+        if (supplierName == null || supplierName.isBlank()) {
             return false;
         }
         return names.stream().filter(name -> name != null)
-                .anyMatch(name -> name.trim().equals(accountName.trim()));
+                .anyMatch(name -> name.trim().equals(supplierName.trim()));
     }
 }
