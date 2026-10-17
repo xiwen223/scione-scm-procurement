@@ -331,18 +331,19 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             if (!isDefault) {
                 continue;
             }
-            String accountName = text(account, "account_name");
+            // 收款人取「账户名称」（name，如公司全称），不是「户名」（account_name，如个人姓名）。
+            String accountName = text(account, "name");
             String accountId = text(account, "account_id");
             String bankName = text(account, "bank_name");
             if (isBlank(accountName) || isBlank(accountId) || isBlank(bankName)) {
                 // 原来是直接 return 空，会把后面「字段完整的默认账户」一起丢掉，这里改成继续往后找。
-                log.info("领星供应商默认收款账号字段不完整，跳过该行：户名={}, 账号={}, 开户行={}",
-                        accountName, maskAccountId(accountId), bankName);
+                log.info("领星供应商默认收款账号字段不完整，跳过该行：账户名称={}, 户名={}, 账号={}, 开户行={}",
+                        accountName, dash(text(account, "account_name")), maskAccountId(accountId), bankName);
                 continue;
             }
             SupplierPaymentAccount candidate = new SupplierPaymentAccount(accountName, accountId, bankName);
             if (isEnabledPaymentAccount(account)) {
-                log.info("使用领星供应商默认收款账户：户名={}, 开户行={}, 账号={}",
+                log.info("使用领星供应商默认收款账户：账户名称={}, 开户行={}, 账号={}",
                         accountName, bankName, maskAccountId(accountId));
                 return Optional.of(candidate);
             }
@@ -351,7 +352,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             }
         }
         if (disabledDefault != null) {
-            log.info("领星供应商默认收款账户已停用（is_open=0），仍按勾选的默认账户使用：户名={}",
+            log.info("领星供应商默认收款账户已停用（is_open=0），仍按勾选的默认账户使用：账户名称={}",
                     disabledDefault.accountName());
             return Optional.of(disabledDefault);
         }

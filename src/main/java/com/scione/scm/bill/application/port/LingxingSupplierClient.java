@@ -14,6 +14,10 @@ public interface LingxingSupplierClient {
 
     Optional<SupplierProfile> findSupplierProfile(long supplierId);
 
+    /**
+     * accountName = 领星「供应商-收款账户」的「账户名称」（name 字段，通常为公司全称），
+     * 注意不是「户名」（account_name 字段，通常为个人姓名）。
+     */
     record SupplierPaymentAccount(String accountName, String accountId, String bankName) {
     }
 
