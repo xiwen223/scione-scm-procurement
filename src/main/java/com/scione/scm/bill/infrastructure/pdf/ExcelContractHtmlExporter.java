@@ -7,6 +7,8 @@ import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.*;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import javax.imageio.ImageIO;
 import java.util.*;
 
 /** 导出合同用 XHTML：保留打印区域、列宽比例、行高、合并单元格、富文本和嵌入图片。 */
@@ -52,6 +54,7 @@ final class ExcelContractHtmlExporter {
 
     private void tableSegment(StringBuilder out, XSSFSheet sheet, CellRangeAddress area, int firstRow, int lastRow,
                               Map<String, List<Image>> pictures, DataFormatter formatter) {
+        Map<String, Double> reservationOffsets = reservationOffsets(sheet, pictures);
         double total = 0;
         for (int c = area.getFirstColumn(); c <= area.getLastColumn(); c++) if (!sheet.isColumnHidden(c)) total += sheet.getColumnWidthInPixels(c);
         if (total == 0) throw new IllegalArgumentException("打印区域没有可见列");
@@ -107,7 +110,12 @@ final class ExcelContractHtmlExporter {
                 if (productImage && !cellPictures.isEmpty()) out.append("min-height:44px;");
                 out.append("\">");
                 String content = text(cell, formatter, contentScale);
-                if (!content.isEmpty()) out.append("<div class=\"text\">").append(content).append("</div>");
+                double blockOffset = reservationOffsets.getOrDefault(r + ":" + c, 0.0) * contentScale;
+                if (!content.isEmpty()) {
+                    out.append("<div class=\"text\"");
+                    if (blockOffset > 0) out.append(" style=\"position:relative;left:").append(blockOffset).append("px;\"");
+                    out.append(">").append(content).append("</div>");
+                }
                 // 导出步骤3：图片按 Excel 锚点绝对定位，不能参与文本流把表格行额外撑大。
                 for (Image image : cellPictures) {
                     boolean fixedProductImage = Math.abs(image.width() - 40) < 0.1 && Math.abs(image.height() - 40) < 0.1;
@@ -116,7 +124,7 @@ final class ExcelContractHtmlExporter {
                     // text flow. A logo anchored in the merged title cell must not stretch that row.
                     out.append("<img class=\"picture\" src=\"data:").append(image.mime()).append(";base64,").append(image.data())
                             .append("\" style=\"");
-                    out.append("left:").append(image.x() * imageScale).append("px;top:").append(image.y() * imageScale).append("px;");
+                    out.append("left:").append(image.x() * imageScale + blockOffset).append("px;top:").append(image.y() * imageScale).append("px;");
                     out.append("width:")
                             .append(image.width() * imageScale).append("px;height:").append(image.height() * imageScale).append("px;\"/>");
                 }
@@ -126,6 +134,56 @@ final class ExcelContractHtmlExporter {
             out.append("</tr>");
         }
         out.append("</tbody></table>");
+    }
+
+    /** 预约标题和二维码共用位移，只避让左侧箱唛图片，不改变二者间距、大小或表格列宽。 */
+    private Map<String, Double> reservationOffsets(XSSFSheet sheet, Map<String, List<Image>> pictures) {
+        Map<String, Double> offsets = new HashMap<>();
+        List<Image> images = pictures.values().stream().flatMap(Collection::stream).toList();
+        for (Row row : sheet) for (Cell cell : row) {
+            if (cell.getCellType() != CellType.STRING || !cell.getStringCellValue().contains("入库预约")) continue;
+            CellRangeAddress title = merged(sheet, cell.getRowIndex(), cell.getColumnIndex());
+            int titleFirst = title == null ? cell.getColumnIndex() : title.getFirstColumn();
+            int titleLast = title == null ? cell.getColumnIndex() : title.getLastColumn();
+            for (Image qr : images) {
+                if (qr.row() <= cell.getRowIndex() || qr.row() > cell.getRowIndex() + 5
+                        || qr.firstColumn() < titleFirst || qr.firstColumn() > titleLast
+                        || qr.width() < 60 || Math.abs(qr.width() - qr.height()) > 1) continue;
+                double qrLeft = columnOffset(sheet, qr.firstColumn()) + qr.x();
+                double qrBottom = rowOffset(sheet, qr.row()) + qr.y() + qr.height();
+                double blockLeft = Math.min(columnOffset(sheet, titleFirst), qrLeft);
+                double titleTop = rowOffset(sheet, cell.getRowIndex());
+                double shift = 0;
+                for (Image other : images) {
+                    if (other.firstColumn() >= titleFirst) continue;
+                    double otherTop = rowOffset(sheet, other.row()) + other.y();
+                    if (otherTop >= qrBottom || otherTop + other.height() <= titleTop) continue;
+                    double otherRight = columnOffset(sheet, other.firstColumn()) + other.x() + other.width();
+                    shift = Math.max(shift, otherRight + 16 - blockLeft);
+                }
+                if (shift > 0) {
+                    offsets.put(cell.getRowIndex() + ":" + cell.getColumnIndex(), shift);
+                    offsets.put(qr.row() + ":" + qr.firstColumn(), shift);
+                }
+            }
+        }
+        return offsets;
+    }
+
+    private double columnOffset(XSSFSheet sheet, int column) {
+        double offset = 0;
+        for (int c = 0; c < column; c++) if (!sheet.isColumnHidden(c)) offset += sheet.getColumnWidthInPixels(c);
+        return offset;
+    }
+
+    private double rowOffset(XSSFSheet sheet, int row) {
+        double offset = 0;
+        for (int r = 0; r < row; r++) {
+            Row current = sheet.getRow(r);
+            if (current == null || !current.getZeroHeight())
+                offset += (current == null ? sheet.getDefaultRowHeightInPoints() : current.getHeightInPoints()) / 0.75;
+        }
+        return offset;
     }
 
     private String text(XSSFCell cell, DataFormatter formatter, double scale) {
@@ -269,8 +327,32 @@ final class ExcelContractHtmlExporter {
             for (int r = a.getRow1(); r < a.getRow2(); r++) height += (sheet.getRow(r) == null ? sheet.getDefaultRowHeightInPoints() : sheet.getRow(r).getHeightInPoints()) / 0.75;
             XSSFPictureData data = picture.getPictureData();
             if (!List.of("image/png", "image/jpeg").contains(data.getMimeType())) throw new IllegalArgumentException("图片请使用 PNG/JPEG 格式");
-            Image image = new Image(data.getMimeType(), Base64.getEncoder().encodeToString(data.getData()), a.getDx1() / 9525.0,
-                    a.getDy1() / 9525.0, Math.max(1, width), Math.max(1, height), a.getRow1(), a.getCol1(), a.getCol2());
+            // 【修复二维码变形】宽度不参与锚点估算：列宽像素是 POI 按字体字符宽度换算的估算值，
+            // 与 WPS/Excel 的实际字体度量有偏差（实测同一列 5.5px/字符 vs 6.1px/字符），
+            // 用它算宽度会让跨列图片（二维码）宽高比失真。高度取锚点（行高为精确磅值 + EMU 偏移），
+            // 宽度按图片自身像素比例推导，保证图片只缩放、不拉伸。
+            double displayHeight = Math.max(1, height);
+            double displayWidth = Math.max(1, width);
+            boolean squareImage = false;
+            try {
+                java.awt.image.BufferedImage source = ImageIO.read(new ByteArrayInputStream(data.getData()));
+                if (source != null && source.getWidth() > 0 && source.getHeight() > 0) {
+                    displayWidth = displayHeight * (double) source.getWidth() / source.getHeight();
+                    squareImage = Math.abs(source.getWidth() - source.getHeight()) <= Math.max(2, source.getWidth() * 0.05);
+                }
+            } catch (IOException ignored) {
+                // 解码失败时退回锚点推算，只影响比例校正，不阻断导出。
+            }
+            // 【修复标题与二维码错位】方形图片（二维码）与上方标题同属一个跨列区块，必须在锚点列区间内居中。
+            // 列宽像素是 POI 按字体估算的（比 Excel 窄约 10%），图片沿用手工偏移会向右溢出，看起来标题就被"挤到左边"。
+            double offsetX = a.getDx1() / 9525.0;
+            if (squareImage && a.getCol2() > a.getCol1()) {
+                double spanWidth = 0;
+                for (int c = a.getCol1(); c < a.getCol2(); c++) spanWidth += sheet.getColumnWidthInPixels(c);
+                offsetX = (spanWidth - displayWidth) / 2;
+            }
+            Image image = new Image(data.getMimeType(), Base64.getEncoder().encodeToString(data.getData()), offsetX,
+                    a.getDy1() / 9525.0, displayWidth, displayHeight, a.getRow1(), a.getCol1(), a.getCol2());
             // 图片如果落在合并单元格内部，挂到左上角并补上偏移。
             int row = a.getRow1(), col = a.getCol1();
             CellRangeAddress merge = merged(sheet, row, col);
