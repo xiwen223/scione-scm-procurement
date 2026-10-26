@@ -6,13 +6,11 @@ import java.util.List;
 /**
  * 免登录催办外链的返回结构。
  * 页面按 nodeCode 分组展示；ownerName为实际收件人配置姓名，不包含手机号等敏感信息。
+ * 2026-10 需求调整：不再记录和展示浏览时间、打开次数。
  */
 public record SopReminderLinkView(
         String ownerUserid,
         String ownerName,
-        LocalDateTime firstViewedAt,
-        LocalDateTime lastViewedAt,
-        int viewCount,
         List<NodeGroup> nodes) {
 
     /** 一个节点（如 PO创建未完成）下的全部待办。 */

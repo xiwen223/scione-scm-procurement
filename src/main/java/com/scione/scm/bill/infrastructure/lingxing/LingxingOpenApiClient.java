@@ -64,6 +64,8 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     private static final DateTimeFormatter LINGXING_DATE =
             DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final Duration TOKEN_REFRESH_AHEAD = Duration.ofMinutes(1);
+    /** 单页网络异常的最大尝试次数（含首次）。 */
+    private static final int MAX_PAGE_ATTEMPTS = 3;
     private static final int MAX_REASON_LENGTH = 500;
 
     private final LingxingOpenApiProperties properties;
@@ -74,8 +76,14 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     private volatile CachedToken cachedToken;
     /** 上一轮装箱批次详情；指纹不变时复用，避免每5分钟重复拉取391条。 */
     private volatile PackingBatchCache packingBatchCache;
-    /** 缓存最长保留时间：超过就强制重拉，兜底指纹捕捉不到的字段级变化。 */
-    private static final long PACKING_BATCH_CACHE_TTL_NANOS = Duration.ofMinutes(60).toNanos();
+    /** 预览可复用的最长缓存年龄：待关联批次未变时最多复用一小时，兜底指纹捕捉不到的字段级变化。 */
+    private static final Duration PACKING_BATCH_PREVIEW_TTL = Duration.ofMinutes(60);
+    /**
+     * 发送前复核只接受一分钟内的缓存。
+     * 预览刚重拉过（常见于缓存为空或批次变化）时，复核几秒后命中，省掉整页拉取；
+     * 预览命中旧缓存时缓存本就超龄，复核照旧全量重拉，准确性不打折。
+     */
+    private static final Duration PACKING_BATCH_RECHECK_TTL = Duration.ofSeconds(60);
 
     public LingxingOpenApiClient(
             LingxingOpenApiProperties properties,
@@ -760,19 +768,23 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     }
 
     /**
-     * 实时节点只读领星；复用当前签名、令牌缓存和请求队列，不更新小时同步表。
-     * 发送前核验必须用本重载（不走缓存），保证拿到的是领星当前状态。
+     * 发送前复核专用：只接受一分钟内的批次详情缓存。
+     * packingTask 每次都会真拉，指纹一变就重拉；一分钟的窗口只覆盖"预览刚拉完"这一种情况。
      */
     public PackingSource fetchReminderPacking(LocalDate from) {
-        return fetchReminderPacking(from, false);
+        return fetchReminderPacking(from, PACKING_BATCH_RECHECK_TTL);
+    }
+
+    /** 每轮预览专用：指纹未变时最多复用一小时，省掉 shipmentPlanLists 整页拉取（4页约64秒）。 */
+    public PackingSource fetchReminderPackingForPreview(LocalDate from) {
+        return fetchReminderPacking(from, PACKING_BATCH_PREVIEW_TTL);
     }
 
     /**
-     * @param allowCache 仅每轮预览用 true：待关联批次指纹未变时复用上一轮批次详情，
-     *                   省掉 shipmentPlanLists 整页拉取（391条约35秒，令牌桶容量1）。
-     *                   发送前核验必须传 false，不能拿旧数据当当前状态。
+     * @param maxCacheAge 允许复用的缓存年龄上限，超龄就重拉。
+     *                    指纹不一致同样会重拉，与这个上限无关。
      */
-    public PackingSource fetchReminderPacking(LocalDate from, boolean allowCache) {
+    private PackingSource fetchReminderPacking(LocalDate from, Duration maxCacheAge) {
         if (from == null) throw lingxingError("关联货件批次日期不能为空");
         long deadline = System.nanoTime() + Duration.ofMinutes(4).toNanos();
         String end = LocalDate.now(java.time.ZoneId.of("Asia/Shanghai")).toString();
@@ -782,20 +794,25 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
                 "ptId",200,deadline);
         String fingerprint = packingFingerprint(tasks);
         PackingBatchCache cached = packingBatchCache;
+        long cachedAge = cached == null ? -1 : System.nanoTime() - cached.fetchedAt();
         List<JsonNode> batches;
-        if (allowCache && cached != null && fingerprint.equals(cached.fingerprint())
-                && System.nanoTime() - cached.fetchedAt() < PACKING_BATCH_CACHE_TTL_NANOS) {
+        if (cached != null && fingerprint.equals(cached.fingerprint())
+                && cachedAge < maxCacheAge.toNanos()) {
             batches = cached.batches();
-            log.info("关联货件批次详情本轮复用：待关联批次未变化，跳过shipmentPlanLists，缓存{}秒",
-                    java.util.concurrent.TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - cached.fetchedAt()));
+            log.info("关联货件批次详情本轮复用：待关联批次未变化，跳过shipmentPlanLists，缓存{}秒（上限{}秒）",
+                    java.util.concurrent.TimeUnit.NANOSECONDS.toSeconds(cachedAge), maxCacheAge.toSeconds());
         } else {
+            // 实测（2026-10-26，391条/26天）：length=100 耗时15.5秒、响应体1.42MB、成功；
+            // length=200 到26.9秒被领星侧掐断（IncompleteRead/Premature EOF）；391条更早断。
+            // 领星在该接口有约25秒的响应上限，超过即断连。100条是当前安全且能读完的最大页。
             batches = reminderPages("/erp/sc/data/fba_report/shipmentPlanLists",Map.of(
-                    "search_field_time","gmt_create","start_date",from.toString(),"end_date",end),"ispg_id",500,deadline);
+                    "search_field_time","gmt_create","start_date",from.toString(),"end_date",end),"ispg_id",100,deadline);
             log.info("关联货件批次详情重新拉取：{}", cached == null ? "首次查询"
                     : !fingerprint.equals(cached.fingerprint()) ? "待关联批次发生变化"
-                    : "缓存超过" + java.util.concurrent.TimeUnit.NANOSECONDS.toMinutes(PACKING_BATCH_CACHE_TTL_NANOS) + "分钟");
-            // 无论是否允许读缓存，只要真拉了就用最新结果覆盖：
-            // 发送前核验的全量拉取顺带把缓存校准一次，不必再等 TTL 到点。
+                    : "缓存超龄（已" + java.util.concurrent.TimeUnit.NANOSECONDS.toSeconds(cachedAge)
+                      + "秒，允许" + maxCacheAge.toSeconds() + "秒）");
+            // 无论谁允许读缓存，只要真拉了就用最新结果覆盖：
+            // 复核的全量拉取顺带把缓存校准一次，不必再等 TTL 到点。
             packingBatchCache = new PackingBatchCache(fingerprint, List.copyOf(batches), System.nanoTime());
         }
         if (System.nanoTime()>=deadline) throw lingxingError("关联货件查询超过4分钟，本轮不发送");
@@ -823,11 +840,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             Map<String,Object> body=new LinkedHashMap<>(filter);body.put("offset",result.size());body.put("length",size);
             JsonNode response;
             long pageStarted = System.nanoTime();
-            try { response=requestQueryWithRetry(path,body); }
-            catch (RestClientException exception) {
-                log.error("实时催办来源接口请求失败：path={}, exceptionType={}",path,exception.getClass().getSimpleName());
-                throw lingxingError("实时节点接口请求失败，未更新数据库");
-            }
+            response=requestPage(path,body,deadline);
             if (System.nanoTime()>=deadline) throw lingxingError("实时节点查询超时");
             if (response==null || !"0".equals(response.path("code").asText()))
                 throw lingxingError("实时节点接口未成功，code="+(response==null?"invalid":response.path("code").asText()));
@@ -958,6 +971,53 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             }
         }
         return "";
+    }
+
+    /**
+     * 单页请求的网络层重试：只重试当前这一页，已拉到的页不重来。
+     * 限流由 requestQueryWithRetry 内部按码处理（等30秒×次数），这里只管连接重置、读超时这类抖动。
+     * 间隔2秒、4秒；每轮重试前检查4分钟 deadline，避免慢接口把整轮拖超时。
+     */
+    private JsonNode requestPage(String path, Map<String,Object> body, long deadline) {
+        RestClientException last = null;
+        for (int attempt = 1; attempt <= MAX_PAGE_ATTEMPTS; attempt++) {
+            try {
+                return requestQueryWithRetry(path, body);
+            } catch (RestClientException exception) {
+                last = exception;
+                if (attempt == MAX_PAGE_ATTEMPTS) break;
+                log.info("实时催办来源接口第{}次失败，{}秒后重试：path={}, exceptionType={}, msg={}, rootCause={}",
+                        attempt, attempt * 2L, path, exception.getClass().getSimpleName(),
+                        abbreviate(exception.getMessage()), rootCause(exception));
+                try { java.util.concurrent.TimeUnit.SECONDS.sleep(attempt * 2L); }
+                catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw lingxingError("实时节点接口重试等待被中断，未更新数据库");
+                }
+                if (System.nanoTime() >= deadline) throw lingxingError("实时节点查询超时");
+            }
+        }
+        log.error("实时催办来源接口重试{}次后仍失败：path={}, exceptionType={}, msg={}, rootCause={}",
+                MAX_PAGE_ATTEMPTS - 1, path, last.getClass().getSimpleName(), abbreviate(last.getMessage()),
+                rootCause(last));
+        throw lingxingError("实时节点接口请求失败，未更新数据库");
+    }
+
+    /**
+     * 外层异常信息常常只有"Error while extracting response"这类壳，
+     * 到底是读超时、连接重置还是 JSON 截断全在 cause 链最末端，必须打出来才不用靠猜。
+     */
+    private static String rootCause(Throwable throwable) {
+        Throwable cursor = throwable;
+        while (cursor.getCause() != null && cursor.getCause() != cursor) cursor = cursor.getCause();
+        return cursor.getClass().getSimpleName() + ": " + abbreviate(cursor.getMessage());
+    }
+
+    /** 网络异常消息里常带完整 URL 和查询串，日志只保留前 200 字符。 */
+    private static String abbreviate(String message) {
+        if (message == null) return "";
+        String flat = message.replaceAll("\\s+", " ").trim();
+        return flat.length() <= 200 ? flat : flat.substring(0, 200) + "...";
     }
 
     private BusinessException lingxingError(String reason) {

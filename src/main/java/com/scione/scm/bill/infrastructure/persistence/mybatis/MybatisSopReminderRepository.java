@@ -42,6 +42,18 @@ public class MybatisSopReminderRepository implements SopReminderRepository {
     private static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
     private static final String DISPATCH_LOCK = "scm_reminder_dispatch";
     private static final String PACKING_DISPATCH_LOCK = "scm_reminder_dispatch_packing";
+    /**
+     * 等待其它催办释放发送锁的上限。
+     * 单轮催办实测：装箱约60秒，普通节点含核验约2~3分钟；超过5分钟说明对方已卡死，
+     * 继续等下去只会占着线程和前端连接，不如快速失败、下一轮再来。
+     */
+    private static final Duration DISPATCH_WAIT_TIMEOUT = Duration.ofMinutes(5);
+    /**
+     * 发送结果未知（UNKNOWN）最多自动重发几次。
+     * UNKNOWN 只代表没拿到回执、可能已经送达，重发有重复打扰风险；
+     * 这里按「宁可重复也不漏发」取舍，封顶 3 次后转人工核对。
+     */
+    private static final int UNKNOWN_RETRY_LIMIT = 3;
     private static final int LOOKUP_CHUNK = 500;
     private static final int WRITE_CHUNK = 200;
 
@@ -74,8 +86,9 @@ public class MybatisSopReminderRepository implements SopReminderRepository {
     @Override
     public <T> T withDispatchLock(boolean packing, Supplier<T> action) {
         String lockName = packing ? PACKING_DISPATCH_LOCK : DISPATCH_LOCK;
-        try (var ignored = namedLock.acquire(lockName, Duration.ofHours(1), 0, Duration.ofMillis(500),
-                "等待其他催办发送超过60分钟，本次停止，请检查任务状态", "等待催办发送锁已中断")) {
+        try (var ignored = namedLock.acquire(lockName, DISPATCH_WAIT_TIMEOUT, 0, Duration.ofMillis(500),
+                "等待其他催办发送超过" + DISPATCH_WAIT_TIMEOUT.toMinutes() + "分钟，本次停止，请检查任务状态",
+                "等待催办发送锁已中断")) {
             return action.get();
         }
     }
@@ -115,14 +128,21 @@ public class MybatisSopReminderRepository implements SopReminderRepository {
         Map<Long, DispatchHistory> history = dispatchHistory(ids, scheduledAt);
         List<DispatchDecision> result = new ArrayList<>();
         for (int i = 0; i < ids.size(); i++) {
-            DispatchHistory h = history.getOrDefault(ids.get(i), new DispatchHistory(0, 0, false, false, false));
+            DispatchHistory h = history.getOrDefault(ids.get(i), new DispatchHistory(0, 0, false, false, 0, false, false));
+            int unknown = h.unknownCount();
             if (goodsReady && (h.successes() >= 2 || h.highestSuccessfulStage() >= stages.get(i)))
-                result.add(new DispatchDecision(false, true, "本阶段已成功催办或成功总次数已达两次"));
+                result.add(new DispatchDecision(false, true, "本阶段已成功催办或成功总次数已达两次", unknown));
             else if (goodsReady && h.unresolved())
-                result.add(new DispatchDecision(false, true, "存在发送中或结果未知的记录，需先核对结果"));
+                result.add(new DispatchDecision(false, true, "存在发送中或结果未知的记录，需先核对结果", unknown));
+            else if (h.sending())
+                result.add(new DispatchDecision(false, false, "上一批仍在发送中，等待结果确认", unknown));
             else if (h.slotBlocked() || h.retryPending())
-                result.add(new DispatchDecision(false, false, "当前时点已发送、结果待确认或已有受控重试计划"));
-            else result.add(new DispatchDecision(true, false, ""));
+                result.add(new DispatchDecision(false, false, "当前时点已发送、结果待确认或已有受控重试计划", unknown));
+            // UNKNOWN 允许重发：send_status=4 只代表没拿到回执，可能已送达；宁可重复也不漏发，但最多3次。
+            else if (unknown >= UNKNOWN_RETRY_LIMIT)
+                result.add(new DispatchDecision(false, true,
+                        "发送结果已连续" + UNKNOWN_RETRY_LIMIT + "次未知，不再自动重发，请人工核对", unknown));
+            else result.add(new DispatchDecision(true, false, "", unknown));
         }
         return result;
     }
@@ -132,7 +152,9 @@ public class MybatisSopReminderRepository implements SopReminderRepository {
         Map<Long, DispatchHistory> history = dispatchHistory(ids, scheduledAt);
         return ids.stream().filter(id -> {
             DispatchHistory h = history.get(id);
-            return h == null || (h.successes() == 0 && !h.unresolved() && !h.retryPending());
+            // 与普通节点一致：UNKNOWN 未超次数仍算新增，否则这条待办永远等不到重发。
+            return h == null || (h.successes() == 0 && !h.sending() && !h.retryPending()
+                    && h.unknownCount() < UNKNOWN_RETRY_LIMIT);
         }).toList();
     }
 
@@ -251,12 +273,6 @@ public class MybatisSopReminderRepository implements SopReminderRepository {
     }
 
     @Override
-    public ViewState recordView(String token, String ip, String userAgent) {
-        mapper.recordView(token, trim(ip, 64), trim(userAgent, 255));
-        return mapper.findViewState(token);
-    }
-
-    @Override
     public List<TodoRow> loadTodos(String token) {
         return mapper.findActiveTodos(token);
     }
@@ -295,7 +311,8 @@ public class MybatisSopReminderRepository implements SopReminderRepository {
             List<Long> chunk = ids.subList(offset, Math.min(offset + LOOKUP_CHUNK, ids.size()));
             for (SopReminderMapper.DispatchHistoryRow row : mapper.findDispatchHistory(chunk, scheduledAt, now)) {
                 result.put(row.todoId(), new DispatchHistory(row.successes(), row.highestStage(),
-                        row.slotBlocked(), row.unresolved(), row.retryPending()));
+                        row.slotBlocked(), row.sending(), row.unknownCount(),
+                        row.unresolved(), row.retryPending()));
             }
         }
         return result;
@@ -304,6 +321,7 @@ public class MybatisSopReminderRepository implements SopReminderRepository {
     private record Key(String type, String sn, String item) { }
 
     private record DispatchHistory(int successes, int highestSuccessfulStage, boolean slotBlocked,
+                                   boolean sending, int unknownCount,
                                    boolean unresolved, boolean retryPending) { }
 
     private static String recipientHash(String userid) {

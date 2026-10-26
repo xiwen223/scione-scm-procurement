@@ -71,11 +71,12 @@ public class SopReminderSendService {
      * @param todos           本轮累计待办条数
      * @param pushes          本轮实际请求企微的次数，含失败次数
      * @param skipped         被跳过的责任人及原因
+     * @param unresolvedCount 发送结果未知（UNKNOWN）的批次数，用于轮次级补发判断
      * @param details         每个责任人的发送结果
      */
     public record SendResult(String nodeCode,
                              int candidateGroups, int todos, int pushes, List<String> skipped,
-                             List<GroupResult> details) {
+                             int unresolvedCount, List<GroupResult> details) {
     }
 
     public SendResult send(String nodeCode, LocalDateTime scheduledAt) {
@@ -159,6 +160,7 @@ public class SopReminderSendService {
                 skipped.addAll(prepared.skipped());
             }
             List<GroupResult> details = new ArrayList<>();
+            int unresolved = 0;
             for (PendingMessage message : pending.values()) {
                 // 等待其他节点期间可能被关停，发送前再次检查整条消息。
                 message.nodes.forEach(this::requireEnabled);
@@ -179,24 +181,29 @@ public class SopReminderSendService {
                     log.info("关联货件新增单据复核后不可推送：userid={}",message.person.getUserid());
                     continue;
                 }
+                // 第N次提醒：该收件人名下有发送结果未知的记录时，正文/主题标注重新发送的序号。
+                int attemptNo = message.unknownCount + 1;
                 String body = packing ? properties.getSend().getFrontBaseUrl() + PACKING_LINK_PATH + message.token
-                        : compose(message.token, properties.getSend().getFrontBaseUrl());
+                        : compose(message.token, properties.getSend().getFrontBaseUrl(), attemptNo);
                 PushContext context = new PushContext(String.join(",", message.nodes), message.person.getUserid(), body,
                         packing ? List.of() : List.of(message.person.getMobile()), 1,
                         now().plus(properties.getSend().getRetryMaxAge()).toString(), null,
                         packing ? "EMAIL" : "WEBHOOK", packing ? message.person.getEmail() : null,
-                        packing ? PackingMailClient.SUBJECT : null);
+                        packing ? PackingMailClient.subject(attemptNo) : null);
                 List<Long> todoIds = new ArrayList<>(message.stages.keySet());
                 long batchId = repository.startPush(message.person.getUserid(), todoIds,
                         new ArrayList<>(message.stages.values()), scheduledAt, json(context));
                 WeComWebhookClient.SendOutcome outcome = deliver(batchId, context);
-                String error = outcome.success() ? null : outcome.state() == WeComWebhookClient.SendState.UNKNOWN
-                        ? "发送结果未知，请核对企微消息；未自动重发" : "本次未发送成功，已按重试资格记录";
+                boolean unknown = !outcome.success()
+                        && outcome.state() == WeComWebhookClient.SendState.UNKNOWN;
+                if (unknown) unresolved++;
+                String error = outcome.success() ? null : unknown
+                        ? "发送结果未知，将在补发轮次重试（最多3次）" : "本次未发送成功，已按重试资格记录";
                 details.add(new GroupResult(0, message.person.getName(), message.person.getUserid(),
                         message.stages.size(), outcome.success(), body, error));
             }
             return new SendResult(String.join(",", codes), groups, details.stream().mapToInt(GroupResult::todos).sum(),
-                    details.size(), skipped, details);
+                    details.size(), skipped, unresolved, details);
         });
     }
 
@@ -209,6 +216,8 @@ public class SopReminderSendService {
         final Set<Long> packingTriggerIds=new java.util.LinkedHashSet<>();
         final Map<Long, Candidate> candidates = new LinkedHashMap<>();
         final Map<Long, String> todoNodes = new LinkedHashMap<>();
+        /** 该收件人本轮待发单据里历史上 UNKNOWN 的最大次数；0 表示首次发送。 */
+        int unknownCount = 0;
         PendingMessage(SopReminderProperties.Person person, String token) { this.person = person; this.token = token; }
     }
 
@@ -337,6 +346,8 @@ public class SopReminderSendService {
             if(capped&&!force) repository.suppressGoodsReadyTodos(person.getUserid(),
                     java.util.stream.IntStream.range(0,decisions.size()).filter(i->decisions.get(i).hideFromPage())
                             .mapToObj(prepared.todoIds()::get).toList());
+            // 该收件人本轮待发单据里，历史上发送结果未知的最大次数，用于第N次提醒标注。
+            int unknownCount = 0;
             for (int i=0;i<groupCandidates.size();i++) {
                 SopReminderPreview.Candidate candidate=groupCandidates.get(i);
                 // 指定单号时只发这一张，其余候选只建待办不发送。
@@ -344,6 +355,7 @@ public class SopReminderSendService {
                 if (packing || force || decisions.get(i).sendable()) {
                     candidates.add(candidate);stages.add(candidate.stage());
                     deliverIds.add(prepared.todoIds().get(i));
+                    if (!packing && !force) unknownCount=Math.max(unknownCount,decisions.get(i).unknownCount());
                 } else {
                     String reason=decisions.get(i).reason();
                     skipped.add(nodeCode+"/"+candidate.businessSn()+"："+reason);
@@ -360,6 +372,8 @@ public class SopReminderSendService {
                 throw new BusinessException(ResultCode.PARAM_ERROR, "同一接收账号配置了不同联系方式，停止本轮发送：" + person.getUserid());
             }
             message.nodes.add(nodeCode);
+            // 同一人多节点汇总时取最大次数：只要有单子反复结果未知，整封邮件都按第N次提醒标注。
+            message.unknownCount=Math.max(message.unknownCount,unknownCount);
             for (int i = 0; i < deliverIds.size(); i++) {
                 long id=deliverIds.get(i);message.stages.put(id,stages.get(i));
                 if(packing && (force || newPackingIds.contains(id))) message.packingTriggerIds.add(id);
@@ -579,8 +593,12 @@ public class SopReminderSendService {
     private static LocalDateTime now() { return LocalDateTime.now(ZoneId.of("Asia/Shanghai")); }
 
     /** 群消息正文：只有催办提示和外链，明细在链接页面查看；@人由 mentioned 字段实现，不写进正文。 */
-    private String compose(String token, String frontBaseUrl) {
-        return "今日催办，请尽快完成。\n" + frontBaseUrl + REMINDER_LINK_PATH + token;
+    /** 普通节点邮件正文：重新发送时标注第几次提醒，首次保持原文案不放任何额外字样。 */
+    private String compose(String token, String frontBaseUrl, int attemptNo) {
+        String head = attemptNo > 1
+                ? "今日催办（第" + attemptNo + "次提醒，此前发送结果未确认），请尽快完成。\n"
+                : "今日催办，请尽快完成。\n";
+        return head + frontBaseUrl + REMINDER_LINK_PATH + token;
     }
 
     private static boolean hasText(String value) {

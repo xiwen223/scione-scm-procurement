@@ -62,7 +62,7 @@ public class GlobalExceptionHandler {
         if ("/api/v1/delivery-alerts/imports".equals(request.getServletPath())
                 && operator != null && !operator.isBlank()) {
             return ResponseEntity.ok(ApiResponse.success(followUpImportService.rejectFile(
-                    "超限上传文件", "上传文件不能超过5MB，请拆分后导入", operator)));
+                    "超限上传文件", "上传文件超过大小限制，请拆分后导入", operator)));
         }
         return response(ResultCode.IMPORT_FILE_TOO_LARGE);
     }

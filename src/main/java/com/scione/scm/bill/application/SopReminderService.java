@@ -151,9 +151,10 @@ public class SopReminderService {
     }
 
     private SopReminderPreview previewPacking() {
-        // 每轮预览允许复用批次详情；发送前由 SopReminderStatusVerifier 全量复核。
-        LingxingOpenApiClient.PackingSource source=openApiClient.fetchReminderPacking(
-                properties.getPackingStartDate(), true);
+        // 预览允许复用一小时内的批次详情；发送前复核由 SopReminderStatusVerifier 再做一次，
+        // 它只认一分钟内的缓存，指纹一变同样重拉，因此预览复用旧数据不会带进发送结果。
+        LingxingOpenApiClient.PackingSource source=openApiClient.fetchReminderPackingForPreview(
+                properties.getPackingStartDate());
         return evaluatePacking(source);
     }
 

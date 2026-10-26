@@ -17,8 +17,8 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * 免登录催办外链：校验 token、记录浏览、按节点汇总待办。
- * 页面不做登录校验，访问控制完全依赖不可猜的 token。
+ * 免登录催办外链：校验 token、按节点汇总待办。
+ * 页面不做登录校验，访问控制完全依赖不可猜的 token；打开链接只读，不记录浏览信息。
  */
 @Service
 @RequiredArgsConstructor
@@ -30,15 +30,13 @@ public class SopReminderLinkService {
     private final com.scione.scm.bill.config.SopReminderProperties properties;
 
     /**
-     * 打开链接：先记浏览，再返回该催办人本轮的待办。
-     * 浏览记录写入失败会中止本次请求，不伪装成已记录。
+     * 打开链接：返回该催办人本轮的待办。页面不做登录校验，访问控制完全依赖不可猜的 token。
      */
-    public SopReminderLinkView open(String token, String ip, String userAgent) {
+    public SopReminderLinkView open(String token) {
         if (token == null || !TOKEN_PATTERN.matcher(token).matches()) {
             throw new BusinessException(ResultCode.REMINDER_LINK_INVALID, "催办链接格式错误");
         }
         SopReminderRepository.Link link = repository.findLink(token);
-        SopReminderRepository.ViewState view = repository.recordView(token, ip, userAgent);
         List<SopReminderRepository.TodoRow> todos = repository.loadTodos(token);
         Map<Long, List<ReasonItem>> reasons =
                 repository.loadReasons(todos.stream().map(SopReminderRepository.TodoRow::id).toList());
@@ -54,8 +52,7 @@ public class SopReminderLinkService {
                 .map(entry -> new NodeGroup(entry.getKey(),
                         nodeName(entry.getKey()), List.copyOf(entry.getValue())))
                 .toList();
-        return new SopReminderLinkView(link.assigneeUserid(), ownerName(link.assigneeUserid()), view.firstViewedAt(),
-                view.lastViewedAt(), view.viewCount(), nodes);
+        return new SopReminderLinkView(link.assigneeUserid(), ownerName(link.assigneeUserid()), nodes);
     }
 
     private String ownerName(String userid) {

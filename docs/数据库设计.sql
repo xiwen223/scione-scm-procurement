@@ -285,7 +285,7 @@ CREATE TABLE `contract_item` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='合同明细表';
 
 -- ============================================================
--- 催办业务表：新建库参考结构（含免登录外链浏览字段）。
+-- 催办业务表：新建库参考结构。
 -- 已有库不要整份执行；先核对字段，再按差异单独迁移，不删除已有业务数据。
 -- ============================================================
 
@@ -302,11 +302,6 @@ CREATE TABLE `reminder_todo` (
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '待办记录创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '待办记录最后修改时间',
   `view_token` char(32) DEFAULT NULL COMMENT '免登录外链凭证；同一责任人的普通节点共用，关联货件使用独立凭证',
-  `first_viewed_at` datetime DEFAULT NULL COMMENT '首次打开时间',
-  `last_viewed_at` datetime DEFAULT NULL COMMENT '最近打开时间',
-  `view_count` int NOT NULL DEFAULT '0' COMMENT '打开次数',
-  `last_view_ip` varchar(64) DEFAULT NULL,
-  `last_view_ua` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`id`) USING BTREE,
   UNIQUE KEY `uk_todo_round` (`node_code`,`business_type`,`business_sn`,`item_key`,`round_key`) USING BTREE,
   KEY `idx_node_status` (`node_code`,`status`) USING BTREE,
@@ -333,10 +328,10 @@ CREATE TABLE `reminder_push_record` (
   `scheduled_at` datetime NOT NULL COMMENT '本次提醒所属的计划执行时点；例如计划09:00发送，失败后09:05重试仍保存09:00，用于识别同一执行时点的提醒记录',
   `recipient_userid` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL COMMENT '消息批次实际在群内@的人员企微userid，不是领星用户id或人员姓名；用于确定消息接收人并追溯历史提醒对象',
   `route_key` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL COMMENT '预留路由字段；当前代码不使用，普通节点使用send.webhook-key，关联货件使用SMTP',
-  `send_status` tinyint DEFAULT NULL COMMENT '消息批次状态：0未发送，1发送中，2渠道明确接受，3明确失败，4结果未知；未知不自动重试，不代表业务完成',
+  `send_status` tinyint DEFAULT NULL COMMENT '消息批次状态：0未发送，1发送中，2渠道明确接受，3明确失败，4结果未知；结果未知按每张待办最多3次重发，仍无法确认则转人工核对',
   `sent_at` datetime DEFAULT NULL COMMENT '消息批次最近一次实际发起群机器人或SMTP发送的时间，重试时更新',
   `send_result` json DEFAULT NULL COMMENT '消息上下文、渠道WEBHOOK或EMAIL、收件邮箱、尝试次数和发送结果；不保存发送凭据',
-  `next_retry_at` datetime DEFAULT NULL COMMENT '明确未发送或失败且允许重试的下次执行时间；结果未知不安排自动重试',
+  `next_retry_at` datetime DEFAULT NULL COMMENT '明确未发送、明确失败或结果未知且未达重发上限时的下次执行时间；结果未知同样安排重发，宁可重发也不漏发',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '本条批次或待办明细记录首次创建的时间；同一次逻辑发送重试时沿用原记录，不改变创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '本条记录最后修改时间；更新发送状态、发送结果或重试安排时自动更新，用于追踪记录变化及排查长时间处于发送中的情况',
   `node_code` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL COMMENT '未发送异常对应的催办节点；record_type=3使用',
@@ -351,6 +346,26 @@ CREATE TABLE `reminder_push_record` (
   KEY `idx_todo_stage` (`todo_id`,`reminder_stage`) USING BTREE,
   KEY `idx_retry` (`record_type`,`send_status`,`next_retry_at`) USING BTREE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC COMMENT='催办推送记录表，保存群机器人汇总消息、关联待办明细及发送结果';
+
+CREATE TABLE `reminder_dispatch_attempt` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+  `node_codes` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL COMMENT '本轮涉及的催办节点，按配置顺序逗号分隔；同一时点多个节点汇总为一次执行，因此不给单个节点建行',
+  `scheduled_at` datetime NOT NULL COMMENT '计划执行时点，例如09:00；补发必须沿用原时点，改成当前时间会让reminder_push_record的时点去重失效并重复打扰',
+  `status` varchar(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '轮次状态：RUNNING执行中，SUCCESS本轮消息已全部确认，FAILED失败待补发，GIVE_UP用满重试次数或仍有未决消息需人工核对',
+  `todos` int NOT NULL DEFAULT '0' COMMENT '本轮生成的待办数',
+  `pushes` int NOT NULL DEFAULT '0' COMMENT '本轮实际尝试发送的消息批次数，含结果未知',
+  `unresolved_count` int NOT NULL DEFAULT '0' COMMENT '本轮结束时仍处于send_status=4结果未知的待办数；大于0时即使流程跑完也要继续补发',
+  `attempts` tinyint NOT NULL DEFAULT '1' COMMENT '本时点已执行次数，首次为1，每次补发加1；达到上限后转人工不再自动重试',
+  `error_msg` varchar(500) DEFAULT NULL COMMENT '最近一次失败原因，成功时置空；不保存认证凭据',
+  `next_retry_at` datetime DEFAULT NULL COMMENT '下次补发时间；成功后置空，置空即表示该时点彻底收尾不再重跑',
+  `started_at` datetime NOT NULL COMMENT '本轮开始时间；与当前时间相差超过15分钟即视为进程中断留下的悬挂记录，由补偿任务接管',
+  `finished_at` datetime DEFAULT NULL COMMENT '本轮结束时间；RUNNING状态下为空',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '记录最后修改时间',
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE KEY `uk_slot` (`scheduled_at`,`node_codes`) USING BTREE,
+  KEY `idx_retry` (`status`,`next_retry_at`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC COMMENT='催办轮次执行记录表，记录每个时点有没有跑起来，用于发现并补发漏发的轮次；与消息级的reminder_push_record互补';
 
 CREATE TABLE `reminder_excel_import` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '自增主键',

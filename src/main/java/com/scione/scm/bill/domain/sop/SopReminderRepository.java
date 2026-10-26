@@ -19,15 +19,14 @@ public interface SopReminderRepository {
     record TodoRow(long id, String nodeCode, String businessType, String businessSn,
                    LocalDateTime enteredAt, int reminderCount, LocalDateTime firstRemindedAt) { }
 
-    record ViewState(LocalDateTime firstViewedAt, LocalDateTime lastViewedAt, int viewCount) { }
-
     record PreparedGroup(String token, List<Long> todoIds, List<Integer> stages) { }
 
     record SkippedRecipient(String businessSn, String receiverKey, String errorCode, String errorMessage,
                             String itemKey, int stage) { }
 
     /** sendable=false时是否从页面隐藏，由节点规则决定，不在这里判断业务。 */
-    record DispatchDecision(boolean sendable, boolean hideFromPage, String reason) { }
+    /** unknownCount 为该待办历史上发送结果未知的次数，用于邮件标注第几次提醒。 */
+    record DispatchDecision(boolean sendable, boolean hideFromPage, String reason, int unknownCount) { }
 
     record RetryBatch(long id, String contextJson) { }
 
@@ -92,8 +91,6 @@ public interface SopReminderRepository {
     int retryTodoCount(long id);
 
     Link findLink(String token);
-
-    ViewState recordView(String token, String ip, String userAgent);
 
     /** 成功次数只统计关联到成功批次的明细，不把发送中/未知结果算成成功。 */
     List<TodoRow> loadTodos(String token);

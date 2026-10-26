@@ -103,7 +103,10 @@
         SELECT d.todo_id AS todo_id,
                COUNT(DISTINCT CASE WHEN b.send_status=2 THEN b.id END) AS successes,
                COALESCE(MAX(CASE WHEN b.send_status=2 THEN d.reminder_stage END),0) AS highest_stage,
-               MAX(CASE WHEN b.scheduled_at=#{scheduledAt} AND b.send_status IN (1,2,4) THEN 1 ELSE 0 END) AS slot_blocked,
+               <!-- 同一时点已成功(2)或仍在发送(1)才挡；UNKNOWN(4)不挡，留给 unknown_count 按次数判断。 -->
+               MAX(CASE WHEN b.scheduled_at=#{scheduledAt} AND b.send_status IN (1,2) THEN 1 ELSE 0 END) AS slot_blocked,
+               MAX(CASE WHEN b.send_status=1 THEN 1 ELSE 0 END) AS sending,
+               COALESCE(SUM(CASE WHEN b.send_status=4 THEN 1 ELSE 0 END),0) AS unknown_count,
                MAX(CASE WHEN b.send_status IN (1,4) THEN 1 ELSE 0 END) AS unresolved,
                MAX(CASE WHEN b.send_status IN (0,3) AND b.next_retry_at IS NOT NULL
                         AND JSON_UNQUOTE(JSON_EXTRACT(b.send_result,'$.expiresAt'))&gt;#{now} THEN 1 ELSE 0 END) AS retry_pending
@@ -218,20 +221,6 @@
 
     <select id="findAssigneeByToken" resultType="string">
         SELECT assignee_userid FROM reminder_todo WHERE view_token=#{token} LIMIT 1
-    </select>
-
-    <update id="recordView">
-        UPDATE reminder_todo
-        SET first_viewed_at=COALESCE(first_viewed_at,NOW()),last_viewed_at=NOW(),
-            view_count=view_count+1,last_view_ip=#{ip},last_view_ua=#{userAgent}
-        WHERE view_token=#{token}
-    </update>
-
-    <select id="findViewState" resultType="com.scione.scm.bill.domain.sop.SopReminderRepository$ViewState">
-        SELECT MIN(first_viewed_at) AS first_viewed_at,
-               MAX(last_viewed_at) AS last_viewed_at,
-               MAX(view_count) AS view_count
-        FROM reminder_todo WHERE view_token=#{token}
     </select>
 
     <!-- 成功次数只统计关联到成功批次的明细，不把发送中/未知结果算成成功。 -->

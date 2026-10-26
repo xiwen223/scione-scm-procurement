@@ -3,7 +3,6 @@ package com.scione.scm.bill.infrastructure.persistence.mybatis.mapper;
 import com.scione.scm.bill.domain.sop.SopReminderRepository.RetryBatch;
 import com.scione.scm.bill.domain.sop.SopReminderRepository.RetryTodo;
 import com.scione.scm.bill.domain.sop.SopReminderRepository.TodoRow;
-import com.scione.scm.bill.domain.sop.SopReminderRepository.ViewState;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.ReminderPushBatchPO;
 import org.apache.ibatis.annotations.Param;
 
@@ -32,7 +31,8 @@ public interface SopReminderMapper {
 
     /** 发送历史汇总：成功次数、最高成功阶段、时点占用、结果未知与受控重试。 */
     record DispatchHistoryRow(long todoId, int successes, int highestStage,
-                              boolean slotBlocked, boolean unresolved, boolean retryPending) { }
+                              boolean slotBlocked, boolean sending, int unknownCount,
+                              boolean unresolved, boolean retryPending) { }
 
     int insertSkippedRows(@Param("rows") List<SkippedRow> rows);
 
@@ -85,10 +85,6 @@ public interface SopReminderMapper {
     int countRetryTodos(@Param("id") long id);
 
     String findAssigneeByToken(@Param("token") String token);
-
-    int recordView(@Param("token") String token, @Param("ip") String ip, @Param("userAgent") String userAgent);
-
-    ViewState findViewState(@Param("token") String token);
 
     List<TodoRow> findActiveTodos(@Param("token") String token);
 

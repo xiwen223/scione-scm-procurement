@@ -31,6 +31,11 @@ public class PackingMailClient {
         } catch (Exception ignored) { return false; }
     }
 
+    /** 主题只接受本类生成的格式（原主题或带“第N次提醒”后缀），防止别的通知串进来。 */
+    private static boolean validSubject(String value) {
+        return value != null && value.startsWith(SUBJECT);
+    }
+
     public boolean configured() {
         var c = properties.getSend().getPackingMail();
         return c != null && c.getHost() != null && !c.getHost().isBlank() && c.getPort() != null
@@ -41,8 +46,16 @@ public class PackingMailClient {
 
     protected JavaMailSenderImpl createSender() { return new JavaMailSenderImpl(); }
 
+    /**
+     * 主题按重发次数加后缀；正文仍然只有一个链接，不掺任何提示文字。
+     * 首次发送(attemptNo=1)返回原主题，与历史行为完全一致。
+     */
+    public static String subject(int attemptNo) {
+        return attemptNo > 1 ? SUBJECT + "（第" + attemptNo + "次提醒）" : SUBJECT;
+    }
+
     public SendOutcome send(String recipient, String subject, String link) {
-        if (!configured() || !validAddress(recipient) || !SUBJECT.equals(subject))
+        if (!configured() || !validAddress(recipient) || !validSubject(subject))
             return new SendOutcome(SendState.UNSENT, null, null, "SMTP_CONFIG", false, "MAIL_CONFIG_INVALID");
         Transport transport = null;
         boolean sending = false;
@@ -62,7 +75,7 @@ public class PackingMailClient {
             MimeMessage mail = sender.createMimeMessage();
             mail.setFrom(new InternetAddress(c.getFrom()));
             mail.setRecipient(Message.RecipientType.TO, new InternetAddress(recipient));
-            mail.setSubject(SUBJECT, StandardCharsets.UTF_8.name());
+            mail.setSubject(subject, StandardCharsets.UTF_8.name());
             setBody(mail, link);
             mail.setSentDate(new Date()); mail.saveChanges();
             transport = sender.getSession().getTransport("smtp");

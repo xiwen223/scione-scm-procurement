@@ -3,6 +3,7 @@ package com.scione.scm.bill.infrastructure.persistence;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;
@@ -16,9 +17,13 @@ import java.time.Duration;
  * MySQL 命名锁：锁绑定在一条独立连接上，不参与调用方的业务事务。
  * 催办发送串行与小时同步互斥都用它，避免两处各写一套 GET_LOCK/RELEASE_LOCK。
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class MySqlNamedLock {
+
+    /** 等待期间的日志节流间隔：锁被占用时每 5 秒报一次进度，避免长时间黑屏。 */
+    private static final long WAIT_LOG_INTERVAL_MILLIS = 5_000;
 
     private final DataSource dataSource;
 
@@ -35,6 +40,8 @@ public class MySqlNamedLock {
         }
         long deadline = System.nanoTime() + timeout.toNanos();
         long pollMillis = Math.max(1, pollInterval.toMillis());
+        long startedAt = System.nanoTime();
+        long lastLoggedMillis = -1;
         while (System.nanoTime() < deadline) {
             if (Thread.currentThread().isInterrupted()) throw unavailable(interruptedMessage);
             Connection connection = null;
@@ -55,6 +62,16 @@ public class MySqlNamedLock {
                 closeQuietly(connection);
                 throw unavailable("数据库连接异常，无法获取命名锁：" + name);
             }
+            // 一次没拿到锁才打日志：瞬时成功的调用不产生噪音，真正卡住时每5秒报一次进度。
+            long waitedMillis = (System.nanoTime() - startedAt) / 1_000_000;
+            if (lastLoggedMillis < 0) {
+                lastLoggedMillis = waitedMillis;
+                log.info("命名锁被占用，开始等待：lock={}, 上限{}秒", name, timeout.toSeconds());
+            } else if (waitedMillis - lastLoggedMillis >= WAIT_LOG_INTERVAL_MILLIS) {
+                lastLoggedMillis = waitedMillis;
+                log.info("命名锁仍在等待：lock={}, 已等待{}秒，上限{}秒",
+                        name, waitedMillis / 1000, timeout.toSeconds());
+            }
             try {
                 Thread.sleep(pollMillis);
             } catch (InterruptedException exception) {
@@ -62,6 +79,8 @@ public class MySqlNamedLock {
                 throw unavailable(interruptedMessage);
             }
         }
+        log.info("命名锁等待超时：lock={}, waitedMs={}, 上限{}秒",
+                name, (System.nanoTime() - startedAt) / 1_000_000, timeout.toSeconds());
         throw unavailable(timeoutMessage);
     }
 
