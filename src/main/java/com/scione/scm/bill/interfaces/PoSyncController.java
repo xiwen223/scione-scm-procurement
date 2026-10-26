@@ -29,7 +29,7 @@ public class PoSyncController {
 
     @PostMapping("/trigger")
     @Operation(summary = "手动触发采购单同步",
-            description = "不传时间则拉取最近窗口；传 start+end 则按自定义区间回补")
+            description = "不传时间则从自动同步成功进度续查；传 start+end 则按指定区间回补且不推进自动进度")
     public ApiResponse<SyncResult> trigger(
             @RequestParam(value = "start", required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime start,

@@ -2,6 +2,52 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.DeliveryAlertMapper">
 
+    <select id="findFollowUpKeys" resultType="com.scione.scm.bill.domain.deliveryalert.DeliveryFollowUp$Key">
+        SELECT DISTINCT poi.order_sn, poi.sku
+        FROM lx_purchase_order_item poi
+        INNER JOIN lx_purchase_order po ON po.order_sn = poi.order_sn
+        WHERE poi.is_delete = 0 AND po.status NOT IN (-1, 124)
+          AND po.create_time &gt;= #{startDate}
+          AND (BINARY poi.order_sn, BINARY poi.sku) IN
+          <foreach collection="keys" item="key" open="(" separator="," close=")">
+              (BINARY #{key.orderSn}, BINARY #{key.sku})
+          </foreach>
+    </select>
+
+    <select id="lockFollowUp" resultType="com.scione.scm.bill.domain.deliveryalert.DeliveryFollowUp">
+        SELECT order_sn, sku, follower_name, expected_delivery_date, reason, remark, NULL AS group_key
+        FROM reminder_excel_import
+        WHERE order_sn = #{key.orderSn} AND sku = #{key.sku}
+        FOR UPDATE
+    </select>
+
+    <insert id="saveFollowUp">
+        INSERT INTO reminder_excel_import
+            (order_sn, sku, follower_name, expected_delivery_date, reason, remark, updated_by)
+        VALUES (#{row.orderSn}, #{row.sku}, #{row.followerName},
+                #{row.expectedDeliveryDate}, #{row.reason}, #{row.remark}, #{operator})
+        ON DUPLICATE KEY UPDATE follower_name = VALUES(follower_name),
+            expected_delivery_date = VALUES(expected_delivery_date), reason = VALUES(reason),
+            remark = VALUES(remark), updated_by = VALUES(updated_by),
+            updated_at = CURRENT_TIMESTAMP
+    </insert>
+
+    <!-- 按真实采购SKU关联，不使用套装父SKU替代，覆盖同组合的所有采购明细。 -->
+    <select id="findFollowUps" resultType="com.scione.scm.bill.domain.deliveryalert.DeliveryFollowUp">
+        SELECT DISTINCT f.order_sn, f.sku, f.follower_name, f.expected_delivery_date,
+               f.reason, f.remark, <include refid="groupKeyExpression"/> AS group_key
+        FROM lx_purchase_order_item poi
+        INNER JOIN lx_purchase_order po ON po.order_sn = poi.order_sn
+        LEFT JOIN lx_pp_po_sku_ass j ON j.order_sn = poi.order_sn AND j.sku = poi.sku
+        LEFT JOIN lx_purchase_plan pp ON pp.plan_sn = j.plan_sn
+        INNER JOIN reminder_excel_import f ON BINARY f.order_sn = BINARY poi.order_sn
+            AND BINARY f.sku = BINARY poi.sku
+        WHERE poi.is_delete = 0 AND po.status NOT IN (-1, 124)
+          AND <include refid="groupKeyExpression"/> IN
+          <foreach collection="groupKeys" item="key" open="(" separator="," close=")">#{key}</foreach>
+        ORDER BY group_key, order_sn, sku
+    </select>
+
     <!-- 仅套装单品采按采购计划号分组，其他采购明细按采购单号分组。 -->
     <sql id="groupKeyExpression">
         CASE

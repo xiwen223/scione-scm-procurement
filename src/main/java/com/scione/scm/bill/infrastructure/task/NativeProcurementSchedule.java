@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * 原生调度：先同步领星 PO，再扫描待建合同 PO。
- * 自动创建与完成状态同步直接执行，不使用命名锁；同 PO 重复插入由数据库唯一约束拦截。
+ * 自动创建同步使用持久化进度与任务锁；完成同步按PO查询，两条链路共用接口请求锁。
  */
 @Slf4j
 @Component
@@ -24,7 +24,7 @@ public class NativeProcurementSchedule {
     @Scheduled(cron = "${contract.auto-create.cron:0 0/5 * * * ?}")
     public void execute() {
         if (!properties.isEnabled()) {
-            log.debug("原生采购合同自动创建任务已关闭");
+            log.info("原生采购合同自动创建任务已关闭");
             return;
         }
         try {

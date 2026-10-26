@@ -72,6 +72,10 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     private final RestClient restClient;
     private final LingxingRequestCoordinator coordinator;
     private volatile CachedToken cachedToken;
+    /** 上一轮装箱批次详情；指纹不变时复用，避免每5分钟重复拉取391条。 */
+    private volatile PackingBatchCache packingBatchCache;
+    /** 缓存最长保留时间：超过就强制重拉，兜底指纹捕捉不到的字段级变化。 */
+    private static final long PACKING_BATCH_CACHE_TTL_NANOS = Duration.ofMinutes(60).toNanos();
 
     public LingxingOpenApiClient(
             LingxingOpenApiProperties properties,
@@ -129,13 +133,13 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             String remoteMessage = responseMessage(response);
             if (!code.isBlank() && !"0".equals(code) && !"200".equals(code)) {
                 String reason = "业务码 " + code + (remoteMessage.isBlank() ? "" : "：" + remoteMessage);
-                log.warn("Lingxing product request was rejected: {}", sanitizeReason(reason));
+                log.error("Lingxing product request was rejected: {}", sanitizeReason(reason));
                 throw lingxingError(reason);
             }
             JsonNode data = response == null ? null : response.get("data");
             if (data == null || !data.isArray()) {
                 String reason = remoteMessage.isBlank() ? "响应数据格式错误" : remoteMessage;
-                log.warn("Lingxing product response is invalid: code={}, reason={}", code, sanitizeReason(reason));
+                log.error("Lingxing product response is invalid: code={}, reason={}", code, sanitizeReason(reason));
                 throw lingxingError(reason);
             }
             // 只保留本批请求过的 SKU，避免接口返回多余商品污染结果
@@ -388,21 +392,33 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             LocalDateTime startTime, LocalDateTime endTime, String searchFieldTime) {
         ensureConfigured();
         List<PurchaseOrderData> all = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        long expectedTotal = -1;
         int offset = 0;
         while (true) {
             JsonNode response = callPurchaseOrderList(startTime, endTime, searchFieldTime, offset, null);
             JsonNode data = response == null ? null : response.get("data");
-            if (data == null || !data.isArray() || data.isEmpty()) {
-                break;                       // 查不到就结束，不抛异常
+            String totalText = response == null ? "" : response.path("total").asText();
+            if (data == null || !data.isArray() || !totalText.matches("[0-9]+")) {
+                throw lingxingError("采购单分页缺少有效data/total，本轮进度不推进");
             }
+            long total = Long.parseLong(totalText);
+            if (expectedTotal >= 0 && expectedTotal != total) {
+                throw lingxingError("采购单分页总数变化，本轮进度不推进，下轮重新补查");
+            }
+            expectedTotal = total;
             for (JsonNode order : data) {
-                all.add(toPurchaseOrderData(order));
+                PurchaseOrderData item = toPurchaseOrderData(order);
+                if (item.orderSn() == null || item.orderSn().isBlank() || !seen.add(item.orderSn())) {
+                    throw lingxingError("采购单分页单号缺失或重复，本轮进度不推进");
+                }
+                all.add(item);
             }
-            long total = response.path("total").asLong(all.size());
+            if (all.size() == total) break;
+            if (all.size() > total || data.size() != PURCHASE_ORDER_PAGE_SIZE) {
+                throw lingxingError("采购单分页提前结束或数量异常，本轮进度不推进");
+            }
             offset += PURCHASE_ORDER_PAGE_SIZE;
-            if (offset >= total) {
-                break;                       // 翻完最后一页
-            }
         }
         return all;
     }
@@ -470,7 +486,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             String code = response == null ? "" : response.path("code").asText();
             // 采购查询步骤4：检查领星业务码；HTTP 200 也可能是限流或 token 错误，不能按成功数据解析。
             String remoteMessage = responseMessage(response);
-            if (!code.isBlank() && !"0".equals(code) && !"200".equals(code)) {
+            if (!"0".equals(code) && !"200".equals(code)) {
                 String reason = "业务码 " + code + (remoteMessage.isBlank() ? "" : "：" + remoteMessage);
                 log.info("Lingxing purchase order request was rejected: {}", sanitizeReason(reason));
                 throw lingxingError(reason);
@@ -660,7 +676,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
                 String reason = "获取 access token 失败"
                         + (code.isBlank() ? "" : "（业务码 " + code + "）")
                         + (remoteMessage.isBlank() ? "" : "：" + remoteMessage);
-                log.warn("Lingxing access token response is invalid: {}", sanitizeReason(reason));
+                log.error("Lingxing access token response is invalid: {}", sanitizeReason(reason));
                 throw lingxingError(reason);
             }
             long expiresInSeconds = positiveLong(data, "expires_in",
@@ -701,6 +717,139 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
                 nullableNode(item, "custom_fields"), nullableNode(item, "global_tags"), List.copyOf(comboProducts));
     }
 
+    public record PackingSource(List<JsonNode> tasks, List<JsonNode> batches, LocalDateTime checkedAt) { }
+
+    /** 待关联批次指纹 + 其对应的批次详情，供每轮预览复用。 */
+    private record PackingBatchCache(String fingerprint, List<JsonNode> batches, long fetchedAt) { }
+
+    /** 发送前只读核验；不写同步表、不按本地快照代替当前领星状态。 */
+    public List<JsonNode> fetchReminderVerification(String kind, Collection<String> sns, LocalDate since) {
+        List<String> keys = sns.stream().distinct().toList();
+        if (keys.isEmpty() && !Set.of("POOL", "CR_UPDATES").contains(kind)) return List.of();
+        long deadline = System.nanoTime() + Duration.ofMinutes(4).toNanos();
+        List<JsonNode> result = new ArrayList<>();
+        LocalDate today = LocalDate.now(java.time.ZoneId.of("Asia/Shanghai"));
+        if ("RF".equals(kind)) {
+            for (String sn : keys) result.addAll(reminderPages("/basicOpen/finance/requestFunds/order/list",
+                    Map.of("search_field", "order_sn", "search_value", sn), null, 200, deadline));
+        } else if ("POOL".equals(kind)) {
+            for (LocalDate start = since; !start.isAfter(today); start = start.plusDays(90)) {
+                LocalDate end = start.plusDays(89).isAfter(today) ? today : start.plusDays(89);
+                result.addAll(reminderPages("/basicOpen/finance/requestFundsPool/purchase/list",
+                        Map.of("time_field", "create_time", "start_time", start.toString(), "end_time", end.toString()), null, 200, deadline));
+            }
+        } else if ("CR_UPDATES".equals(kind)) {
+            result.addAll(reminderPages("/erp/sc/routing/deliveryReceipt/PurchaseReceiptOrder/getOrderList",
+                    Map.of("date_type", 4, "start_date", since.toString(), "end_date", today.toString(), "order_type", 1), null, 500, deadline));
+        } else {
+            for (int offset = 0; offset < keys.size(); offset += 100) {
+                List<String> batch = keys.subList(offset, Math.min(offset + 100, keys.size()));
+                Map<String,Object> filter = new LinkedHashMap<>();
+                filter.put("start_date", since.toString()); filter.put("end_date", today.toString());
+                String path;
+                switch (kind) {
+                    case "PP" -> { path="/erp/sc/routing/data/local_inventory/getPurchasePlans"; filter.put("search_field_time","creator_time"); filter.put("plan_sns",batch); }
+                    case "PO" -> { path=PURCHASE_ORDER_LIST_PATH; filter.put("search_field_time","create_time"); filter.put("order_sn",batch); }
+                    case "CR" -> { path="/erp/sc/routing/deliveryReceipt/PurchaseReceiptOrder/getOrderList"; filter.put("date_type",3); filter.put("order_sns",String.join(",",batch)); filter.put("order_type",1); }
+                    default -> throw lingxingError("未知的催办实时核验类型");
+                }
+                result.addAll(reminderPages(path,filter,null,"PP".equals(kind)?50:500,deadline));
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 实时节点只读领星；复用当前签名、令牌缓存和请求队列，不更新小时同步表。
+     * 发送前核验必须用本重载（不走缓存），保证拿到的是领星当前状态。
+     */
+    public PackingSource fetchReminderPacking(LocalDate from) {
+        return fetchReminderPacking(from, false);
+    }
+
+    /**
+     * @param allowCache 仅每轮预览用 true：待关联批次指纹未变时复用上一轮批次详情，
+     *                   省掉 shipmentPlanLists 整页拉取（391条约35秒，令牌桶容量1）。
+     *                   发送前核验必须传 false，不能拿旧数据当当前状态。
+     */
+    public PackingSource fetchReminderPacking(LocalDate from, boolean allowCache) {
+        if (from == null) throw lingxingError("关联货件批次日期不能为空");
+        long deadline = System.nanoTime() + Duration.ofMinutes(4).toNanos();
+        String end = LocalDate.now(java.time.ZoneId.of("Asia/Shanghai")).toString();
+        // packingTask/list 的 length 上限就是200，填500会直接返回 code=400；283条只能分两页。
+        List<JsonNode> tasks = reminderPages("/basicOpen/packingTask/list", Map.of(
+                "relateSnType",List.of("1"),"searchFieldTime","create","startDate",from.toString(),"endDate",end),
+                "ptId",200,deadline);
+        String fingerprint = packingFingerprint(tasks);
+        PackingBatchCache cached = packingBatchCache;
+        List<JsonNode> batches;
+        if (allowCache && cached != null && fingerprint.equals(cached.fingerprint())
+                && System.nanoTime() - cached.fetchedAt() < PACKING_BATCH_CACHE_TTL_NANOS) {
+            batches = cached.batches();
+            log.info("关联货件批次详情本轮复用：待关联批次未变化，跳过shipmentPlanLists，缓存{}秒",
+                    java.util.concurrent.TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - cached.fetchedAt()));
+        } else {
+            batches = reminderPages("/erp/sc/data/fba_report/shipmentPlanLists",Map.of(
+                    "search_field_time","gmt_create","start_date",from.toString(),"end_date",end),"ispg_id",500,deadline);
+            log.info("关联货件批次详情重新拉取：{}", cached == null ? "首次查询"
+                    : !fingerprint.equals(cached.fingerprint()) ? "待关联批次发生变化"
+                    : "缓存超过" + java.util.concurrent.TimeUnit.NANOSECONDS.toMinutes(PACKING_BATCH_CACHE_TTL_NANOS) + "分钟");
+            // 无论是否允许读缓存，只要真拉了就用最新结果覆盖：
+            // 发送前核验的全量拉取顺带把缓存校准一次，不必再等 TTL 到点。
+            packingBatchCache = new PackingBatchCache(fingerprint, List.copyOf(batches), System.nanoTime());
+        }
+        if (System.nanoTime()>=deadline) throw lingxingError("关联货件查询超过4分钟，本轮不发送");
+        return new PackingSource(tasks,batches,LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai")));
+    }
+
+    /**
+     * 影响候选判定的字段才进指纹：批次号、任务状态、已关联货件数。
+     * 子计划从"未关联"变"已关联"会改动任务状态或货件列表，指纹随之变化，缓存自然失效。
+     */
+    private static String packingFingerprint(List<JsonNode> tasks) {
+        return tasks.stream()
+                .filter(task -> task.path("relateSnType").asInt() == 1)
+                .map(task -> task.path("relateSn").asText() + ":"
+                        + task.path("taskStatus").asInt() + ":" + task.path("relateShipment").size())
+                .sorted()
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    /** 共用严格分页：装箱按明确ID去重；PP等多SKU响应按整行去重，允许同单号多行。 */
+    private List<JsonNode> reminderPages(String path,Map<String,Object> filter,String key,int size,long deadline) {
+        List<JsonNode> result=new ArrayList<>();Set<String> seen=new HashSet<>();Long expected=null;
+        while (true) {
+            if (System.nanoTime()>=deadline) throw lingxingError("实时节点查询超时");
+            Map<String,Object> body=new LinkedHashMap<>(filter);body.put("offset",result.size());body.put("length",size);
+            JsonNode response;
+            long pageStarted = System.nanoTime();
+            try { response=requestQueryWithRetry(path,body); }
+            catch (RestClientException exception) {
+                log.error("实时催办来源接口请求失败：path={}, exceptionType={}",path,exception.getClass().getSimpleName());
+                throw lingxingError("实时节点接口请求失败，未更新数据库");
+            }
+            if (System.nanoTime()>=deadline) throw lingxingError("实时节点查询超时");
+            if (response==null || !"0".equals(response.path("code").asText()))
+                throw lingxingError("实时节点接口未成功，code="+(response==null?"invalid":response.path("code").asText()));
+            JsonNode data=response.path("data");JsonNode page=data.isArray()?data:data.path("list");
+            // 领星各接口总数位置不一致：收货单getOrderList顶层total恒为0、真实值在data.total，
+            // 其余接口反过来。两边都读、取较大值，不能因为顶层0就把有数据的页判成结构异常。
+            long count=Math.max(response.path("total").asLong(-1),data.isObject()?data.path("total").asLong(-1):-1);
+            if (!page.isArray() || count<0) throw lingxingError("实时节点分页结构异常");
+            if (expected!=null && expected!=count) throw lingxingError("实时节点分页期间总数变化，下次重新采集");
+            expected=count;
+            log.info("实时催办接口页完成：path={}, offset={}, pageRows={}, total={}, elapsedMs={}", path,
+                    result.size(), page.size(), count, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pageStarted));
+            for (JsonNode row:page) {
+                String id=key==null?row.toString():row.path(key).asText("");
+                if (id.isBlank() || !seen.add(id)) throw lingxingError("实时节点业务键缺失或重复");
+                result.add(row);
+            }
+            if (result.size()==count) return result;
+            if (page.isEmpty() || result.size()>count) throw lingxingError("实时节点分页不完整");
+        }
+    }
+
     /** 同接口排队后才签名；一页/一批就是一次请求，响应读取完成后释放名额。 */
     private JsonNode requestQueued(String path, Map<String, Object> body) {
         ensureConfigured();
@@ -729,20 +878,28 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         });
     }
 
-    /** 采购单/商品限流最多额外重试两次；仅重试本次查询，不重跑合同创建。 */
+    /** 临时业务/网络错误最多额外重试两次；仅重试当前查询，不重跑合同创建。 */
     private JsonNode requestQueryWithRetry(String path, Map<String, Object> body) {
         for (int attempt = 1; attempt <= 3; attempt++) {
+            long waitMillis = 2000L * attempt;
             try {
                 JsonNode response = requestQueued(path, body);
-                if (response == null || !"3001008".equals(response.path("code").asText()) || attempt == 3) {
+                String code = response == null ? "" : response.path("code").asText();
+                if (!Set.of("3001008", "103", "500").contains(code) || attempt == 3) {
                     return response;
                 }
+                if (Set.of("3001008", "103").contains(code)) waitMillis = 30000L * attempt;
             } catch (RestClientResponseException ex) {
-                if (ex.getStatusCode().value() != 429 || attempt == 3) throw ex;
+                int status = ex.getStatusCode().value();
+                if ((status != 408 && status != 429 && (status < 500 || status > 599)) || attempt == 3) throw ex;
+                if (status == 429) waitMillis = 30000L * attempt;
+            } catch (ResourceAccessException ex) {
+                if (hasCause(ex, javax.net.ssl.SSLHandshakeException.class) || attempt == 3) throw ex;
             }
-            log.info("领星接口限流，稍后重新排队：path={}, attempt={}, maxAttempts=3, waitMs=2000", path, attempt);
+            log.info("领星查询临时失败，稍后重新排队：path={}, attempt={}, maxAttempts=3, waitMs={}",
+                    path, attempt, waitMillis);
             try {
-                Thread.sleep(2000);
+                Thread.sleep(waitMillis);
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
                 throw lingxingError("限流重试等待被中断；接口=" + path);
