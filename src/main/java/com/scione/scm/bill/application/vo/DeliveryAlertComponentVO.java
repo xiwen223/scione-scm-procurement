@@ -1,13 +1,17 @@
 package com.scione.scm.bill.application.vo;
 
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertComponent;
+import com.scione.scm.bill.domain.deliveryalert.DeliveryFollowUp;
 import lombok.Data;
+import java.util.List;
 
 /**
  * 采购交付预警看板套装组件明细。
  */
 @Data
 public class DeliveryAlertComponentVO {
+
+    private List<DeliveryFollowUp> followUps = List.of();
 
     private Long componentId;
     private String sku;

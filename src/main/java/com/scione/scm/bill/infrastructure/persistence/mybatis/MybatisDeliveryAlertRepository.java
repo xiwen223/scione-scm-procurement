@@ -10,6 +10,7 @@ import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertPage;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertQuery;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertRepository;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertSummary;
+import com.scione.scm.bill.domain.deliveryalert.DeliveryFollowUp;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.DeliveryAlertMapper;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertComponentPO;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertDetailPO;
@@ -20,17 +21,38 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
 
 /**
- * 基于 MyBatis 的采购交付预警看板只读仓储适配器。
+ * 基于 MyBatis 的采购交付预警看板仓储适配器。
  */
 @Repository
 @RequiredArgsConstructor
 public class MybatisDeliveryAlertRepository implements DeliveryAlertRepository {
 
     private final DeliveryAlertMapper deliveryAlertMapper;
+
+    @Override
+    public List<DeliveryFollowUp.Key> findFollowUpKeys(List<DeliveryFollowUp.Key> keys, LocalDate startDate) {
+        return keys.isEmpty() ? List.of() : deliveryAlertMapper.findFollowUpKeys(keys, startDate);
+    }
+
+    @Override
+    public DeliveryFollowUp lockFollowUp(DeliveryFollowUp.Key key) {
+        return deliveryAlertMapper.lockFollowUp(key);
+    }
+
+    @Override
+    public void saveFollowUp(DeliveryFollowUp row, String operator) {
+        deliveryAlertMapper.saveFollowUp(row, operator);
+    }
+
+    @Override
+    public List<DeliveryFollowUp> findFollowUps(List<String> groupKeys) {
+        return groupKeys.isEmpty() ? List.of() : deliveryAlertMapper.findFollowUps(groupKeys);
+    }
 
     @Override
     public DeliveryAlertPage findPage(DeliveryAlertQuery query) {

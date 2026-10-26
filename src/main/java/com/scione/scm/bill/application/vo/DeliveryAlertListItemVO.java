@@ -2,6 +2,7 @@ package com.scione.scm.bill.application.vo;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlert;
+import com.scione.scm.bill.domain.deliveryalert.DeliveryFollowUp;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -12,6 +13,9 @@ import java.util.List;
  */
 @Data
 public class DeliveryAlertListItemVO {
+
+    /** 分组内人工信息按真实采购单号加SKU分别返回，不把多个SKU的原因拼成同一条。 */
+    private List<DeliveryFollowUp> followUps = List.of();
 
     private String groupKey;
     private List<String> types;

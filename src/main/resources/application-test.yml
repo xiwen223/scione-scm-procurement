@@ -3,6 +3,8 @@ spring:
     import:
       - optional:nacos:${spring.application.name}.yaml?refreshEnabled=true
       - optional:nacos:${spring.application.name}-database.yaml?refreshEnabled=true
+      # 催办配置独立 dataId；测试环境固定读取本命名空间下的同一份配置。
+      - optional:nacos:${spring.application.name}-sop.yaml?refreshEnabled=true
 
   cloud:
     nacos:

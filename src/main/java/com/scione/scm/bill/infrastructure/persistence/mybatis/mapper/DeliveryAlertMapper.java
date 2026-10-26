@@ -5,6 +5,7 @@ import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertDe
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertPO;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertSummaryPO;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryBusinessLogPO;
+import com.scione.scm.bill.domain.deliveryalert.DeliveryFollowUp;
 import org.apache.ibatis.annotations.Param;
 
 import java.time.LocalDate;
@@ -15,6 +16,18 @@ import java.util.List;
  * 采购交付预警看板 Mapper。
  */
 public interface DeliveryAlertMapper {
+
+    List<DeliveryFollowUp.Key> findFollowUpKeys(
+            @Param("keys") List<DeliveryFollowUp.Key> keys,
+            @Param("startDate") LocalDate startDate);
+
+    DeliveryFollowUp lockFollowUp(@Param("key") DeliveryFollowUp.Key key);
+
+    int saveFollowUp(@Param("row") DeliveryFollowUp row,
+                     @Param("operator") String operator);
+
+    List<DeliveryFollowUp> findFollowUps(
+            @Param("groupKeys") List<String> groupKeys);
 
     long count(@Param("startDate") LocalDate startDate,
                @Param("keyword") String keyword,

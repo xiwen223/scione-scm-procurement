@@ -3,18 +3,22 @@ package com.scione.scm.bill.application;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scione.scm.bill.domain.procurementlog.enums.ProcurementBusinessType;
+import com.scione.scm.bill.common.BusinessException;
+import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.domain.procurementlog.enums.ProcurementOperationType;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.ProcurementOperationLogMapper;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.ProcurementOperationLogPO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.nio.charset.StandardCharsets;
 
 /**
  * 供应链操作日志（procurement_operation_log）的统一写入入口。
@@ -22,15 +26,14 @@ import java.util.Objects;
  * <p>各业务写操作在接口层调用本类，把「谁、对哪条业务数据、做了什么」落到操作日志表，
  * 由本类集中处理列宽截断、详情 JSON 序列化与写入容错，调用方只需提供业务信息。</p>
  *
- * <p><b>写入是尽力而为的：</b>调用发生在业务事务提交之后，日志写入失败只记 ERROR，
- * 不会把已经成功的业务操作变成失败（否则调用方会误判并重试，产生重复数据）。</p>
+ * <p>{@link #record} 为尽力写入，失败只记 ERROR；需要保证业务与审计同时提交的导入操作
+ * 使用 {@link #recordRequired}，该方法参与调用方事务，日志写入失败会向外抛出。</p>
  *
  * <p>按当前约定，{@code operator_id} 与 {@code ip_address} 不采集，落库为 NULL；
  * 操作人只记 {@code operator_name}（取自 {@value #OPERATOR_HEADER} 请求头）。</p>
  *
- * <p><b>操作详情只对「修改」记录</b>（{@link ProcurementOperationType#isDetailSupported()}）：
- * 新增 / 删除 / 签章类操作即使传了详情也不会落库，避免日志里堆积没有检索价值的字段快照。
- * 修改操作的详情由 {@link #changes(FieldChange...)} 构造，只包含真正发生变化的字段。</p>
+ * <p>操作详情由 {@link ProcurementOperationType#isDetailSupported()} 决定：修改保存字段变更，
+ * 导入保存统计与错误文件引用。新增 / 删除 / 签章类操作不保存字段快照。</p>
  */
 @Service
 @Slf4j
@@ -68,12 +71,12 @@ public class ProcurementOperationLogRecorder {
     /**
      * 记录一条操作日志。
      *
-     * @param businessType 业务类型（合同 / 公司信息 / 合同模板）
+     * @param businessType 业务类型（合同 / 公司信息 / 合同模板 / 跟单情况导入）
      * @param dataId       业务数据主键
      * @param dataName     业务数据名称快照，写入 data_name（超长自动截断）
      * @param operationType 操作类型
      * @param operatorName 操作人（邮箱），写入 operator_name；为空则记 NULL
-     * @param details      操作详情（仅「修改」类操作会落库），可为 null
+     * @param details      操作详情（是否保存由操作类型枚举决定），可为 null
      */
     public void record(
             ProcurementBusinessType businessType,
@@ -88,6 +91,67 @@ public class ProcurementOperationLogRecorder {
             return;
         }
 
+        ProcurementOperationLogPO logPO = buildLog(businessType, dataId, dataName, operationType,
+                operatorName, details);
+        try {
+            mapper.insert(logPO);
+        } catch (RuntimeException exception) {
+            log.error("写入供应链操作日志失败（业务已提交，不影响本次操作）：businessType={}, dataId={}, operationType={}",
+                    businessType.getCode(), dataId, operationType.getCode(), exception);
+        }
+    }
+
+    /**
+     * 必须成功的审计写入：参与现有事务，无事务时独立提交。导入失败的日志应在业务事务回滚后调用。
+     * 返回数据库生成的日志 ID，供错误文件下载接口定位，不能把日志失败伪装成导入成功。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Long recordRequired(
+            ProcurementBusinessType businessType, Long dataId, String dataName,
+            ProcurementOperationType operationType, String operatorName, Map<String, Object> details) {
+        Objects.requireNonNull(businessType, "businessType");
+        Objects.requireNonNull(dataId, "dataId");
+        Objects.requireNonNull(operationType, "operationType");
+        ProcurementOperationLogPO logPO = buildLog(businessType, dataId, dataName, operationType,
+                operatorName, null);
+        if (operationType.isDetailSupported() && details != null && !details.isEmpty()) {
+            try {
+                String json = objectMapper.writeValueAsString(details);
+                if (json.getBytes(StandardCharsets.UTF_8).length > MAX_OPERATION_DETAILS_LENGTH) {
+                    throw new IllegalStateException("操作详情过长，拒绝写入不完整审计");
+                }
+                logPO.setOperationDetails(json);
+            } catch (JsonProcessingException exception) {
+                throw new IllegalStateException("操作详情序列化失败", exception);
+            }
+        }
+        if (mapper.insert(logPO) != 1 || logPO.getId() == null) {
+            throw new IllegalStateException("供应链操作日志写入失败");
+        }
+        return logPO.getId();
+    }
+
+    /** 导入调用方只取得已核实的错误文件key，不接触Mapper或持久化PO。 */
+    public String findImportErrorFileKey(Long logId) {
+        ProcurementOperationLogPO operation = logId == null ? null : mapper.findById(logId);
+        if (operation == null || !Objects.equals(operation.getBusinessType(), ProcurementBusinessType.DELIVERY_FOLLOW_UP.getCode())
+                || operation.getOperationDetails() == null) throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND);
+        try {
+            com.fasterxml.jackson.databind.JsonNode details = objectMapper.readTree(operation.getOperationDetails());
+            if (details == null || !details.isObject()) throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND);
+            String key = details.path("errorFile").asText();
+            if (!key.startsWith("delivery-alerts/import-errors/") || key.contains("..")) {
+                throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND);
+            }
+            return key;
+        } catch (JsonProcessingException exception) {
+            throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND);
+        }
+    }
+
+    private ProcurementOperationLogPO buildLog(
+            ProcurementBusinessType businessType, Long dataId, String dataName,
+            ProcurementOperationType operationType, String operatorName, Map<String, Object> details) {
         ProcurementOperationLogPO logPO = new ProcurementOperationLogPO();
         logPO.setBusinessType(businessType.getCode());
         logPO.setDataId(dataId);
@@ -96,15 +160,9 @@ public class ProcurementOperationLogRecorder {
         logPO.setOperationType(operationType.getCode());
         logPO.setOperationDesc(truncate(operationType.getLabel() + "：" + logPO.getDataName(),
                 MAX_OPERATION_DESC_LENGTH));
-        // 只有「修改」记录操作详情；其余类型即使调用方传了详情也不落库
+        // 保留各操作类型声明的详情，其他操作继续保持原有行为。
         logPO.setOperationDetails(operationType.isDetailSupported() ? toJson(details) : null);
-
-        try {
-            mapper.insert(logPO);
-        } catch (RuntimeException exception) {
-            log.error("写入供应链操作日志失败（业务已提交，不影响本次操作）：businessType={}, dataId={}, operationType={}",
-                    businessType.getCode(), dataId, operationType.getCode(), exception);
-        }
+        return logPO;
     }
 
     /**

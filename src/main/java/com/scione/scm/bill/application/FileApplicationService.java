@@ -7,6 +7,7 @@ import com.scione.scm.bill.application.vo.FileUploadVO;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import feign.FeignException;
+import feign.Response;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -14,6 +15,11 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
 
 /**
  * 通用文件服务：封装数据平台对象存储的上传与临时访问地址获取，供各业务模块复用。
@@ -51,6 +57,45 @@ public class FileApplicationService {
 
         return new FileUploadVO(fileInfo.getObjectKey(), fileInfo.getUrl(),
                 fileInfo.getOriginalName(), fileInfo.getContentType(), fileInfo.getSize());
+    }
+
+    /** 服务端生成的文件复用同一个上传入口，业务只需保存返回的 objectKey。 */
+    public FileUploadVO uploadBytes(String fileName, String contentType, byte[] content, String path) {
+        if (content == null || content.length == 0) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "上传文件不能为空");
+        }
+        return upload(new MemoryFile(fileName, contentType, content), path);
+    }
+
+    /** 按持久 objectKey 下载原文件，不将会过期的预签名URL作为文件标识。 */
+    public byte[] download(String objectKey) {
+        String key = requireText(objectKey, "objectKey 不能为空");
+        try (Response response = s3Client.download(key)) {
+            if (response == null || response.status() != 200 || response.body() == null) {
+                throw storageError("下载文件", "存储服务未返回文件内容");
+            }
+            try (InputStream input = response.body().asInputStream()) {
+                byte[] bytes = input.readAllBytes();
+                if (bytes.length == 0) {
+                    throw storageError("下载文件", "文件内容为空");
+                }
+                return bytes;
+            }
+        } catch (IOException | FeignException exception) {
+            log.error("Storage download failed, objectKey={}", key, exception);
+            throw storageError("下载文件", "存储服务调用失败");
+        }
+    }
+
+    private record MemoryFile(String originalFilename, String contentType, byte[] content) implements MultipartFile {
+        @Override public String getName() { return "file"; }
+        @Override public String getOriginalFilename() { return originalFilename; }
+        @Override public String getContentType() { return contentType; }
+        @Override public boolean isEmpty() { return content.length == 0; }
+        @Override public long getSize() { return content.length; }
+        @Override public byte[] getBytes() { return content; }
+        @Override public InputStream getInputStream() { return new ByteArrayInputStream(content); }
+        @Override public void transferTo(File destination) throws IOException { Files.write(destination.toPath(), content); }
     }
 
     /**

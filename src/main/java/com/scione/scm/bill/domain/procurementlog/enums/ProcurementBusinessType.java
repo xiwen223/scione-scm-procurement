@@ -13,7 +13,8 @@ public enum ProcurementBusinessType {
 
     CONTRACT(1, "合同"),
     BUYER_COMPANY(2, "公司信息"),
-    CONTRACT_TEMPLATE(3, "合同模板");
+    CONTRACT_TEMPLATE(3, "合同模板"),
+    DELIVERY_FOLLOW_UP(4, "跟单情况导入");
 
     private final int code;
     private final String name;

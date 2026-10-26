@@ -3,6 +3,9 @@ spring:
     import:
       - optional:nacos:${spring.application.name}.yaml?refreshEnabled=true
       - optional:nacos:${spring.application.name}-database.yaml?refreshEnabled=true
+      # 催办配置独立 dataId。
+      # 注意：enabled/发送开关可热更新，cron 与节点增删必须重启生效。
+      - optional:nacos:${spring.application.name}-sop.yaml?refreshEnabled=true
 
   cloud:
     nacos:

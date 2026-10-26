@@ -13,6 +13,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
+import java.time.LocalDateTime;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.function.Supplier;
+import javax.sql.DataSource;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
  * 基于 MyBatis 的采购单同步仓储适配器。
@@ -23,6 +29,59 @@ public class MybatisPoSyncRepository implements PoSyncRepository {
 
     private final PoSyncRecordMapper recordMapper;
     private final PoSyncRecordItemMapper itemMapper;
+    private final DataSource dataSource;
+
+    @Override
+    public <T> T withSyncLock(Supplier<T> action) {
+        // 专用连接只持有命名锁，不在网络请求期间开启数据库事务。
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(true);
+            try (var statement = connection.prepareStatement("SELECT GET_LOCK('contract_po_sync',40)");
+                 var result = statement.executeQuery()) {
+                if (!result.next() || result.getInt(1) != 1) {
+                    throw new IllegalStateException("采购单同步正在执行，本次未取得同步锁，进度不变");
+                }
+            }
+            try {
+                return action.get();
+            } finally {
+                try (var statement = connection.prepareStatement("SELECT RELEASE_LOCK('contract_po_sync')");
+                     var result = statement.executeQuery()) {
+                    if (!result.next() || result.getInt(1) != 1) {
+                        throw new SQLException("采购单同步锁释放失败");
+                    }
+                } catch (SQLException ex) {
+                    // 不把仍可能持锁的会话交回连接池。
+                    connection.abort(Runnable::run);
+                    throw ex;
+                }
+            }
+        } catch (SQLException ex) {
+            throw new IllegalStateException("采购单同步锁连接异常，停止本次同步", ex);
+        }
+    }
+
+    @Override
+    public Optional<LocalDateTime> findUpdatedUntil() {
+        return new JdbcTemplate(dataSource).query(
+                "SELECT updated_until FROM po_sync_state WHERE source_code='contract_po'",
+                (result, row) -> result.getObject(1, LocalDateTime.class)).stream().findFirst();
+    }
+
+    @Override
+    public void initializeUpdatedUntil(LocalDateTime initialBoundary) {
+        new JdbcTemplate(dataSource).update(
+                "INSERT INTO po_sync_state(source_code,updated_until) VALUES ('contract_po',?) "
+                        + "ON DUPLICATE KEY UPDATE source_code=VALUES(source_code)", initialBoundary);
+    }
+
+    @Override
+    public void advanceUpdatedUntil(LocalDateTime updatedUntil) {
+        new JdbcTemplate(dataSource).update(
+                "INSERT INTO po_sync_state(source_code,updated_until) VALUES ('contract_po',?) "
+                        + "ON DUPLICATE KEY UPDATE updated_until=GREATEST(updated_until,VALUES(updated_until))",
+                updatedUntil);
+    }
 
     @Override
     @Transactional

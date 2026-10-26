@@ -9,12 +9,14 @@ import com.scione.scm.bill.domain.contract.PurchasePriceCalculator;
 import com.scione.scm.bill.domain.posync.PoSyncRecord;
 import com.scione.scm.bill.domain.posync.PoSyncRecordItem;
 import com.scione.scm.bill.domain.posync.PoSyncRepository;
+import com.scione.scm.bill.config.ContractAutoCreateScheduleProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -29,12 +31,13 @@ public class PoSyncAppService {
     /** 时间搜索维度：按更新时间拉取（新增单创建时也会写 update_time，故一次覆盖新增+变更）。 */
     private static final String SEARCH_FIELD_UPDATE_TIME = "update_time";
 
-    /** 拉取窗口分钟数：调度周期 5 分钟 + 1 分钟重叠冗余，靠 upsert 幂等兜底。 */
+    /** 没有持久化进度且未配置首轮起点时，兼容原有最近6分钟；之后从成功进度接续。 */
     private static final int PULL_WINDOW_MINUTES = 6;
 
     private final LingxingPurchaseOrderClient purchaseOrderClient;
     private final PoSyncRepository poSyncRepository;
     private final ContractAutoCreateService contractAutoCreateService;
+    private final ContractAutoCreateScheduleProperties scheduleProperties;
 
     /**
      * 拉取最近窗口内变动的采购单并落库。
@@ -42,16 +45,42 @@ public class PoSyncAppService {
      * @return 本次同步汇总
      */
     public SyncResult pullAndSync() {
-        LocalDateTime now = LocalDateTime.now();
-        LocalDateTime startTime = now.minusMinutes(PULL_WINDOW_MINUTES);
-        return pullAndSync(startTime, now);
+        return poSyncRepository.withSyncLock(() -> {
+            LocalDateTime end = LocalDateTime.now(ZoneId.of("Asia/Shanghai"));
+            var progress = poSyncRepository.findUpdatedUntil();
+            LocalDateTime start;
+            if (progress.isPresent()) {
+                start = progress.get().minusMinutes(1);
+            } else {
+                start = scheduleProperties.getInitialStartTime() != null
+                        ? scheduleProperties.getInitialStartTime() : end.minusMinutes(PULL_WINDOW_MINUTES);
+                if (!start.isBefore(end)) throw new IllegalArgumentException("采购单首轮起点必须早于当前时间");
+                // 先记首轮下界，再发接口；首轮失败也不能下次又只回看最近6分钟。
+                poSyncRepository.initializeUpdatedUntil(start);
+            }
+            SyncResult result = syncWindow(start, end);
+            if (result.failed() == 0 && result.contractCreate().failed() == 0) {
+                poSyncRepository.advanceUpdatedUntil(end);
+            } else {
+                log.error("采购单或合同处理存在失败，自动同步进度不推进，下轮从原进度补查");
+            }
+            return result;
+        });
     }
 
     /**
      * 拉取指定时间窗口内变动的采购单并落库（供手动触发按自定义区间回补）。
      */
     public SyncResult pullAndSync(LocalDateTime startTime, LocalDateTime endTime) {
-        LocalDateTime syncTime = LocalDateTime.now();
+        // 自定义回补也要串行，但不能把自动任务进度推到调用方任意指定的时间。
+        return poSyncRepository.withSyncLock(() -> syncWindow(startTime, endTime));
+    }
+
+    private SyncResult syncWindow(LocalDateTime startTime, LocalDateTime endTime) {
+        if (startTime == null || endTime == null || !startTime.isBefore(endTime)) {
+            throw new IllegalArgumentException("采购单同步开始时间必须早于结束时间");
+        }
+        LocalDateTime syncTime = LocalDateTime.now(ZoneId.of("Asia/Shanghai"));
         log.info("采购单同步开始，窗口 [{} ~ {}]，维度={}", startTime, endTime, SEARCH_FIELD_UPDATE_TIME);
 
         List<PurchaseOrderData> orders;
@@ -59,15 +88,15 @@ public class PoSyncAppService {
             orders = purchaseOrderClient.fetchPurchaseOrders(startTime, endTime, SEARCH_FIELD_UPDATE_TIME);
             if (orders == null) throw new IllegalStateException("领星采购单接口返回空响应列表");
         } catch (Exception ex) {
-            // 拉取本身失败（网络/签名/限流等）：整批放弃，记错误日志，不抛给调度器让它反复报警
+            // 不能返回全0伪装成空窗口成功，否则自动任务会推进进度并漏掉本窗口。
             log.error("采购单拉取失败，窗口 [{} ~ {}]", startTime, endTime, ex);
-            return new SyncResult(0, 0, 0,
-                    new ContractAutoCreateService.AutoCreateResult(0, 0, 0, 0));
+            throw new IllegalStateException("采购单拉取失败，本轮同步进度未推进", ex);
         }
 
         int success = 0;
         int failed = 0;
         List<String> successOrderNos = new ArrayList<>();
+        boolean postProcessingFailed = false;
 
         for (PurchaseOrderData order : orders) {
             String orderSn = null;
@@ -97,6 +126,7 @@ public class PoSyncAppService {
             } catch (Exception ex) {
                 // 已保存的 PO 仍计同步成功，后续处理失败不能重复计入 failed。
                 if (saved) {
+                    postProcessingFailed = true;
                     log.error("采购单已同步，后续处理失败：orderSn={}, stage={}，继续处理下一条", orderSn, stage, ex);
                 } else {
                     failed++;
@@ -121,9 +151,13 @@ public class PoSyncAppService {
                         contractResult.failed());
             } catch (Exception ex) {
                 log.error("合同自动创建失败（不影响 PO 同步）", ex);
+                throw new IllegalStateException("合同处理失败，本轮同步进度未推进", ex);
             }
         }
 
+        if (postProcessingFailed) {
+            throw new IllegalStateException("采购单同步后处理失败，本轮同步进度未推进");
+        }
         return new SyncResult(result.total(), result.success(), result.failed(), contractResult);
     }
 

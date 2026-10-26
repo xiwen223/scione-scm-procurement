@@ -12,13 +12,21 @@ import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 
-/** 单实例请求排队：同 appId + 接口只用一个工作线程。 */
+/** 实例内排队，并用共享MySQL命名锁协调Java实例与Python的同应用、同接口请求。 */
 @Component
 @Slf4j
 @RequiredArgsConstructor
 public class LingxingRequestCoordinator {
     private final LingxingOpenApiProperties properties;
+    private final DataSource dataSource;
     private final Map<String, RequestQueue> queues = new ConcurrentHashMap<>();
     private final AtomicInteger threadNumber = new AtomicInteger();
 
@@ -34,7 +42,7 @@ public class LingxingRequestCoordinator {
         CompletableFuture<Void> started = new CompletableFuture<>();
         // 0=排队、1=已经开始、2=排队取消。超时取消与开始只能有一个成功。
         AtomicInteger state = new AtomicInteger();
-        FutureTask<T> task = new FutureTask<>(request::get);
+        FutureTask<T> task = new FutureTask<>(() -> executeShared(path, request));
         try {
             queue.executor.execute(() -> {
                 if (state.get() != 0) return;
@@ -85,6 +93,60 @@ public class LingxingRequestCoordinator {
             if (ex.getCause() instanceof RuntimeException runtime) throw runtime;
             if (ex.getCause() instanceof Error error) throw error;
             throw failure("请求执行异常", path);
+        }
+    }
+
+    /** 与Python约定相同锁名：lx-api: + SHA-256(appId + 换行 + path)的前40位。 */
+    static String sharedLockName(String appId, String path) {
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256")
+                    .digest((appId + "\n" + path).getBytes(StandardCharsets.UTF_8));
+            return "lx-api:" + HexFormat.of().formatHex(hash).substring(0, 40);
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256不可用", ex);
+        }
+    }
+
+    private <T> T executeShared(String path, Supplier<T> request) {
+        String name = sharedLockName(properties.getAppId(), path);
+        // 同一MySQL实例上的命名锁不区分schema。连接不可用时停止请求，不能绕过协调。
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(true);
+            try (var statement = connection.prepareStatement("SELECT GET_LOCK(?,?)")) {
+                statement.setString(1, name);
+                statement.setLong(2, Math.max(1, properties.getRequestQueueTimeout().toSeconds()));
+                try (var result = statement.executeQuery()) {
+                    if (!result.next() || result.getInt(1) != 1) {
+                        throw failure("跨进程接口锁等待超时，未发送请求", path);
+                    }
+                }
+            }
+            long started = System.nanoTime();
+            try {
+                return request.get();
+            } finally {
+                try {
+                    // 连同HTTP请求全程持锁，且两次请求至少间隔1.1秒；失败响应也占用间隔。
+                    long interval = Math.max(TimeUnit.MILLISECONDS.toNanos(1100),
+                            properties.getMinRequestInterval().toNanos());
+                    long remaining = interval - (System.nanoTime() - started);
+                    if (remaining > 0) TimeUnit.NANOSECONDS.sleep(remaining);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    try (var statement = connection.prepareStatement("SELECT RELEASE_LOCK(?)")) {
+                        statement.setString(1, name);
+                        try (var result = statement.executeQuery()) {
+                            if (!result.next() || result.getInt(1) != 1) throw new SQLException("接口锁释放失败");
+                        }
+                    } catch (SQLException ex) {
+                        connection.abort(Runnable::run);
+                        throw ex;
+                    }
+                }
+            }
+        } catch (SQLException ex) {
+            throw failure("共享接口锁连接异常，停止调用", path);
         }
     }
 
