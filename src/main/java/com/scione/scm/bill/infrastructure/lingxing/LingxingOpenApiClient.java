@@ -7,10 +7,12 @@ import com.scione.scm.bill.application.port.LingxingProductClient;
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
 import com.scione.scm.bill.application.port.LingxingSupplierClient;
 import com.scione.scm.bill.common.BusinessException;
+import com.scione.scm.bill.common.ExternalApiResponseException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.config.LingxingOpenApiProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.HttpMethod;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -52,6 +54,8 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     private static final String PURCHASE_ORDER_LIST_PATH =
             "/erp/sc/routing/data/local_inventory/purchaseOrderList";
     private static final int PURCHASE_ORDER_PAGE_SIZE = 500;
+    private static final String SUPPLIER_LIST_PATH = "/erp/sc/data/local_inventory/supplier";
+    private static final int SUPPLIER_PAGE_SIZE = 1_000;
     /**
      * batchGetProductInfo 单次请求最多携带的 SKU 数；合同明细超过这个量时自动分批。
      *
@@ -87,6 +91,57 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         requestFactory.setConnectTimeout(properties.getConnectTimeout());
         requestFactory.setReadTimeout(properties.getReadTimeout());
         this.restClient = restClientBuilder.clone().requestFactory(requestFactory).build();
+    }
+
+    /** ERP人员接口为GET，一次返回全部账号，保留原始顺序供同名取第一条。 */
+    public List<AccountVO> queryAccounts() {
+        JsonNode response;
+        try {
+            response = requestQueued("/erp/sc/data/account/lists", Map.of(), HttpMethod.GET);
+        }
+        catch (RestClientException exception) {
+            throw responseFailure("查询人员列表请求失败", exception);
+        }
+        if (response == null || !"0".equals(response.path("code").asText()) || !response.path("data").isArray()) {
+            throw responseError("查询人员列表响应无效", response);
+        }
+        List<AccountVO> accounts = new ArrayList<>();
+        for (JsonNode account : response.path("data")) {
+            if (!account.path("uid").canConvertToLong() || account.path("uid").asLong() <= 0
+                    || !account.path("realname").isTextual() || account.path("realname").asText().isBlank()) {
+                throw responseError("人员列表缺少有效uid或realname", response);
+            }
+            accounts.add(new AccountVO(account.path("uid").asLong(), account.path("realname").asText().trim()));
+        }
+        return accounts;
+    }
+
+    public record AccountVO(long uid, String realname) { }
+
+    /** 新增前严格校验查询响应和SKU，查询失败不能当作不存在。 */
+    public void ensureProductAbsent(String sku) {
+        JsonNode response;
+        try { response = requestQueryWithRetry(PRODUCT_DETAIL_PATH, Map.of("skus", List.of(sku))); }
+        catch (RestClientException exception) { throw responseFailure("新增前查询SKU失败，未发送创建请求", exception); }
+        if (response == null || !"0".equals(response.path("code").asText()) || !response.path("data").isArray()) {
+            throw responseError("新增前查询SKU响应无效，未发送创建请求", response);
+        }
+        for (JsonNode product : response.path("data")) {
+            if (sku.equalsIgnoreCase(product.path("sku").asText())) throw lingxingError("领星已存在同SKU，拒绝创建：" + sku);
+        }
+    }
+
+    /** 仅发送一次写请求；超时不盲目重试，避免新增被重放成编辑。 */
+    public long createProduct(Map<String, Object> payload) {
+        JsonNode response;
+        try { response = requestQueued("/erp/sc/routing/storage/product/set", payload); }
+        catch (RestClientException exception) { throw responseFailure("创建产品请求失败或结果未知，请核对远端SKU后处理", exception); }
+        if (response == null || !"0".equals(response.path("code").asText())) {
+            throw responseError("创建产品失败；业务码=" + (response == null ? "空响应" : response.path("code").asText()), response);
+        }
+        JsonNode productId = response.path("data").path("product_id");
+        if (!productId.canConvertToLong() || productId.asLong() <= 0) throw responseError("创建产品返回缺少有效product_id，请核对远端SKU", response);
+        return productId.asLong();
     }
 
     @Override
@@ -157,6 +212,45 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         }
     }
 
+    @Override
+    public List<SupplierSummary> findAllSuppliers() {
+        List<SupplierSummary> suppliers = new ArrayList<>();
+        int offset = 0;
+        long total;
+        do {
+            try {
+                JsonNode response = requestQueryWithRetry(SUPPLIER_LIST_PATH,
+                        Map.of("offset", offset, "length", SUPPLIER_PAGE_SIZE));
+                String code = response == null ? "" : response.path("code").asText();
+                if (!"0".equals(code) && !"200".equals(code)) {
+                    throw responseError("查询供应商列表失败；业务码=" + code, response);
+                }
+                JsonNode supplierPage = response.path("data");
+                JsonNode totalCount = response.path("total");
+                if (!supplierPage.isArray() || !totalCount.isIntegralNumber()
+                        || !totalCount.canConvertToLong() || totalCount.longValue() < 0) {
+                    throw responseError("供应商列表响应格式错误，缺少有效data数组或total总数", response);
+                }
+                total = totalCount.longValue();
+                if (supplierPage.isEmpty() && offset < total) {
+                    throw responseError("供应商列表分页数据不完整，请重新导入", response);
+                }
+                for (JsonNode supplier : supplierPage) {
+                    Long supplierId = longValue(supplier, "supplier_id");
+                    String supplierName = text(supplier, "supplier_name");
+                    if (supplierId == null || supplierId <= 0 || supplierName == null || supplierName.isBlank()) {
+                        throw responseError("供应商列表存在缺少有效supplier_id或supplier_name的记录", response);
+                    }
+                    suppliers.add(new SupplierSummary(supplierId, supplierName.trim()));
+                }
+                offset += supplierPage.size();
+            } catch (RestClientException exception) {
+                throw responseFailure("查询供应商列表请求失败", exception);
+            }
+        } while (offset < total);
+        return suppliers;
+    }
+
     /**
      * 查询领星供应商列表，并按系统供应商 ID 返回匹配的原始 JSON 对象。
      */
@@ -207,7 +301,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             boolean retryable;
             Throwable safeCause = null;
             try {
-                JsonNode response = requestQueued("/erp/sc/data/local_inventory/supplier", body);
+                JsonNode response = requestQueued(SUPPLIER_LIST_PATH, body);
                 String code = response == null ? "" : response.path("code").asText();
                 if ("0".equals(code) || "200".equals(code)) {
                     if (response.path("data").isArray() && response.path("total").asLong(-1) >= 0) return response;
@@ -704,6 +798,10 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
 
     /** 同接口排队后才签名；一页/一批就是一次请求，响应读取完成后释放名额。 */
     private JsonNode requestQueued(String path, Map<String, Object> body) {
+        return requestQueued(path, body, HttpMethod.POST);
+    }
+
+    private JsonNode requestQueued(String path, Map<String, Object> body, HttpMethod method) {
         ensureConfigured();
         // token 获取本身已有独立队列和提前一分钟刷新；不占用业务接口的开始间隔。
         String token = accessToken();
@@ -726,7 +824,16 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             query.put("app_key", properties.getAppId());
             query.put("sign", signature);
             URI uri = requestUri(path, query);
-            return restClient.post().uri(uri).body(body).retrieve().body(JsonNode.class);
+            String responseBody;
+            if (method == HttpMethod.GET) responseBody = restClient.get().uri(uri).retrieve().body(String.class);
+            else responseBody = restClient.post().uri(uri).body(body).retrieve().body(String.class);
+            if (responseBody == null || responseBody.isBlank()) return null;
+            try {
+                return objectMapper.readTree(responseBody);
+            } catch (JsonProcessingException exception) {
+                throw new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR,
+                        "领星响应JSON解析失败，接口=" + path, responseBody);
+            }
         });
     }
 
@@ -828,6 +935,19 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         return sanitized.length() <= MAX_REASON_LENGTH
                 ? sanitized
                 : sanitized.substring(0, MAX_REASON_LENGTH) + "...";
+    }
+
+    private BusinessException responseError(String message, JsonNode response) {
+        if (response == null) return lingxingError(message);
+        return new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR, message, response.toString());
+    }
+
+    private BusinessException responseFailure(String message, RestClientException exception) {
+        if (exception instanceof RestClientResponseException responseException) {
+            String body = responseException.getResponseBodyAsString();
+            if (!body.isBlank()) return new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR, message, body);
+        }
+        return lingxingError(message);
     }
 
     private void ensureConfigured() {

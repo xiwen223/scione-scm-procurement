@@ -1,0 +1,320 @@
+package com.scione.scm.bill.infrastructure.blacklake;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.scione.scm.bill.common.BusinessException;
+import com.scione.scm.bill.common.ExternalApiResponseException;
+import com.scione.scm.bill.common.ExternalApiResponseSanitizer;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.web.client.RestClientResponseException;
+import com.scione.scm.bill.common.ResultCode;
+import jakarta.annotation.Resource;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
+
+import java.net.CookieManager;
+import java.net.CookiePolicy;
+import java.net.http.HttpClient;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.util.HexFormat;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 黑湖小工单客户端。优先使用 Redis 中的 Token，未命中时读取配置登录并缓存 24 小时。
+ * 密码执行 SHA3-224，登录 Cookie 与 Token 随会话传递；请求失败直接抛出异常，不自动重试。
+ */
+@Component
+@Slf4j
+public class BlacklakeOpenApiClient {
+    // 登录
+    private static final String LOGIN_PATH = "/api/user/v1/users/_login";
+    // 查询仓库列表
+    private static final String WAREHOUSE_LIST_PATH = "/api/dytin/external/warehouse/queryList";
+    // 查询自定义数据
+    private static final String CUSTOM_FIELD_METADATA_PATH = "/api/dytin/external/customField/queryCustomFieldMetadata";
+    // 查询工艺路线
+    private static final String PROCESS_ROUTING_LIST_PATH = "/api/dytin/external/processRouting/queryList2";
+    // 查询检验规范
+    private static final String INSPECT_SPECIFICATIONS_LIST_PATH = "/api/dytin/external/inspectionSpecifications/queryList";
+    /** 当前组织产品分类对应的自定义字段。 */
+    private static final long PRODUCT_CATEGORY_FIELD_ID = 735732L;
+    /** 黑湖表单类型：产品。 */
+    private static final int PRODUCT_TARGET_TYPE = 1;
+    private static final String SUCCESS_CODE = "01000000";
+    private static final String TOKEN_KEY = "scione:scm:blacklake:token";
+    private static final Duration TOKEN_TTL = Duration.ofHours(24);
+
+    @Resource
+    private BlacklakeProperties properties;
+    @Resource
+    private ObjectMapper objectMapper;
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
+    /**
+     * 使用 yml 中 blacklake 节点绑定的配置登录，手机号优先，否则使用工厂代码和用户名。
+     * 校验配置后执行密码摘要和远端登录，取得 Token 并缓存到 Redis 24 小时，成功后返回独立会话。
+     * @return 登录会话；配置缺失、远端登录失败或 Redis 保存失败时抛出业务异常
+     */
+    public BlacklakeSession login() {
+        if (StringUtils.isBlank(properties.getPassword())) {
+            throw parameterError("缺少黑湖登录密码");
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        if (StringUtils.isNotBlank(properties.getPhone())) {
+            payload.put("type", 0);
+            payload.put("phone", properties.getPhone());
+        } else {
+            if (StringUtils.isBlank(properties.getFactoryCode()) || StringUtils.isBlank(properties.getUsername())) {
+                throw parameterError("黑湖登录需要手机号或工厂代码和用户名");
+            }
+            payload.put("type", 1);
+            payload.put("code", properties.getFactoryCode());
+            payload.put("username", properties.getUsername());
+        }
+        String password = properties.getPassword();
+        if (properties.isEncryptPassword()) {
+            try {
+                byte[] digest = MessageDigest.getInstance("SHA3-224").digest(password.getBytes(StandardCharsets.UTF_8));
+                password = HexFormat.of().formatHex(digest);
+            } catch (NoSuchAlgorithmException exception) {
+                throw new IllegalStateException("运行环境不支持 SHA3-224", exception);
+            }
+        }
+        payload.put("password", password);
+        RestClient restClient = createRestClient();
+        JsonNode response = post(restClient, LOGIN_PATH, null, payload);
+        if (response.path("statusCode").asInt() != 200) {
+            throw responseError("登录失败", response);
+        }
+        JsonNode token = response.get("data");
+        if (token == null || !token.isTextual() || StringUtils.isBlank(token.textValue())) {
+            throw responseError("登录响应缺少有效 Token", response);
+        }
+        try {
+            stringRedisTemplate.opsForValue().set(TOKEN_KEY, token.textValue(), TOKEN_TTL);
+        } catch (DataAccessException exception) {
+            throw remoteError("登录成功，但 Token 保存 Redis 失败");
+        }
+        return new BlacklakeSession(token.textValue(), restClient);
+    }
+
+    /**
+     * 按仓库名称模糊查询仓库列表，仅发送 likeName，采用远端默认分页（每页 10 条）。
+     * 先读取 Redis Token，未命中才登录并缓存，登录账号须具有管理员权限。
+     * @param likeName 仓库名称，不能为空或仅包含空白
+     * @return 远端完整 JSON 响应，保留分页及仓库信息，不推算总数
+     * @throws BusinessException 参数缺失、认证失效、HTTP 或远端业务处理失败
+     */
+    public JsonNode queryWarehouses(String likeName) {
+        if (StringUtils.isBlank(likeName)) {
+            throw parameterError("仓库名称不能为空");
+        }
+        BlacklakeSession session = getSession();
+        JsonNode response = post(session.restClient(), WAREHOUSE_LIST_PATH, session.token(),
+                Map.of("likeName", likeName));
+        if ("401".equals(response.path("code").asText()) || response.path("statusCode").asInt() == 401) {
+            throw responseError("Token 已失效，请重新登录", response);
+        }
+        if (!SUCCESS_CODE.equals(response.path("code").asText())) {
+            throw responseError("仓库列表查询失败", response);
+        }
+        return response;
+    }
+
+    /**
+     * 查询黑湖产品分类列表，固定查询产品表单的分类字段 735732。
+     * 文档规定 fieldIds 优先于 targetType；同时发送两个指定参数，不额外查询其他字段。
+     * @return 黑湖完整元数据响应，保留字段定义和分页信息，不推断分类选项
+     * @throws BusinessException 认证失效、Redis、HTTP 或远端业务处理失败
+     */
+    public JsonNode queryProductCategories() {
+        BlacklakeSession session = getSession();
+        JsonNode response = post(session.restClient(), CUSTOM_FIELD_METADATA_PATH, session.token(),
+                Map.of("fieldIds", List.of(PRODUCT_CATEGORY_FIELD_ID), "targetType", PRODUCT_TARGET_TYPE));
+        if ("401".equals(response.path("code").asText()) || response.path("statusCode").asInt() == 401) {
+            throw responseError("Token 已失效，请重新登录", response);
+        }
+        if (!SUCCESS_CODE.equals(response.path("code").asText())) {
+            throw responseError("产品分类列表查询失败", response);
+        }
+        return response;
+    }
+
+    /** 每次调用只查询第一页100条工艺路线，不继续翻页或缓存列表。 */
+    public List<ProcessRoutingVO> queryProcessRoutings() {
+        BlacklakeSession session = getSession();
+        JsonNode response = post(session.restClient(), PROCESS_ROUTING_LIST_PATH, session.token(),
+                Map.of("page", Map.of("pageNum", 1, "pageSize", 100)));
+        if ("401".equals(response.path("code").asText()) || response.path("statusCode").asInt() == 401) {
+            throw responseError("Token 已失效，请重新登录", response);
+        }
+        if (!SUCCESS_CODE.equals(response.path("code").asText())) {
+            throw responseError("工艺路线列表查询失败", response);
+        }
+        JsonNode routingList = response.path("data").path("data");
+        if (!routingList.isArray()) throw responseError("工艺路线列表响应缺少有效data.data数组", response);
+        List<ProcessRoutingVO> routings = new ArrayList<>();
+        for (JsonNode routing : routingList) {
+            JsonNode code = routing.path("processRoutingCode");
+            JsonNode name = routing.path("processRoutingName");
+            if (!code.isTextual() || code.textValue().isBlank() || !name.isTextual() || name.textValue().isBlank()) {
+                throw responseError("工艺路线记录缺少有效processRoutingCode或processRoutingName", response);
+            }
+            routings.add(new ProcessRoutingVO(code.textValue().trim(), name.textValue().trim()));
+        }
+        return routings;
+    }
+
+    public record ProcessRoutingVO(String processRoutingCode, String processRoutingName) {
+    }
+
+    /** 查询最近一年创建的检验规范，按名称精确匹配返回的第一条。 */
+    public String findInspectionSpecificationCode(String name) {
+        java.time.LocalDateTime end = java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"));
+        java.time.format.DateTimeFormatter format = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("createdAtGte", end.minusYears(1).format(format));
+        payload.put("createdAtLte", end.format(format));
+        BlacklakeSession session = getSession();
+        JsonNode response = post(session.restClient(), INSPECT_SPECIFICATIONS_LIST_PATH, session.token(), payload);
+        log.info("/api/dytin/external/inspectionSpecifications/queryList日志:{}", response);
+        if (!SUCCESS_CODE.equals(response.path("code").asText())) throw responseError("检验规范查询失败", response);
+        JsonNode specifications = response.path("data").path("data");
+        if (!specifications.isArray()) throw responseError("检验规范响应缺少有效data.data数组", response);
+        for (JsonNode specification : specifications) {
+            if (name.equals(specification.path("name").asText())) {
+                JsonNode code = specification.path("code");
+                if (!code.isTextual() || code.asText().isBlank()) throw responseError("匹配检验规范缺少有效code：" + name, response);
+                return code.asText();
+            }
+        }
+        throw remoteError("未找到名称对应的编码：" + name);
+    }
+
+    /** 仓库查询是模糊查询，必须逐页查找同名记录；同名取第一条。 */
+    public String findWarehouseCode(String name) {
+        return findNamedCode(WAREHOUSE_LIST_PATH, new LinkedHashMap<>(Map.of("likeName", name)), name);
+    }
+
+    private String findNamedCode(String path, Map<String, Object> payload, String name) {
+        BlacklakeSession session = getSession();
+        long readCount = 0;
+        for (int pageNum = 1; ; pageNum++) {
+            payload.put("page", Map.of("pageNum", pageNum, "pageSize", 100));
+            JsonNode response = post(session.restClient(), path, session.token(), payload);
+            log.info("/api/dytin/external/warehouse/queryList日志:{}", response);
+            if (!SUCCESS_CODE.equals(response.path("code").asText())) throw responseError("字典查询失败：" + path, response);
+            JsonNode page = response.path("data");
+            JsonNode entries = page.path("data");
+            if (!entries.isArray() || !page.path("total").isIntegralNumber() || page.path("total").asLong() < 0) {
+                throw responseError("字典查询响应缺少有效data.data或total：" + path, response);
+            }
+            for (JsonNode entry : entries) {
+                // 仓库列表的仓库基本信息位于simpleVO；检验规范直接返回code、name。
+                JsonNode dictionary = WAREHOUSE_LIST_PATH.equals(path) ? entry.path("simpleVO") : entry;
+                if (name.equals(dictionary.path("name").asText())) {
+                    JsonNode code = dictionary.path("code");
+                    if (!code.isTextual() || code.asText().isBlank()) throw responseError("匹配字典记录缺少有效code：" + name, response);
+                    return code.asText();
+                }
+            }
+            readCount += entries.size();
+            if (readCount >= page.path("total").asLong()) break;
+            if (entries.isEmpty()) throw responseError("字典分页提前结束：" + path, response);
+        }
+        throw remoteError("未找到名称对应的编码：" + name);
+    }
+
+    /** 黑湖新增产品以产品编号判重，已存在时由远端拒绝；不自动重试新增。 */
+    public void createProduct(Map<String, Object> payload) {
+        BlacklakeSession session = getSession();
+        JsonNode response = post(session.restClient(), "/api/dytin/external/product/create", session.token(), payload);
+        if (!SUCCESS_CODE.equals(response.path("code").asText())) {
+            throw responseError("创建产品失败；业务码=" + response.path("code").asText(), response);
+        }
+    }
+
+    /** 读取共享 Token；Redis 不可用时明确失败，不以重复登录掩盖缓存故障。 */
+    private BlacklakeSession getSession() {
+        String token;
+        try {
+            token = stringRedisTemplate.opsForValue().get(TOKEN_KEY);
+        } catch (DataAccessException exception) {
+            throw remoteError("Token 读取 Redis 失败");
+        }
+        if (StringUtils.isNotBlank(token)) {
+            return new BlacklakeSession(token, createRestClient());
+        }
+        return login();
+    }
+
+    private RestClient createRestClient() {
+        CookieManager cookieManager = new CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER);
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofMillis(properties.getConnectTimeout()))
+                .cookieHandler(cookieManager).build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(properties.getReadTimeout());
+        return RestClient.builder().baseUrl(properties.getEndpoint())
+                .requestFactory(requestFactory).build();
+    }
+
+    private JsonNode post(RestClient restClient, String path, String token, Object payload) {
+        String body = null;
+        try {
+            RestClient.RequestBodySpec request = restClient.post().uri(path)
+                    .contentType(MediaType.APPLICATION_JSON).header("X-CLIENT", "lite-web");
+            if (token != null) {
+                request.header("X-AUTH", token);
+            }
+            body = request.body(objectMapper.writeValueAsString(payload)).retrieve().body(String.class);
+            log.info("黑湖 API response，path={}，response={}", path, ExternalApiResponseSanitizer.sanitize(path, body, objectMapper));
+            if (StringUtils.isBlank(body)) {
+                throw remoteError("响应为空");
+            }
+            JsonNode response = objectMapper.readTree(body);
+            if (!response.isObject()) {
+                throw responseError("响应不是 JSON 对象", response);
+            }
+            return response;
+        } catch (RestClientResponseException exception) {
+            String responseBody = exception.getResponseBodyAsString();
+            log.info("黑湖 API response，path={}，response={}", path, ExternalApiResponseSanitizer.sanitize(path, responseBody, objectMapper));
+            if (!responseBody.isBlank()) throw new ExternalApiResponseException(ResultCode.SYSTEM_ERROR,
+                    "黑湖HTTP请求失败，接口=" + path, responseBody);
+            throw remoteError("HTTP请求失败且响应为空，接口=" + path);
+        } catch (RestClientException exception) {
+            // 不拼接远端响应或底层异常文本，避免暴露凭证与敏感业务数据。
+            throw remoteError("HTTP 请求失败，接口=" + path);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
+            if (StringUtils.isNotBlank(body)) throw new ExternalApiResponseException(ResultCode.SYSTEM_ERROR,
+                    "黑湖响应JSON解析失败，接口=" + path, body);
+            throw remoteError("JSON 编解码失败，接口=" + path);
+        }
+    }
+
+    private BusinessException responseError(String message, JsonNode response) {
+        return new ExternalApiResponseException(ResultCode.SYSTEM_ERROR, "黑湖接口调用失败：" + message, response.toString());
+    }
+
+    private BusinessException parameterError(String message) {
+        return new BusinessException(ResultCode.PARAM_ERROR, message);
+    }
+
+    private BusinessException remoteError(String message) {
+        return new BusinessException(ResultCode.SYSTEM_ERROR, "黑湖接口调用失败：" + message);
+    }
+}

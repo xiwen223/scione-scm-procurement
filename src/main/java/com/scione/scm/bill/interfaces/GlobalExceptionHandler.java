@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 /**
  * 将校验、领域和基础设施异常转换为统一 API 响应，同时保留正确的 HTTP 状态。
@@ -40,7 +41,7 @@ public class GlobalExceptionHandler {
         return parameterError(null);
     }
 
-    @ExceptionHandler({MethodArgumentTypeMismatchException.class, MissingServletRequestParameterException.class})
+    @ExceptionHandler({MethodArgumentTypeMismatchException.class, MissingServletRequestParameterException.class, MissingServletRequestPartException.class})
     public ResponseEntity<ApiResponse<Void>> invalidRequestParameter(Exception exception) {
         log.warn("Request parameter rejected: {}", exception.getMessage());
         return parameterError(null);

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.GoodsLocalMessageMapper">
+    <sql id="columns">
+        id, message_id AS messageId, goods_id AS goodsId, sku, goods_version AS goodsVersion,
+        target_system AS targetSystem, topic, message_key AS messageKey, message_body AS messageBody,
+        publish_status AS publishStatus, consume_status AS consumeStatus, publish_count AS publishCount
+    </sql>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="message.id">
+        INSERT INTO goods_local_message
+        (message_id, goods_id, sku, goods_version, target_system, trigger_type, topic, message_key, message_body)
+        VALUES (#{message.messageId}, #{message.goodsId}, #{message.sku}, #{message.goodsVersion},
+        #{message.targetSystem}, 0, #{message.topic}, #{message.messageKey}, #{message.messageBody})
+    </insert>
+    <select id="findByMessageId" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.GoodsLocalMessagePO">
+        SELECT <include refid="columns"/> FROM goods_local_message WHERE message_id = #{messageId}
+    </select>
+    <!-- 发送失败等待30秒重发；进程中断遗留的发送租约在5分钟后可重新获取。 -->
+    <sql id="publishEligible">
+        trigger_type = 0 AND consume_status = 0 AND (publish_status = 0
+        OR (publish_status = 3 AND updated_time &lt; DATE_SUB(NOW(), INTERVAL 30 SECOND))
+        OR (publish_status = 1 AND updated_time &lt; DATE_SUB(NOW(), INTERVAL 5 MINUTE)))
+    </sql>
+    <select id="findPublishCandidates" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.GoodsLocalMessagePO">
+        SELECT <include refid="columns"/> FROM goods_local_message
+        WHERE topic = #{topic} AND <include refid="publishEligible"/> ORDER BY id LIMIT 100
+    </select>
+    <update id="claimPublish">
+        UPDATE goods_local_message SET publish_status = 1, publish_count = publish_count + 1, updated_time = NOW()
+        WHERE message_id = #{messageId} AND <include refid="publishEligible"/>
+    </update>
+    <update id="publishSucceeded">
+        UPDATE goods_local_message SET publish_status = 2, published_time = NOW(), updated_time = NOW()
+        WHERE message_id = #{messageId} AND publish_status = 1
+    </update>
+    <update id="publishFailed">
+        UPDATE goods_local_message SET publish_status = 3, last_error_code = 'KAFKA_PUBLISH_FAILED',
+        last_error_message = 'Kafka发送失败或确认超时，待重新投递', updated_time = NOW()
+        WHERE message_id = #{messageId} AND publish_status = 1 AND consume_status = 0
+    </update>
+    <update id="claimConsume">
+        UPDATE goods_local_message SET consume_status = 1, consume_count = consume_count + 1,
+        consume_started_time = NOW(), updated_time = NOW()
+        WHERE message_id = #{messageId} AND consume_status = 0
+    </update>
+    <update id="consumeSucceeded">
+        UPDATE goods_local_message SET consume_status = 2, consumed_time = NOW(),
+        last_error_code = NULL, last_error_message = NULL, updated_time = NOW()
+        WHERE message_id = #{messageId} AND consume_status = 1
+    </update>
+    <update id="consumeFailed">
+        UPDATE goods_local_message SET consume_status = 3, last_error_code = 'GOODS_CREATE_FAILED',
+        last_error_message = #{reason}, updated_time = NOW()
+        WHERE message_id = #{messageId} AND consume_status IN (0, 1)
+    </update>
+    <update id="markGoodsException">
+        UPDATE company_goods SET exception_status = 1, updated_time = NOW() WHERE id = #{goodsId}
+    </update>
+    <select id="findChildMessages" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.GoodsLocalMessagePO">
+        SELECT <include refid="columns"/> FROM goods_local_message
+        WHERE trigger_type = 0 AND target_system = 0 AND sku IN
+        <foreach collection="skus" item="sku" open="(" separator="," close=")">#{sku}</foreach>
+    </select>
+    <!-- 消费中断无法断言远端是否已创建，不盲目重放新增请求，转人工核对。 -->
+    <select id="findStaleConsumers" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.GoodsLocalMessagePO">
+        SELECT <include refid="columns"/> FROM goods_local_message
+        WHERE topic = #{topic} AND trigger_type = 0 AND consume_status = 1 AND consume_started_time &lt; DATE_SUB(NOW(), INTERVAL 30 MINUTE)
+        ORDER BY id LIMIT 100
+    </select>
+</mapper>

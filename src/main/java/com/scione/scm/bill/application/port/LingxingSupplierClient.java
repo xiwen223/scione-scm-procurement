@@ -1,11 +1,18 @@
 package com.scione.scm.bill.application.port;
 
 import java.util.Optional;
+import java.util.List;
 
 /**
  * 领星供应商资料查询端口。
  */
 public interface LingxingSupplierClient {
+
+    /** 实时分页查询全部供应商，仅保留系统ID与名称。 */
+    List<SupplierSummary> findAllSuppliers();
+
+    record SupplierSummary(long supplierId, String supplierName) {
+    }
 
     /**
      * 查询供应商启用的默认收款账号。
