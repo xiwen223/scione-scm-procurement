@@ -354,37 +354,61 @@ public class SopReminderService {
         }
         if (skus.isEmpty()) { excluded.add(new Excluded(sn,"没有有效采购SKU"));return; }
         List<DeliveryFollowUp> rows=new ArrayList<>();
-        boolean missing=false;
         for (String sku:skus) {
             DeliveryFollowUp follow=data.followUps().get(sn+"|"+sku);
             if (follow==null || follow.followerName()==null || follow.followerName().isBlank()) {
-                excluded.add(new Excluded(sn,"SKU "+sku+"缺少跟单员"));missing=true;
-            } else rows.add(follow);
+                //未导入跟单员的SKU只跳过自己：既不阻断该PO的其他跟单员，也不单独催办。
+                excluded.add(new Excluded(sn,"SKU "+sku+"缺少跟单员，本SKU不催办"));continue;
+            }
+            rows.add(follow);
         }
+        if (rows.isEmpty()) return;
+        //同一PO可能由多人分头负责不同SKU，按跟单员拆开，各自只收自己那部分，消息里带同一个PO单号。
+        Map<String,List<DeliveryFollowUp>> byFollower=new LinkedHashMap<>();
+        for (DeliveryFollowUp row:rows) byFollower.computeIfAbsent(row.followerName(),key->new ArrayList<>()).add(row);
         // 天数门槛全部来自Nacos，节点未配置时直接报错，不用代码默认值兜底。
         SopReminderProperties.Node rule=properties.getNodes().get(node.name());
         if (rule==null) throw new BusinessException(ResultCode.PARAM_ERROR,"节点未配置："+node.name());
         if (node==NodeCode.DELIVERY_CONFIRM) {
             int waitDays=rule.getDeliveryDueDays();
-            // 进入待到货满N天才提醒；只有缺交期的SKU对应跟单员收到交期确认提醒。
+            // 进入待到货满N天才提醒；只有缺交期的SKU对应跟单员收到交期确认提醒，同一人只发一条。
             if (Duration.between(entry.time(),now).compareTo(Duration.ofDays(waitDays))<0) return;
-            for (DeliveryFollowUp row:rows) if (row.expectedDeliveryDate()==null)
-                add(hits,excluded,node,sn,"PO",entry,new Recipient(0,row.followerName(),"name:"+row.followerName()),1,now);
+            for (Map.Entry<String,List<DeliveryFollowUp>> group:byFollower.entrySet()) {
+                if (group.getValue().stream().anyMatch(row->row.expectedDeliveryDate()==null))
+                    addFollower(hits,excluded,sn,entry,group.getKey(),1,now);
+            }
             return;
         }
-        if (missing || rows.stream().anyMatch(row->row.expectedDeliveryDate()==null)) return;
-        // 同一PO有多个交期时取最早的交期，避免较晚的一行掩盖已经临近交期的SKU。
-        LocalDate earliest=rows.stream().map(DeliveryFollowUp::expectedDeliveryDate).min(Comparator.naturalOrder()).orElseThrow();
         int firstDays=rule.getFirstDueDays();
         int secondDays=rule.getSecondDueDays();
-        Duration remaining=Duration.between(now,earliest.atStartOfDay());
-        if (remaining.compareTo(Duration.ofDays(firstDays))>0) return;
-        // ≤secondDays（包含已逾期）直接进入第二阶段；不在同一轮补发第一阶段。
-        // 是否已发过由发送仓储按阶段判断，不在这里修改数据库。
-        int stage=remaining.compareTo(Duration.ofDays(secondDays))<=0?2:1;
-        if (stage==2 && hasCr) return;
-        for (DeliveryFollowUp row:rows) add(hits,excluded,node,sn,"PO",entry,
-                new Recipient(0,row.followerName(),"name:"+row.followerName()),stage,now);
+        for (Map.Entry<String,List<DeliveryFollowUp>> group:byFollower.entrySet()) {
+            List<DeliveryFollowUp> own=group.getValue();
+            //该跟单员名下还有SKU没填交期，无法判断阶段：本轮跳过，等交期补齐再催。
+            if (own.stream().anyMatch(row->row.expectedDeliveryDate()==null)) continue;
+            // 同一人多个SKU有不同交期时取最早的交期，避免较晚的一行掩盖已经临近交期的SKU。
+            LocalDate earliest=own.stream().map(DeliveryFollowUp::expectedDeliveryDate).min(Comparator.naturalOrder()).orElse(null);
+            if (earliest==null) continue;
+            Duration remaining=Duration.between(now,earliest.atStartOfDay());
+            if (remaining.compareTo(Duration.ofDays(firstDays))>0) continue;
+            // ≤secondDays（包含已逾期）直接进入第二阶段；不在同一轮补发第一阶段。
+            // 是否已发过由发送仓储按阶段判断，不在这里修改数据库。
+            int stage=remaining.compareTo(Duration.ofDays(secondDays))<=0?2:1;
+            if (stage==2 && hasCr) continue;
+            addFollower(hits,excluded,sn,entry,group.getKey(),stage,now);
+        }
+    }
+
+    /** 同一PO按跟单员拆成多条待办：item_key加F:前缀区分，避免唯一键互相覆盖。 */
+    private void addFollower(List<RuleHit> hits,List<Excluded> excluded,String sn,
+                             Entry entry,String follower,int stage,LocalDateTime now) {
+        if (entry==null || entry.time()==null || entry.time().isAfter(now)) {
+            excluded.add(new Excluded(sn,"缺少明确的本轮节点时间或时间晚于当前"));return;
+        }
+        if (follower==null || follower.isBlank()) { excluded.add(new Excluded(sn,"跟单员不明确"));return; }
+        BigDecimal hours=BigDecimal.valueOf(Duration.between(entry.time(),now).getSeconds())
+                .divide(BigDecimal.valueOf(3600),2,RoundingMode.HALF_UP);
+        hits.add(new RuleHit(new Candidate(sn,0,null,entry.time(),hours,"PO","F:"+follower,entry.key(),stage),
+                new Recipient(0,follower,"name:"+follower)));
     }
 
     private Map<String,JsonNode> scopedOrders(NodeData data,List<Excluded> excluded,LocalDateTime now) {

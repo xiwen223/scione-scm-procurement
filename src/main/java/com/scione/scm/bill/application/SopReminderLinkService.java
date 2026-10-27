@@ -48,7 +48,9 @@ public class SopReminderLinkService {
                     .add(new TodoItem(todo.id(), todo.businessSn(), todo.businessType(), todo.enteredAt(),
                             todo.reminderCount(), todo.firstRemindedAt(), items));
         }
+        // SQL按编码排序；页面改用统一节点目录的业务顺序，缺少待办的节点自然跳过。
         List<NodeGroup> nodes = grouped.entrySet().stream()
+                .sorted(java.util.Comparator.comparingInt(entry -> nodeOrder(entry.getKey())))
                 .map(entry -> new NodeGroup(entry.getKey(),
                         nodeName(entry.getKey()), List.copyOf(entry.getValue())))
                 .toList();
@@ -81,6 +83,11 @@ public class SopReminderLinkService {
             throw new BusinessException(ResultCode.REMINDER_LINK_INVALID, "原因最多 150 个字");
         }
         repository.addReason(token, todoId, text);
+    }
+
+    private static int nodeOrder(String nodeCode) {
+        try { return com.scione.scm.bill.domain.sop.SopReminderPreview.NodeCode.valueOf(nodeCode).ordinal(); }
+        catch (IllegalArgumentException exception) { return Integer.MAX_VALUE; }
     }
 
     private static String nodeName(String nodeCode) {

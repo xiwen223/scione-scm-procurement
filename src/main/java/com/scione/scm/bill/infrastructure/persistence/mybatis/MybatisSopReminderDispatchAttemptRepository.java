@@ -68,6 +68,16 @@ public class MybatisSopReminderDispatchAttemptRepository implements SopReminderD
         mapper.markFailed(nodeCodes, scheduledAt, STATUS_GIVE_UP, truncate(reason), null, now());
     }
 
+    @Override
+    public int purgeBefore(LocalDateTime scheduledBefore, int limit) {
+        return mapper.deleteBefore(scheduledBefore, limit);
+    }
+
+    @Override
+    public int countBefore(LocalDateTime scheduledBefore) {
+        return mapper.countBefore(scheduledBefore);
+    }
+
     /** 业务时区固定东八区，与定时任务、发送记录写入保持一致，不受数据库和服务器时区影响。 */
     private static LocalDateTime now() {
         return LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"));

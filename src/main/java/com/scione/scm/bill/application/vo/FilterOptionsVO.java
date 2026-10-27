@@ -13,4 +13,5 @@ public class FilterOptionsVO {
     private List<String> suppliers;
     private List<String> buyers;
     private List<String> warehouses;
+    private List<String> followers;
 }

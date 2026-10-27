@@ -183,13 +183,15 @@ public class SopReminderSendService {
                 }
                 // 第N次提醒：该收件人名下有发送结果未知的记录时，正文/主题标注重新发送的序号。
                 int attemptNo = message.unknownCount + 1;
-                String body = packing ? properties.getSend().getFrontBaseUrl() + PACKING_LINK_PATH + message.token
-                        : compose(message.token, properties.getSend().getFrontBaseUrl(), attemptNo);
+                // 每条消息独立访问令牌，页面按该批次明细读取，避免其他时点的节点混入。
+                String viewToken = java.util.UUID.randomUUID().toString().replace("-", "");
+                String body = packing ? properties.getSend().getFrontBaseUrl() + PACKING_LINK_PATH + viewToken
+                        : compose(viewToken, properties.getSend().getFrontBaseUrl(), attemptNo);
                 PushContext context = new PushContext(String.join(",", message.nodes), message.person.getUserid(), body,
                         packing ? List.of() : List.of(message.person.getMobile()), 1,
                         now().plus(properties.getSend().getRetryMaxAge()).toString(), null,
                         packing ? "EMAIL" : "WEBHOOK", packing ? message.person.getEmail() : null,
-                        packing ? PackingMailClient.subject(attemptNo) : null);
+                        packing ? PackingMailClient.subject(attemptNo) : null, viewToken);
                 List<Long> todoIds = new ArrayList<>(message.stages.keySet());
                 long batchId = repository.startPush(message.person.getUserid(), todoIds,
                         new ArrayList<>(message.stages.values()), scheduledAt, json(context));
@@ -428,7 +430,12 @@ public class SopReminderSendService {
     /** 不保存webhook key；补偿使用当前Nacos凭据，正文和尝试次数保存在原批次JSON中。 */
     public record PushContext(String nodeCode, String userid, String message, List<String> mobiles,
                               int attempts, String expiresAt, WeComWebhookClient.SendOutcome outcome,
-                              String channel, String recipientEmail, String subject) {
+                              String channel, String recipientEmail, String subject, String viewToken) {
+        public PushContext(String nodeCode, String userid, String message, List<String> mobiles,
+                           int attempts, String expiresAt, WeComWebhookClient.SendOutcome outcome,
+                           String channel, String recipientEmail, String subject) {
+            this(nodeCode, userid, message, mobiles, attempts, expiresAt, outcome, channel, recipientEmail, subject, null);
+        }
         public PushContext(String nodeCode, String userid, String message, List<String> mobiles,
                            int attempts, String expiresAt, WeComWebhookClient.SendOutcome outcome) {
             this(nodeCode, userid, message, mobiles, attempts, expiresAt, outcome, null, null, null);
@@ -451,7 +458,7 @@ public class SopReminderSendService {
                     : webhookClient.sendText(send.getWebhookKey(),context.message(),context.mobiles());
         }
         PushContext finished = new PushContext(context.nodeCode(), context.userid(), context.message(), context.mobiles(),
-                context.attempts(), context.expiresAt(), outcome, context.channel(), context.recipientEmail(), context.subject());
+                context.attempts(), context.expiresAt(), outcome, context.channel(), context.recipientEmail(), context.subject(), context.viewToken());
         LocalDateTime now = now();
         LocalDateTime next = null;
         if (Boolean.TRUE.equals(properties.getSend().getRetryEnabled()) && retryable(finished)) {
@@ -500,7 +507,7 @@ public class SopReminderSendService {
                     continue;
                 }
                 PushContext next = new PushContext(context.nodeCode(), context.userid(), context.message(), context.mobiles(),
-                        context.attempts() + 1, context.expiresAt(), null, context.channel(), context.recipientEmail(), context.subject());
+                        context.attempts() + 1, context.expiresAt(), null, context.channel(), context.recipientEmail(), context.subject(), context.viewToken());
                 if (!repository.claimRetry(batch.id(), json(next), now())) continue;
                 deliver(batch.id(), next);
                 attempts++;

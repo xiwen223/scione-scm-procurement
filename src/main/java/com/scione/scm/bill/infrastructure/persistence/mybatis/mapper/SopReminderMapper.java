@@ -36,6 +36,18 @@ public interface SopReminderMapper {
 
     int insertSkippedRows(@Param("rows") List<SkippedRow> rows);
 
+    /** 删除已关闭待办的推送明细；只删 record_type=2，消息批次与待办本身保留。 */
+    int deleteClosedTodoDetails(@Param("closedBefore") LocalDateTime closedBefore,
+                                @Param("limit") int limit);
+
+    /** 删除未发送异常记录；同一异常重跑靠 skip_key 幂等，删掉不影响后续重新记录。 */
+    int deleteSkippedRecords(@Param("scheduledBefore") LocalDateTime scheduledBefore,
+                             @Param("limit") int limit);
+
+    int countClosedTodoDetails(@Param("closedBefore") LocalDateTime closedBefore);
+
+    int countSkippedRecords(@Param("scheduledBefore") LocalDateTime scheduledBefore);
+
     /** 同一责任人按普通催办/关联货件分别保持稳定链接，不按自然日重建历史。 */
     List<String> findStableTokens(@Param("userid") String userid, @Param("packing") boolean packing);
 

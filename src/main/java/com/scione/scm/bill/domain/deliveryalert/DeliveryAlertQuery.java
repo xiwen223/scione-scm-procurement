@@ -13,6 +13,7 @@ public record DeliveryAlertQuery(
         List<String> suppliers,
         List<String> buyers,
         List<String> warehouses,
+        List<String> followers,
         List<String> riskLevels,
         String view,
         LocalDate createDateFrom,
@@ -22,7 +23,7 @@ public record DeliveryAlertQuery(
 
     public DeliveryAlertQuery withStartDate(LocalDate configuredStartDate) {
         return new DeliveryAlertQuery(
-                configuredStartDate, keyword, types, suppliers, buyers, warehouses, riskLevels, view,
+                configuredStartDate, keyword, types, suppliers, buyers, warehouses, followers, riskLevels, view,
                 createDateFrom, createDateTo, pageNum, pageSize);
     }
 

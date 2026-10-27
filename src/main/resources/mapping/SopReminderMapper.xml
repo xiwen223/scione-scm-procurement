@@ -15,6 +15,48 @@
         ON DUPLICATE KEY UPDATE error_message=VALUES(error_message),updated_at=CURRENT_TIMESTAMP
     </insert>
 
+    <!-- ========== 历史清理 ========== -->
+
+    <!--
+      已关闭待办的推送明细。
+      待办 status 非 0 表示已完成或已取消，不会再被催办，这段历史对发送去重和节点9额度判断已无作用。
+      updated_at 是关闭时的最后修改时间，用「关闭满保留期」衡量而不是创建时间，避免把刚关闭的记录提前删掉。
+      只删 record_type=2：消息批次(1)承载发送状态和补发上下文，待办本身(reminder_todo)承载原因历史，都不动。
+    -->
+    <delete id="deleteClosedTodoDetails">
+        DELETE FROM reminder_push_record
+        WHERE record_type=2
+          AND todo_id IN (
+              SELECT id FROM reminder_todo
+              WHERE status&lt;&gt;0 AND updated_at&lt;=#{closedBefore}
+          )
+        LIMIT #{limit}
+    </delete>
+
+    <select id="countClosedTodoDetails" resultType="int">
+        SELECT COUNT(*) FROM reminder_push_record
+        WHERE record_type=2
+          AND todo_id IN (
+              SELECT id FROM reminder_todo
+              WHERE status&lt;&gt;0 AND updated_at&lt;=#{closedBefore}
+          )
+    </select>
+
+    <!--
+      未发送异常记录只用于回答「这个人为什么没收到」，不参与去重、额度与自动重试。
+      同一异常重跑靠 skip_key 唯一键落回同一行，删除历史不会让未来的记录重复堆积。
+    -->
+    <delete id="deleteSkippedRecords">
+        DELETE FROM reminder_push_record
+        WHERE record_type=3 AND scheduled_at&lt;=#{scheduledBefore}
+        LIMIT #{limit}
+    </delete>
+
+    <select id="countSkippedRecords" resultType="int">
+        SELECT COUNT(*) FROM reminder_push_record
+        WHERE record_type=3 AND scheduled_at&lt;=#{scheduledBefore}
+    </select>
+
     <!-- ========== 待办 ========== -->
 
     <!-- 旧版本共用的token保留给普通节点，关联货件首次发送时分配独立token。 -->
@@ -220,7 +262,11 @@
     <!-- ========== 免登录外链 ========== -->
 
     <select id="findAssigneeByToken" resultType="string">
-        SELECT assignee_userid FROM reminder_todo WHERE view_token=#{token} LIMIT 1
+        SELECT recipient_userid FROM reminder_push_record
+        WHERE record_type=1 AND JSON_UNQUOTE(JSON_EXTRACT(send_result,'$.viewToken'))=#{token}
+        UNION ALL
+        SELECT assignee_userid FROM reminder_todo WHERE view_token=#{token}
+        LIMIT 1
     </select>
 
     <!-- 成功次数只统计关联到成功批次的明细，不把发送中/未知结果算成成功。 -->
@@ -233,7 +279,13 @@
                    JOIN reminder_push_record b ON b.id=d.parent_id AND b.record_type=1
                    WHERE d.record_type=2 AND b.send_status=2
                    GROUP BY d.todo_id) p ON p.todo_id=t.id
-        WHERE t.view_token=#{token} AND t.status=0
+        WHERE (EXISTS (
+            SELECT 1 FROM reminder_push_record b
+            JOIN reminder_push_record d ON d.parent_id=b.id AND d.record_type=2
+            WHERE b.record_type=1
+              AND JSON_UNQUOTE(JSON_EXTRACT(b.send_result,'$.viewToken'))=#{token}
+              AND d.todo_id=t.id AND b.recipient_userid=t.assignee_userid
+        ) OR t.view_token=#{token}) AND t.status=0
         ORDER BY t.node_code,t.entered_at,t.id
     </select>
 
@@ -247,8 +299,14 @@
     <!-- 插入同时校验token归属与待办状态：不属于当前链接时不写任何行。 -->
     <insert id="insertReason">
         INSERT INTO reminder_reason_history (todo_id,reason,author_userid)
-        SELECT id,#{reason},assignee_userid
-        FROM reminder_todo
-        WHERE id=#{todoId} AND view_token=#{token} AND status=0
+        SELECT t.id,#{reason},t.assignee_userid
+        FROM reminder_todo t
+        WHERE t.id=#{todoId} AND t.status=0 AND (EXISTS (
+            SELECT 1 FROM reminder_push_record b
+            JOIN reminder_push_record d ON d.parent_id=b.id AND d.record_type=2
+            WHERE b.record_type=1
+              AND JSON_UNQUOTE(JSON_EXTRACT(b.send_result,'$.viewToken'))=#{token}
+              AND d.todo_id=t.id AND b.recipient_userid=t.assignee_userid
+        ) OR t.view_token=#{token})
     </insert>
 </mapper>

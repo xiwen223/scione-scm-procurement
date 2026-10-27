@@ -99,4 +99,22 @@ public interface SopReminderRepository {
 
     /** 用待办ID精确定位节点和轮次，同时校验token归属；不再按单号LIMIT 1猜记录。 */
     void addReason(String token, long todoId, String reason);
+
+    /**
+     * 清理已关闭待办的推送明细。待办关闭后不会再被催办，这段历史对去重和额度判断都已无用，
+     * 只保留短期追溯窗口；活跃待办的明细一条都不动。
+     *
+     * @param closedBefore 待办最后更新时间早于该时间，即视为关闭已满保留期
+     * @return 本批删除行数，等于 limit 时说明可能还有，调用方继续下一批
+     */
+    int purgeClosedTodoDetails(LocalDateTime closedBefore, int limit);
+
+    /** 清理未发送异常记录；这类记录不参与去重、额度与自动重试，只用于排查为什么没发出去。 */
+    int purgeSkippedRecords(LocalDateTime scheduledBefore, int limit);
+
+    /** 统计待清理的已关闭待办明细行数，供预演模式使用。 */
+    int countClosedTodoDetails(LocalDateTime closedBefore);
+
+    /** 统计待清理的未发送异常记录行数，供预演模式使用。 */
+    int countSkippedRecords(LocalDateTime scheduledBefore);
 }
