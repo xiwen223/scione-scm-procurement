@@ -8,6 +8,7 @@ import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
 import com.scione.scm.bill.application.port.LingxingSupplierClient;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ExternalApiResponseException;
+import com.scione.scm.bill.common.ExternalApiResponseSanitizer;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.config.LingxingOpenApiProperties;
 import lombok.extern.slf4j.Slf4j;
@@ -118,30 +119,38 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
 
     public record AccountVO(long uid, String realname) { }
 
-    /** 新增前严格校验查询响应和SKU，查询失败不能当作不存在。 */
-    public void ensureProductAbsent(String sku) {
-        JsonNode response;
-        try { response = requestQueryWithRetry(PRODUCT_DETAIL_PATH, Map.of("skus", List.of(sku))); }
-        catch (RestClientException exception) { throw responseFailure("新增前查询SKU失败，未发送创建请求", exception); }
-        if (response == null || !"0".equals(response.path("code").asText()) || !response.path("data").isArray()) {
-            throw responseError("新增前查询SKU响应无效，未发送创建请求", response);
-        }
-        for (JsonNode product : response.path("data")) {
-            if (sku.equalsIgnoreCase(product.path("sku").asText())) throw lingxingError("领星已存在同SKU，拒绝创建：" + sku);
-        }
+    public long createProduct(Map<String, Object> payload) {
+        return saveProduct(payload);
     }
 
-    /** 仅发送一次写请求；超时不盲目重试，避免新增被重放成编辑。 */
-    public long createProduct(Map<String, Object> payload) {
+    public void updateProduct(Map<String, Object> payload) {
+        saveProduct(payload);
+    }
+
+    /** 新增及修改共用set接口，仅发送一次写请求，结果未知时不自动重试。 */
+    private long saveProduct(Map<String, Object> payload) {
+        String path = "/erp/sc/routing/storage/product/set";
         JsonNode response;
-        try { response = requestQueued("/erp/sc/routing/storage/product/set", payload); }
-        catch (RestClientException exception) { throw responseFailure("创建产品请求失败或结果未知，请核对远端SKU后处理", exception); }
-        if (response == null || !"0".equals(response.path("code").asText())) {
-            throw responseError("创建产品失败；业务码=" + (response == null ? "空响应" : response.path("code").asText()), response);
+        try {
+            response = requestQueued(path, payload);
+            // log.info("领星接口响应，path={}, response={}", path, ExternalApiResponseSanitizer.sanitize(path, response == null ? null : response.toString(), objectMapper));
+        } catch (RestClientException exception) {
+            if (exception instanceof RestClientResponseException responseException) {
+                // log.info("领星接口响应，path={}, response={}", path, ExternalApiResponseSanitizer.sanitize(path, responseException.getResponseBodyAsString(), objectMapper));
+            }
+            throw responseFailure("保存产品请求失败或结果未知，请核对远端SKU后处理", exception);
         }
-        JsonNode productId = response.path("data").path("product_id");
-        if (!productId.canConvertToLong() || productId.asLong() <= 0) throw responseError("创建产品返回缺少有效product_id，请核对远端SKU", response);
-        return productId.asLong();
+        if (response == null || !"0".equals(response.path("code").asText())) {
+            throw responseError("保存产品失败；业务码=" + (response == null ? "空响应" : response.path("code").asText()), response);
+        }
+        String productId = response.path("data").path("product_id").asText();
+        try {
+            long id = Long.parseLong(productId);
+            if (id > 0) return id;
+        } catch (NumberFormatException exception) {
+            throw responseError("保存产品返回缺少有效product_id，请核对远端SKU", response);
+        }
+        throw responseError("保存产品返回缺少有效product_id，请核对远端SKU", response);
     }
 
     @Override

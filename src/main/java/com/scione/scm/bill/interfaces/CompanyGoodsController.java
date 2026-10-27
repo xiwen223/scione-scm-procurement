@@ -3,6 +3,7 @@ package com.scione.scm.bill.interfaces;
 import com.scione.common.model.PageResult;
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.CompanyGoodsService;
+import com.scione.scm.bill.infrastructure.blacklake.BlacklakeOpenApiClient;
 import com.scione.scm.bill.application.CompanyGoodsLocalSaveService;
 import com.scione.scm.bill.application.dto.CompanyGoodsCreateDTO;
 import com.scione.scm.bill.application.dto.CompanyGoodsModifyDTO;
@@ -49,6 +50,8 @@ public class CompanyGoodsController {
     @Resource
     private CompanyGoodsService companyGoodsService;
     @Resource
+    private BlacklakeOpenApiClient blacklakeOpenApiClient;
+    @Resource
     private CompanyGoodsImportService companyGoodsImportService;
     @Resource
     private CompanyGoodsExportService companyGoodsExportService;
@@ -81,7 +84,7 @@ public class CompanyGoodsController {
     }
 
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @Operation(summary = "批量导入企业货品", description = "Excel逐行新增或更新，只保存至本地，返回行级结果和失败文件")
+    @Operation(summary = "批量导入企业货品", description = "Excel按SKU修改已有记录，按企业商品ID分组事务保存，按原状态异步新增或修改外部产品")
     public ApiResponse<CompanyGoodsImportVO> importFile(@RequestPart("file") MultipartFile file) {
         return ApiResponse.success("导入处理完成", companyGoodsImportService.importFile(file));
     }
@@ -98,10 +101,16 @@ public class CompanyGoodsController {
     }
 
     @PostMapping("/update")
-    @Operation(summary = "编辑企业货品", description = "主、子 SKU 整体保存至本地，暂不执行外部同步")
+    @Operation(summary = "编辑企业货品", description = "主、子SKU整体保存后置为已创，并按修改前状态异步新增或修改外部产品")
     public ApiResponse<Void> update(@Valid @RequestBody CompanyGoodsUpdateDTO request) {
         companyGoodsService.update(request);
         return ApiResponse.success("货品已保存", null);
+    }
+
+    @GetMapping("/blacklake/inspection-specifications")
+    @Operation(summary = "查询黑湖来料检验规范选项", description = "查询最近一年创建的检验规范，返回code-name格式的下拉选项")
+    public ApiResponse<List<String>> queryBlacklakeInspectionSpecifications() {
+        return ApiResponse.success(blacklakeOpenApiClient.queryInspectionSpecifications());
     }
 
     /**

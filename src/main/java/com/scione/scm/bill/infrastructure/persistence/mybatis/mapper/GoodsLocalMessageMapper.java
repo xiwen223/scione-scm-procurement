@@ -17,6 +17,6 @@ public interface GoodsLocalMessageMapper {
     int consumeSucceeded(@Param("messageId") String messageId);
     int consumeFailed(@Param("messageId") String messageId, @Param("reason") String reason);
     int markGoodsException(@Param("goodsId") Long goodsId);
-    List<GoodsLocalMessagePO> findChildMessages(@Param("skus") List<String> skus);
+    List<GoodsLocalMessagePO> findChildMessages(@Param("skus") List<String> skus, @Param("beforeId") Long beforeId);
     List<GoodsLocalMessagePO> findStaleConsumers(@Param("topic") String topic);
 }

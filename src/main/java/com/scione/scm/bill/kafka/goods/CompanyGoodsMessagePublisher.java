@@ -71,9 +71,9 @@ public class CompanyGoodsMessagePublisher {
             return false;
         }
         if (childSkus.isEmpty()) return true;
-        for (GoodsLocalMessagePO child : messageMapper.findChildMessages(childSkus)) {
+        for (GoodsLocalMessagePO child : messageMapper.findChildMessages(childSkus, message.getId())) {
             if (child.getConsumeStatus() == GoodsMessageStatusEnum.FAILED.getCode()) {
-                messageService.fail(message, "关联子SKU创建领星失败：" + child.getSku());
+                messageService.fail(message, "关联子SKU同步领星失败：" + child.getSku());
                 return false;
             }
             if (child.getConsumeStatus() != GoodsMessageStatusEnum.SUCCEEDED.getCode()) return false;

@@ -11,6 +11,7 @@ public class GoodsLocalMessagePO {
     private String sku;
     private Long goodsVersion;
     private Integer targetSystem;
+    private Integer triggerType;
     private String topic;
     private String messageKey;
     private String messageBody;

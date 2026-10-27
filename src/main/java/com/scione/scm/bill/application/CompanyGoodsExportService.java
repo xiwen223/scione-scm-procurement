@@ -39,17 +39,21 @@ public class CompanyGoodsExportService {
         for (Long id : ids) if (id <= 0) throw invalid("货品ID必须为正整数");
         List<CompanyGoodsPO> parents = mapper.findExportParents(new ArrayList<>(ids));
         if (parents.size() != ids.size()) throw invalid("部分货品不存在或已作为子SKU，请刷新列表后重新选择");
-        Map<Long, String> childByParent = new LinkedHashMap<>();
+        Map<Long, List<String>> childByParent = new LinkedHashMap<>();
         Set<String> childSkus = new LinkedHashSet<>();
         for (CompanyGoodsPO parent : parents) {
             List<GoodsSkuRelation> relations = readRelations(parent);
-            if (relations.size() > 1) throw invalid("货品" + parent.getSku() + "包含多个子SKU，当前模板暂不支持导出多个关联");
-            if (CollectionUtil.isNotEmpty(relations)) {
-                String childSku = relations.get(0).getSku();
+            List<String> parentChildSkus = new ArrayList<>();
+            for (GoodsSkuRelation relation : relations) {
+                String childSku = relation.getSku();
                 if (parent.getSku().equalsIgnoreCase(childSku)) throw invalid("货品" + parent.getSku() + "存在自身关联，请先修复");
-                childByParent.put(parent.getId(), childSku);
+                for (String existing : parentChildSkus) {
+                    if (existing.equalsIgnoreCase(childSku)) throw invalid("货品" + parent.getSku() + "存在重复子SKU，请先修复");
+                }
+                parentChildSkus.add(childSku);
                 childSkus.add(childSku);
             }
+            childByParent.put(parent.getId(), parentChildSkus);
         }
         Map<String, CompanyGoodsPO> children = new LinkedHashMap<>();
         if (CollectionUtil.isNotEmpty(childSkus)) {
@@ -59,14 +63,22 @@ public class CompanyGoodsExportService {
                 if (CollectionUtil.isNotEmpty(readRelations(child))) throw invalid("子SKU" + child.getSku() + "存在多层关联，暂不支持导出");
             }
         }
-        Map<Long, CompanyGoodsPO> exported = new LinkedHashMap<>();
+        List<CompanyGoodsPO> exported = new ArrayList<>();
+        List<String> productIds = new ArrayList<>();
+        Set<String> exportedProductIds = new HashSet<>();
         for (CompanyGoodsPO parent : parents) {
-            exported.put(parent.getId(), parent);
-            String childSku = childByParent.get(parent.getId());
-            if (childSku == null) continue;
-            CompanyGoodsPO child = children.get(normalizedSku(childSku));
-            if (child == null) throw invalid("关联子SKU" + childSku + "不存在，请先修复");
-            exported.put(child.getId(), child);
+            String productId = parent.getProductId();
+            if (productId == null || productId.isBlank()) throw invalid("货品" + parent.getSku() + "缺少企业商品ID，请先补充");
+            if (!exportedProductIds.add(productId.trim().toLowerCase(Locale.ROOT))) throw invalid("所选主货品的企业商品ID重复，无法按新版模板区分主子关系");
+            exported.add(parent);
+            productIds.add(productId);
+            for (String childSku : childByParent.get(parent.getId())) {
+                CompanyGoodsPO child = children.get(normalizedSku(childSku));
+                if (child == null) throw invalid("关联子SKU" + childSku + "不存在，请先修复");
+                exported.add(child);
+                // 导出同组使用主货品的企业商品ID，保证第一行主SKU、后续行子SKU。
+                productIds.add(productId);
+            }
         }
         if (exported.size() > 2000) throw invalid("主、子SKU合计超过2000条，请减少选择后分批导出");
 
@@ -84,15 +96,14 @@ public class CompanyGoodsExportService {
                 Cell cell = header.createCell(column);
                 cell.setCellValue(CompanyGoodsExcelParser.HEADERS.get(column));
                 cell.setCellStyle(headerStyle);
-                sheet.setColumnWidth(column, (column == 2 || column == 5 ? 50 : 22) * 256);
+                sheet.setColumnWidth(column, (column == 2 ? 50 : 22) * 256);
             }
             CellStyle decimalStyle = workbook.createCellStyle();
             decimalStyle.setDataFormat(workbook.createDataFormat().getFormat("0.00"));
             int rowIndex = 1;
-            for (CompanyGoodsPO goods : exported.values()) {
-                String childSku = childByParent.get(goods.getId());
-                CompanyGoodsPO child = childSku == null ? null : children.get(normalizedSku(childSku));
-                List<Object> values = values(goods, child);
+            for (int index = 0; index < exported.size(); index++) {
+                CompanyGoodsPO goods = exported.get(index);
+                List<Object> values = values(goods, productIds.get(index));
                 Row row = sheet.createRow(rowIndex++);
                 for (int column = 0; column < values.size(); column++) {
                     Object value = values.get(column);
@@ -106,16 +117,16 @@ public class CompanyGoodsExportService {
                     else cell.setCellValue(value.toString());
                 }
             }
-            sheet.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0, rowIndex - 1, 0, 43));
+            sheet.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0, rowIndex - 1, 0, CompanyGoodsExcelParser.HEADERS.size() - 1));
             workbook.write(output);
             return output.toByteArray();
         } catch (IOException exception) { throw new IllegalStateException("生成货品导出文件失败", exception); }
     }
 
-    private List<Object> values(CompanyGoodsPO goods, CompanyGoodsPO child) {
-        return Arrays.asList(goods.getProductId(), goods.getSku(), goods.getGoodsName(),
+    private List<Object> values(CompanyGoodsPO goods, String productId) {
+        return Arrays.asList(productId, goods.getSku(), goods.getGoodsName(),
                 label(goods.getSyncScope(), List.of("领星", "领星黑湖"), 0, "同步范围"),
-                child == null ? null : child.getSku(), child == null ? null : child.getGoodsName(),
+                goods.getUnit(),
                 label(goods.getProductAttribute(), List.of("自制", "外购", "委外"), 0, "产品属性"),
                 goods.getCgProductLength(), goods.getCgProductWidth(), goods.getCgProductHeight(), goods.getNetWeight(), goods.getGrossWeight(),
                 goods.getPurchaseCost(), goods.getSupplierName(), goods.getSupplierQuote(), goods.getPurchaserName(), goods.getProductOwnerNames(),

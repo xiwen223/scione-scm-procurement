@@ -1,6 +1,7 @@
 package com.scione.scm.bill.application;
 
 import cn.hutool.core.collection.CollectionUtil;
+import com.scione.scm.bill.domain.goods.enums.GoodsSyncOperationEnum;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -47,6 +48,8 @@ public class CompanyGoodsService {
     private ObjectMapper objectMapper;
     @Resource
     private CompanyGoodsImageService imageService;
+    @Resource
+    private CompanyGoodsMessageService messageService;
 
     /** 只更新表单开放字段；主、子 SKU 任一校验或版本检查失败，整单回滚。 */
     @Transactional(isolation = Isolation.REPEATABLE_READ, rollbackFor = Exception.class)
@@ -117,9 +120,13 @@ public class CompanyGoodsService {
         List<String> uploadedImageKeys = new ArrayList<>();
         Set<String> removedImageKeys = new LinkedHashSet<>();
         if (imagesChanged) registerImageCleanup(uploadedImageKeys, removedImageKeys);
-        for (CompanyGoodsEditDTO edit : edits) {
+        // 先保存子货品及消息，再保存主货品，保证主消息能定位本次子消息依赖。
+        List<CompanyGoodsEditDTO> saveOrder = new ArrayList<>(request.getGroupList());
+        saveOrder.add(request);
+        for (CompanyGoodsEditDTO edit : saveOrder) {
             CompanyGoodsPO stored = storedGoods.get(edit.getId());
             CompanyGoodsPO updated = new CompanyGoodsPO();
+            BeanUtils.copyProperties(stored, updated);
             BeanUtils.copyProperties(edit, updated, "inspectionType", "imageUrl");
             updated.setInspectionType(writeJson(edit.getInspectionType()));
             List<CompanyGoodsPictureVO> storedPictures = readArray(stored.getPictureList(), new TypeReference<List<CompanyGoodsPictureVO>>() {});
@@ -142,9 +149,16 @@ public class CompanyGoodsService {
                 }
                 updated.setPictureList(writeJson(pictures));
             }
+            Integer previousStatus = stored.getGoodsStatus();
+            if (previousStatus == null || (previousStatus != GoodsSyncOperationEnum.CREATE.getCode() && previousStatus != GoodsSyncOperationEnum.UPDATE.getCode())) {
+                throw new BusinessException(ResultCode.PARAM_ERROR, "货品状态无效，不能确定外部新增或修改操作");
+            }
             if (goodsMapper.update(updated, edit.getVersion()) != 1) {
                 throw new BusinessException(ResultCode.COMPANY_GOODS_VERSION_CONFLICT);
             }
+            updated.setGoodsStatus(1);
+            updated.setVersion(edit.getVersion() + 1);
+            messageService.createSyncMessages(updated, previousStatus);
         }
     }
 

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.scione.scm.bill.application.port.LingxingSupplierClient;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ExternalApiResponseException;
 import com.scione.scm.bill.common.ResultCode;
@@ -14,6 +15,7 @@ import com.scione.scm.bill.infrastructure.blacklake.BlacklakeOpenApiClient;
 import com.scione.scm.bill.infrastructure.lingxing.LingxingOpenApiClient;
 import com.scione.scm.bill.infrastructure.lingxing.LingxingQcTemplateClient;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO;
+import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.CompanyGoodsMapper;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import java.util.*;
@@ -21,7 +23,7 @@ import java.util.*;
 /** 名称只在消费时转换为外部编码；本地快照保留用户填写的名称。 */
 @Service
 public class CompanyGoodsExternalCreateService {
-    private static final int DEFAULT_CHILD_QUANTITY = 2;
+    private static final int COMBINATION_PRODUCT_TYPE = 1;
     private static final Map<String, String> COUNTRY_CODES = Map.ofEntries(
             Map.entry("美国", "US"), Map.entry("加拿大", "CA"), Map.entry("墨西哥", "MX"), Map.entry("日本", "JP"),
             Map.entry("英国", "UK"), Map.entry("德国", "DE"), Map.entry("法国", "FR"), Map.entry("西班牙", "ES"),
@@ -41,19 +43,44 @@ public class CompanyGoodsExternalCreateService {
     private BlacklakeOpenApiClient blacklakeClient;
     @Resource
     private ObjectMapper objectMapper;
+    @Resource
+    private CompanyGoodsMapper goodsMapper;
 
     public void createInLingxing(CompanyGoodsPO goods) {
-        // set接口兼具编辑能力；先明确拒绝已存在SKU，禁止借导入覆盖远端记录。
-        lingxingClient.ensureProductAbsent(goods.getSku());
+        createInLingxing(goods, null);
+    }
+
+    public void createInLingxing(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
+        lingxingClient.createProduct(lingxingPayload(goods, dictionaries));
+    }
+
+    public void updateInLingxing(CompanyGoodsPO goods) {
+        updateInLingxing(goods, null);
+    }
+
+    public void updateInLingxing(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
+        lingxingClient.updateProduct(lingxingPayload(goods, dictionaries));
+    }
+
+    private Map<String, Object> lingxingPayload(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("sku", goods.getSku());
         payload.put("product_name", goods.getGoodsName());
         payload.put("unit", goods.getUnit());
         List<Map<String, Object>> groups = new ArrayList<>();
-        for (GoodsSkuRelation child : childRelations(goods)) {
-            groups.add(Map.of("sku", child.getSku(), "quantity", child.getQuantity() == null ? DEFAULT_CHILD_QUANTITY : child.getQuantity()));
+        if (Objects.equals(goods.getProductType(), COMBINATION_PRODUCT_TYPE)) {
+            CompanyGoodsPO storedGoods = goodsMapper.findById(goods.getId());
+            if (storedGoods == null) throw invalid("组合货品不存在：" + goods.getSku());
+            List<GoodsSkuRelation> relations = childRelations(storedGoods);
+            if (CollectionUtil.isEmpty(relations)) throw invalid("组合货品缺少子SKU关联：" + goods.getSku());
+            for (GoodsSkuRelation child : relations) {
+                if (child.getQuantity() == null || child.getQuantity().signum() <= 0) {
+                    throw invalid("组合货品子SKU比例数量必须大于0：" + child.getSku());
+                }
+                groups.add(Map.of("sku", child.getSku(), "quantity", child.getQuantity()));
+            }
         }
-        if (CollectionUtil.isNotEmpty(groups)) payload.put("group_list", groups);
+        payload.put("group_list", groups);
         List<Long> ownerIds = new ArrayList<>();
         // todo：暂时不要，没有授权
         // List<LingxingOpenApiClient.AccountVO> accounts = lingxingClient.queryAccounts();
@@ -84,8 +111,14 @@ public class CompanyGoodsExternalCreateService {
         putLingxing(payload, "cg_box_weight", goods.getCartonWeight());
         putLingxing(payload, "cg_box_pcs", goods.getCartonQuantity());
         Long supplierId = null;
-        for (var supplier : lingxingClient.findAllSuppliers()) {
-            if (goods.getSupplierName().equals(supplier.supplierName())) { supplierId = supplier.supplierId(); break; }
+        List<LingxingSupplierClient.SupplierSummary> allSuppliers;
+        if (dictionaries == null) allSuppliers = lingxingClient.findAllSuppliers();
+        else allSuppliers = dictionaries.getSuppliers();
+        for (var supplier : allSuppliers) {
+            if (Objects.equals(goods.getSupplierName(), supplier.supplierName())) {
+                supplierId = supplier.supplierId();
+                break;
+            }
         }
         if (supplierId == null) throw invalid("领星供应商不存在：" + goods.getSupplierName());
         payload.put("supplier_quote", List.of(Map.of("erp_supplier_id", supplierId, "is_primary", 1,
@@ -95,12 +128,19 @@ public class CompanyGoodsExternalCreateService {
         inspection.put("qc_method", goods.getQualityInspectionMethod());
         inspection.put("custom_qc_template", Map.of("template_item", List.of()));
         if (goods.getQualityTemplate() != null) {
-            JsonNode response = qcTemplateClient.getAllQcTemplateList();
-            if (!"1".equals(response.path("code").asText()) || !response.path("data").path("list").isArray()) {
-                throw new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR, "领星质检模板查询失败或响应格式错误", response.toString());
+            JsonNode templates;
+            if (dictionaries == null) {
+                JsonNode response = qcTemplateClient.getAllQcTemplateList();
+                if (!"1".equals(response.path("code").asText()) || !response.path("data").path("list").isArray()) {
+                    throw new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR, "领星质检模板查询失败或响应格式错误", response.toString());
+                }
+                templates = response.path("data").path("list");
+            } else {
+                templates = dictionaries.getQcTemplates();
+                if (templates == null || !templates.isArray()) throw invalid("导入字典快照缺少质检模板列表");
             }
             String templateId = null;
-            for (JsonNode template : response.path("data").path("list")) {
+            for (JsonNode template : templates) {
                 if (goods.getQualityTemplate().equals(template.path("name").asText())) {
                     templateId = template.path("pqt_id").asText();
                     break;
@@ -134,10 +174,26 @@ public class CompanyGoodsExternalCreateService {
             putLingxing(logistics, country + "_bg_import_hs_code", goods.getBgImportHsCode());
             payload.put("product_logistics_list", logistics);
         }
-        lingxingClient.createProduct(payload);
+        return payload;
     }
 
     public void createInBlacklake(CompanyGoodsPO goods) {
+        createInBlacklake(goods, null);
+    }
+
+    public void createInBlacklake(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
+        blacklakeClient.createProduct(blacklakePayload(goods, dictionaries));
+    }
+
+    public void updateInBlacklake(CompanyGoodsPO goods) {
+        updateInBlacklake(goods, null);
+    }
+
+    public void updateInBlacklake(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
+        blacklakeClient.updateProduct(blacklakePayload(goods, dictionaries));
+    }
+
+    private Map<String, Object> blacklakePayload(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("productCode", goods.getSku());
         payload.put("productName", goods.getGoodsName());
@@ -147,7 +203,10 @@ public class CompanyGoodsExternalCreateService {
         put(payload, "costPrice", goods.getPurchaseCost());
         if (goods.getProcessRoute() != null) {
             String routeCode = null;
-            for (var route : blacklakeClient.queryProcessRoutings()) {
+            List<BlacklakeOpenApiClient.ProcessRoutingVO> routings;
+            if (dictionaries == null) routings = blacklakeClient.queryProcessRoutings();
+            else routings = dictionaries.getProcessRoutings();
+            for (var route : routings) {
                 if (goods.getProcessRoute().equals(route.processRoutingName())) { routeCode = route.processRoutingCode(); break; }
             }
             if (routeCode == null) throw invalid("工艺路线不在黑湖第一页100条中：" + goods.getProcessRoute());
@@ -168,11 +227,24 @@ public class CompanyGoodsExternalCreateService {
             }
         }
         if (CollectionUtil.isNotEmpty(inspectionCodes)) payload.put("inspectionSpecificationsTypes", inspectionCodes);
-        if (goods.getIncomingInspectionStandard() != null) payload.put("materialIncomingInspectionSpecificationsCode",
-                blacklakeClient.findInspectionSpecificationCode(goods.getIncomingInspectionStandard()));
-        if (goods.getDefaultWarehouse() != null) payload.put("warehouseCode", blacklakeClient.findWarehouseCode(goods.getDefaultWarehouse()));
+        if (goods.getIncomingInspectionStandard() != null) {
+            String inspectionStandard = goods.getIncomingInspectionStandard();
+            int separatorIndex = inspectionStandard.indexOf('-');
+            if (separatorIndex <= 0 || inspectionStandard.substring(separatorIndex + 1).isBlank()) {
+                throw invalid("来料检验规范格式应为编号-名称：" + inspectionStandard);
+            }
+            // 本地保留完整的编号和名称，黑湖只接收第一个分隔符前的编号。
+            payload.put("materialIncomingInspectionSpecificationsCode", inspectionStandard.substring(0, separatorIndex).trim());
+        }
+        if (goods.getDefaultWarehouse() != null) {
+            String warehouseCode;
+            if (dictionaries == null) warehouseCode = blacklakeClient.findWarehouseCode(goods.getDefaultWarehouse());
+            else warehouseCode = dictionaries.getWarehouseCodes().get(goods.getDefaultWarehouse());
+            if (warehouseCode == null) throw invalid("黑湖仓库不存在：" + goods.getDefaultWarehouse());
+            payload.put("warehouseCode", warehouseCode);
+        }
         payload.put("customFieldValues", List.of(Map.of("name", "产品分类", "value", goods.getProductCategory())));
-        blacklakeClient.createProduct(payload);
+        return payload;
     }
 
     private List<GoodsSkuRelation> childRelations(CompanyGoodsPO goods) {

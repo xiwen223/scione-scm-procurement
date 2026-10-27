@@ -46,8 +46,6 @@ public class BlacklakeOpenApiClient {
     private static final String CUSTOM_FIELD_METADATA_PATH = "/api/dytin/external/customField/queryCustomFieldMetadata";
     // 查询工艺路线
     private static final String PROCESS_ROUTING_LIST_PATH = "/api/dytin/external/processRouting/queryList2";
-    // 查询检验规范
-    private static final String INSPECT_SPECIFICATIONS_LIST_PATH = "/api/dytin/external/inspectionSpecifications/queryList";
     /** 当前组织产品分类对应的自定义字段。 */
     private static final long PRODUCT_CATEGORY_FIELD_ID = 735732L;
     /** 黑湖表单类型：产品。 */
@@ -181,61 +179,66 @@ public class BlacklakeOpenApiClient {
     public record ProcessRoutingVO(String processRoutingCode, String processRoutingName) {
     }
 
-    /** 查询最近一年创建的检验规范，按名称精确匹配返回的第一条。 */
-    public String findInspectionSpecificationCode(String name) {
+    /** 详情/编辑页规范选项；沿用最近一年创建范围，仅发送创建时间上下限。 */
+    public List<String> queryInspectionSpecifications() {
         java.time.LocalDateTime end = java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"));
         java.time.format.DateTimeFormatter format = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("createdAtGte", end.minusYears(1).format(format));
         payload.put("createdAtLte", end.format(format));
         BlacklakeSession session = getSession();
-        JsonNode response = post(session.restClient(), INSPECT_SPECIFICATIONS_LIST_PATH, session.token(), payload);
-        log.info("/api/dytin/external/inspectionSpecifications/queryList日志:{}", response);
+        JsonNode response = post(session.restClient(), "/api/dytin/external/inspectionSpecifications/queryList", session.token(), payload);
         if (!SUCCESS_CODE.equals(response.path("code").asText())) throw responseError("检验规范查询失败", response);
         JsonNode specifications = response.path("data").path("data");
         if (!specifications.isArray()) throw responseError("检验规范响应缺少有效data.data数组", response);
+        java.util.Set<String> options = new java.util.LinkedHashSet<>();
         for (JsonNode specification : specifications) {
-            if (name.equals(specification.path("name").asText())) {
-                JsonNode code = specification.path("code");
-                if (!code.isTextual() || code.asText().isBlank()) throw responseError("匹配检验规范缺少有效code：" + name, response);
-                return code.asText();
+            JsonNode code = specification.path("code");
+            JsonNode name = specification.path("name");
+            if (!code.isTextual() || code.asText().isBlank() || !name.isTextual() || name.asText().isBlank()) {
+                throw responseError("检验规范缺少有效code或name", response);
             }
+            options.add(code.asText().trim() + "-" + name.asText().trim());
         }
-        throw remoteError("未找到名称对应的编码：" + name);
+        return new ArrayList<>(options);
     }
 
-    /** 仓库查询是模糊查询，必须逐页查找同名记录；同名取第一条。 */
+    /** 仓库名称精确匹配，同名取第一条。 */
     public String findWarehouseCode(String name) {
-        return findNamedCode(WAREHOUSE_LIST_PATH, new LinkedHashMap<>(Map.of("likeName", name)), name);
+        String code = queryWarehouseCodes(name).get(name);
+        if (code == null) throw remoteError("未找到名称对应的编码：" + name);
+        return code;
     }
 
-    private String findNamedCode(String path, Map<String, Object> payload, String name) {
+    /** 按名称查询并读取所有分页；未匹配时返回空映射，留给消费端校验。 */
+    public Map<String, String> queryWarehouseCodes(String name) {
         BlacklakeSession session = getSession();
+        Map<String, String> codes = new LinkedHashMap<>();
+        Map<String, Object> payload = new LinkedHashMap<>(Map.of("likeName", name));
         long readCount = 0;
         for (int pageNum = 1; ; pageNum++) {
             payload.put("page", Map.of("pageNum", pageNum, "pageSize", 100));
-            JsonNode response = post(session.restClient(), path, session.token(), payload);
-            log.info("/api/dytin/external/warehouse/queryList日志:{}", response);
-            if (!SUCCESS_CODE.equals(response.path("code").asText())) throw responseError("字典查询失败：" + path, response);
+            JsonNode response = post(session.restClient(), WAREHOUSE_LIST_PATH, session.token(), payload);
+            // log.info("/api/dytin/external/warehouse/queryList日志:{}", response);
+            if (!SUCCESS_CODE.equals(response.path("code").asText())) throw responseError("字典查询失败：" + WAREHOUSE_LIST_PATH, response);
             JsonNode page = response.path("data");
             JsonNode entries = page.path("data");
             if (!entries.isArray() || !page.path("total").isIntegralNumber() || page.path("total").asLong() < 0) {
-                throw responseError("字典查询响应缺少有效data.data或total：" + path, response);
+                throw responseError("字典查询响应缺少有效data.data或total：" + WAREHOUSE_LIST_PATH, response);
             }
             for (JsonNode entry : entries) {
-                // 仓库列表的仓库基本信息位于simpleVO；检验规范直接返回code、name。
-                JsonNode dictionary = WAREHOUSE_LIST_PATH.equals(path) ? entry.path("simpleVO") : entry;
-                if (name.equals(dictionary.path("name").asText())) {
-                    JsonNode code = dictionary.path("code");
+                JsonNode warehouse = entry.path("simpleVO");
+                if (name.equals(warehouse.path("name").asText())) {
+                    JsonNode code = warehouse.path("code");
                     if (!code.isTextual() || code.asText().isBlank()) throw responseError("匹配字典记录缺少有效code：" + name, response);
-                    return code.asText();
+                    codes.putIfAbsent(name, code.asText());
                 }
             }
             readCount += entries.size();
             if (readCount >= page.path("total").asLong()) break;
-            if (entries.isEmpty()) throw responseError("字典分页提前结束：" + path, response);
+            if (entries.isEmpty()) throw responseError("字典分页提前结束：" + WAREHOUSE_LIST_PATH, response);
         }
-        throw remoteError("未找到名称对应的编码：" + name);
+        return codes;
     }
 
     /** 黑湖新增产品以产品编号判重，已存在时由远端拒绝；不自动重试新增。 */
@@ -244,6 +247,15 @@ public class BlacklakeOpenApiClient {
         JsonNode response = post(session.restClient(), "/api/dytin/external/product/create", session.token(), payload);
         if (!SUCCESS_CODE.equals(response.path("code").asText())) {
             throw responseError("创建产品失败；业务码=" + response.path("code").asText(), response);
+        }
+    }
+
+    /** 按productCode定位已有货品；远端不存在时返回失败，不回落为新增。 */
+    public void updateProduct(Map<String, Object> payload) {
+        BlacklakeSession session = getSession();
+        JsonNode response = post(session.restClient(), "/api/dytin/external/product/update", session.token(), payload);
+        if (!SUCCESS_CODE.equals(response.path("code").asText())) {
+            throw responseError("修改产品失败；业务码=" + response.path("code").asText(), response);
         }
     }
 
@@ -281,7 +293,7 @@ public class BlacklakeOpenApiClient {
                 request.header("X-AUTH", token);
             }
             body = request.body(objectMapper.writeValueAsString(payload)).retrieve().body(String.class);
-            log.info("黑湖 API response，path={}，response={}", path, ExternalApiResponseSanitizer.sanitize(path, body, objectMapper));
+            // log.info("黑湖 API response，path={}，response={}", path, ExternalApiResponseSanitizer.sanitize(path, body, objectMapper));
             if (StringUtils.isBlank(body)) {
                 throw remoteError("响应为空");
             }
@@ -292,7 +304,7 @@ public class BlacklakeOpenApiClient {
             return response;
         } catch (RestClientResponseException exception) {
             String responseBody = exception.getResponseBodyAsString();
-            log.info("黑湖 API response，path={}，response={}", path, ExternalApiResponseSanitizer.sanitize(path, responseBody, objectMapper));
+            // log.info("黑湖 API response，path={}，response={}", path, ExternalApiResponseSanitizer.sanitize(path, responseBody, objectMapper));
             if (!responseBody.isBlank()) throw new ExternalApiResponseException(ResultCode.SYSTEM_ERROR,
                     "黑湖HTTP请求失败，接口=" + path, responseBody);
             throw remoteError("HTTP请求失败且响应为空，接口=" + path);

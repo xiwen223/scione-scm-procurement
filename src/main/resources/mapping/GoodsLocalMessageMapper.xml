@@ -3,27 +3,34 @@
 <mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.GoodsLocalMessageMapper">
     <sql id="columns">
         id, message_id AS messageId, goods_id AS goodsId, sku, goods_version AS goodsVersion,
-        target_system AS targetSystem, topic, message_key AS messageKey, message_body AS messageBody,
+        target_system AS targetSystem, trigger_type AS triggerType, topic, message_key AS messageKey, message_body AS messageBody,
         publish_status AS publishStatus, consume_status AS consumeStatus, publish_count AS publishCount
     </sql>
     <insert id="insert" useGeneratedKeys="true" keyProperty="message.id">
         INSERT INTO goods_local_message
         (message_id, goods_id, sku, goods_version, target_system, trigger_type, topic, message_key, message_body)
         VALUES (#{message.messageId}, #{message.goodsId}, #{message.sku}, #{message.goodsVersion},
-        #{message.targetSystem}, 0, #{message.topic}, #{message.messageKey}, #{message.messageBody})
+        #{message.targetSystem}, #{message.triggerType}, #{message.topic}, #{message.messageKey}, #{message.messageBody})
     </insert>
     <select id="findByMessageId" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.GoodsLocalMessagePO">
         SELECT <include refid="columns"/> FROM goods_local_message WHERE message_id = #{messageId}
     </select>
     <!-- 发送失败等待30秒重发；进程中断遗留的发送租约在5分钟后可重新获取。 -->
     <sql id="publishEligible">
-        trigger_type = 0 AND consume_status = 0 AND (publish_status = 0
+        trigger_type IN (0, 1) AND consume_status = 0 AND (publish_status = 0
         OR (publish_status = 3 AND updated_time &lt; DATE_SUB(NOW(), INTERVAL 30 SECOND))
         OR (publish_status = 1 AND updated_time &lt; DATE_SUB(NOW(), INTERVAL 5 MINUTE)))
     </sql>
     <select id="findPublishCandidates" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.GoodsLocalMessagePO">
         SELECT <include refid="columns"/> FROM goods_local_message
-        WHERE topic = #{topic} AND <include refid="publishEligible"/> ORDER BY id LIMIT 100
+        WHERE topic = #{topic} AND <include refid="publishEligible"/>
+        AND NOT EXISTS (
+            SELECT 1 FROM goods_local_message previous
+            WHERE previous.goods_id = goods_local_message.goods_id
+            AND previous.target_system = goods_local_message.target_system
+            AND previous.id &lt; goods_local_message.id AND previous.consume_status IN (0, 1)
+        )
+        ORDER BY id LIMIT 100
     </select>
     <update id="claimPublish">
         UPDATE goods_local_message SET publish_status = 1, publish_count = publish_count + 1, updated_time = NOW()
@@ -58,13 +65,19 @@
     </update>
     <select id="findChildMessages" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.GoodsLocalMessagePO">
         SELECT <include refid="columns"/> FROM goods_local_message
-        WHERE trigger_type = 0 AND target_system = 0 AND sku IN
+        WHERE trigger_type IN (0, 1) AND target_system = 0 AND sku IN
         <foreach collection="skus" item="sku" open="(" separator="," close=")">#{sku}</foreach>
+        AND id IN (
+            SELECT MAX(latest.id) FROM goods_local_message latest
+            WHERE latest.trigger_type IN (0, 1) AND latest.target_system = 0 AND latest.id &lt; #{beforeId} AND latest.sku IN
+            <foreach collection="skus" item="sku" open="(" separator="," close=")">#{sku}</foreach>
+            GROUP BY latest.sku
+        )
     </select>
     <!-- 消费中断无法断言远端是否已创建，不盲目重放新增请求，转人工核对。 -->
     <select id="findStaleConsumers" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.GoodsLocalMessagePO">
         SELECT <include refid="columns"/> FROM goods_local_message
-        WHERE topic = #{topic} AND trigger_type = 0 AND consume_status = 1 AND consume_started_time &lt; DATE_SUB(NOW(), INTERVAL 30 MINUTE)
+        WHERE topic = #{topic} AND trigger_type IN (0, 1) AND consume_status = 1 AND consume_started_time &lt; DATE_SUB(NOW(), INTERVAL 30 MINUTE)
         ORDER BY id LIMIT 100
     </select>
 </mapper>

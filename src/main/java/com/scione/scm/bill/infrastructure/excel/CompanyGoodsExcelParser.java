@@ -22,10 +22,10 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.*;
 
-/** 依据货品信息导入导出模板解析；每行维护当前 SKU，子 SKU 列仅表示关联。 */
+/** 依据货品信息导入导出模板解析；按企业商品ID分组，每行维护一个独立SKU。 */
 @Component
 public class CompanyGoodsExcelParser {
-    public static final List<String> HEADERS = List.of("企业商品ID", "SKU*", "SKU名称*", "同步范围*", "子SKU", "子SKU名称", "产品属性*",
+    public static final List<String> HEADERS = List.of("企业商品ID*", "SKU*", "SKU名称*", "同步范围*", "单位*", "产品属性*",
             "单品规格长cm*", "单品规格宽cm*", "单品规格高cm*", "单品净重g*", "单品毛重g", "采购成本￥", "供应商*", "供应商报价￥*",
             "采购员*", "产品负责人*", "外箱规格长cm", "外箱规格宽cm", "外箱规格高cm", "包装规格长cm", "包装规格宽cm", "包装规格高cm",
             "单箱数量*", "单箱重量kg*", "工艺路线", "产品分类*", "检验类型", "来料检验规范", "默认仓库", "关键部位",
@@ -34,7 +34,7 @@ public class CompanyGoodsExcelParser {
     @Resource
     private ObjectMapper objectMapper;
 
-    public record ImportRow(int rowNumber, List<String> cells, CompanyGoodsPO goods, String childSku, String error) { }
+    public record ImportRow(int rowNumber, List<String> cells, CompanyGoodsPO goods, String error) { }
 
     public List<ImportRow> parse(MultipartFile file) {
         if (file == null || file.isEmpty()) throw invalid("请选择导入文件");
@@ -52,8 +52,8 @@ public class CompanyGoodsExcelParser {
                 int column = cell.getColumnIndex();
                 String title = formatter.formatCellValue(cell).trim();
                 if (column >= HEADERS.size() && !title.isBlank()
-                        && !(column == 44 && "原文件行号".equals(title))
-                        && !(column == 45 && "失败原因".equals(title))) throw invalid("存在模板之外的表头列");
+                        && !(column == HEADERS.size() && "原文件行号".equals(title))
+                        && !(column == HEADERS.size() + 1 && "失败原因".equals(title))) throw invalid("存在模板之外的表头列");
             }
             List<ImportRow> rows = new ArrayList<>();
             for (Row row : sheet) {
@@ -74,16 +74,13 @@ public class CompanyGoodsExcelParser {
                         if (column >= HEADERS.size() && !formatter.formatCellValue(cell).isBlank()) {
                             Cell header = sheet.getRow(0).getCell(column);
                             String title = header == null ? "" : formatter.formatCellValue(header).trim();
-                            if (!(column == 44 && "原文件行号".equals(title)) && !(column == 45 && "失败原因".equals(title))) throw invalid("存在模板之外的数据列");
+                            if (!(column == HEADERS.size() && "原文件行号".equals(title)) && !(column == HEADERS.size() + 1 && "失败原因".equals(title))) throw invalid("存在模板之外的数据列");
                         }
                     }
                     CompanyGoodsPO goods = parseGoods(cells);
-                    String child = cells.get(4);
-                    if (child.isBlank() || "/".equals(child)) child = null;
-                    else if (child.length() > 128 || child.equalsIgnoreCase(goods.getSku())) throw invalid("子SKU不能为自身，且最长128字符");
-                    rows.add(new ImportRow(row.getRowNum() + 1, cells, goods, child, null));
+                    rows.add(new ImportRow(row.getRowNum() + 1, cells, goods, null));
                 } catch (BusinessException exception) {
-                    rows.add(new ImportRow(row.getRowNum() + 1, cells, null, null, exception.getMessage()));
+                    rows.add(new ImportRow(row.getRowNum() + 1, cells, null, exception.getMessage()));
                 }
             }
             if (CollectionUtil.isEmpty(rows)) throw invalid("没有可导入的数据");
@@ -112,7 +109,9 @@ public class CompanyGoodsExcelParser {
         goods.setSku(text(cells, 1, 128));
         goods.setGoodsName(text(cells, 2, 300));
         goods.setSyncScope(option(cells, 3, List.of("领星", "领星黑湖"), 0));
-        String productAttributeName = text(cells, 6, 128);
+        goods.setUnit(text(cells, 4, 32));
+        if (!List.of("套", "张", "个", "KG", "次").contains(goods.getUnit())) throw invalid("单位只能填写：套、张、个、KG、次");
+        String productAttributeName = text(cells, 5, 128);
         for (ProductAttributeEnum attribute : ProductAttributeEnum.values()) {
             if (attribute.getName().equals(productAttributeName)) {
                 goods.setProductAttribute(attribute.getCode());
@@ -120,37 +119,37 @@ public class CompanyGoodsExcelParser {
             }
         }
         if (goods.getProductAttribute() == null) throw invalid("产品属性只能填写：自制、外购、委外");
-        goods.setCgProductLength(decimal(cells, 7));
-        goods.setCgProductWidth(decimal(cells, 8));
-        goods.setCgProductHeight(decimal(cells, 9));
-        goods.setNetWeight(decimal(cells, 10));
-        goods.setGrossWeight(decimal(cells, 11));
-        goods.setPurchaseCost(decimal(cells, 12));
-        goods.setSupplierName(text(cells, 13, 64));
+        goods.setCgProductLength(decimal(cells, 6));
+        goods.setCgProductWidth(decimal(cells, 7));
+        goods.setCgProductHeight(decimal(cells, 8));
+        goods.setNetWeight(decimal(cells, 9));
+        goods.setGrossWeight(decimal(cells, 10));
+        goods.setPurchaseCost(decimal(cells, 11));
+        goods.setSupplierName(text(cells, 12, 64));
         if (goods.getSupplierName().matches(".*[;；,，、].*")) throw invalid("供应商仅支持填写一个名称");
-        goods.setSupplierQuote(decimal(cells, 14));
-        goods.setPurchaserName(text(cells, 15, 32));
-        goods.setProductOwnerNames(multipleNames(text(cells, 16, 512), "产品负责人", null));
-        goods.setCgBoxLength(decimal(cells, 17));
-        goods.setCgBoxWidth(decimal(cells, 18));
-        goods.setCgBoxHeight(decimal(cells, 19));
-        goods.setCgPackageLength(decimal(cells, 20));
-        goods.setCgPackageWidth(decimal(cells, 21));
-        goods.setCgPackageHeight(decimal(cells, 22));
+        goods.setSupplierQuote(decimal(cells, 13));
+        goods.setPurchaserName(text(cells, 14, 32));
+        goods.setProductOwnerNames(multipleNames(text(cells, 15, 512), "产品负责人", null));
+        goods.setCgBoxLength(decimal(cells, 16));
+        goods.setCgBoxWidth(decimal(cells, 17));
+        goods.setCgBoxHeight(decimal(cells, 18));
+        goods.setCgPackageLength(decimal(cells, 19));
+        goods.setCgPackageWidth(decimal(cells, 20));
+        goods.setCgPackageHeight(decimal(cells, 21));
         dimensions(goods.getCgBoxLength(), goods.getCgBoxWidth(), goods.getCgBoxHeight(), "外箱规格");
         dimensions(goods.getCgPackageLength(), goods.getCgPackageWidth(), goods.getCgPackageHeight(), "包装规格");
-        BigDecimal quantity = decimal(cells, 23);
+        BigDecimal quantity = decimal(cells, 22);
         try { goods.setCartonQuantity(quantity.intValueExact()); }
         catch (ArithmeticException exception) { throw invalid("单箱数量必须是正整数，且不能超过2147483647"); }
-        goods.setCartonWeight(decimal(cells, 24));
-        goods.setProcessRoute(text(cells, 25, 128));
-        goods.setProductCategory(text(cells, 26, 128));
+        goods.setCartonWeight(decimal(cells, 23));
+        goods.setProcessRoute(text(cells, 24, 128));
+        goods.setProductCategory(text(cells, 25, 128));
         boolean categoryFound = false;
         for (BlacklakeProductCategoryEnum category : BlacklakeProductCategoryEnum.values()) {
             if (category.getName().equals(goods.getProductCategory())) { categoryFound = true; break; }
         }
         if (!categoryFound) throw invalid("产品分类不在可选范围内");
-        String inspections = text(cells, 27, 128);
+        String inspections = text(cells, 26, 128);
         if (inspections != null) {
             List<String> inspectionNames = new ArrayList<>();
             for (GoodsInspectionTypeEnum inspectionType : GoodsInspectionTypeEnum.values()) {
@@ -160,9 +159,9 @@ public class CompanyGoodsExcelParser {
             try { goods.setInspectionType(objectMapper.writeValueAsString(names.split(","))); }
             catch (JsonProcessingException exception) { throw new IllegalStateException("检验类型序列化失败", exception); }
         }
-        goods.setIncomingInspectionStandard(text(cells, 28, 128));
-        goods.setDefaultWarehouse(text(cells, 29, 128));
-        String keyPartName = text(cells, 30, 128);
+        goods.setIncomingInspectionStandard(text(cells, 27, 128));
+        goods.setDefaultWarehouse(text(cells, 28, 128));
+        String keyPartName = text(cells, 29, 128);
         if (keyPartName != null) {
             for (BlacklakeKeyPartEnum keyPart : BlacklakeKeyPartEnum.values()) {
                 if (keyPart.getName().equals(keyPartName)) {
@@ -172,7 +171,7 @@ public class CompanyGoodsExcelParser {
             }
             if (goods.getIsKeyPart() == null) throw invalid("关键部位只能填写：是、否");
         }
-        String inspectionMethodName = text(cells, 31, 128);
+        String inspectionMethodName = text(cells, 30, 128);
         for (LingxingQualityInspectionMethodEnum inspectionMethod : LingxingQualityInspectionMethodEnum.values()) {
             if (inspectionMethod.getName().equals(inspectionMethodName)) {
                 goods.setQualityInspectionMethod(inspectionMethod.getCode());
@@ -180,18 +179,18 @@ public class CompanyGoodsExcelParser {
             }
         }
         if (goods.getQualityInspectionMethod() == null) throw invalid("领星默认质检方式只能填写：抽检、全检、免检");
-        goods.setQualityTemplate(text(cells, 32, 128));
-        goods.setCustomsNameCn(text(cells, 33, 512));
-        goods.setCustomsNameEn(text(cells, 34, 512));
-        goods.setMaterialCn(text(cells, 35, 512));
-        goods.setMaterialEn(text(cells, 36, 512));
-        goods.setUsageCn(text(cells, 37, 512));
-        goods.setUsageEn(text(cells, 38, 512));
-        goods.setCustomsDeclarationHsCode(hsCode(cells, 39));
-        goods.setCustomsImportPrice(decimal(cells, 40));
-        goods.setClearanceCountryCode(text(cells, 41, 32));
-        goods.setBgImportHsCode(hsCode(cells, 42));
-        goods.setClearancePrice(decimal(cells, 43));
+        goods.setQualityTemplate(text(cells, 31, 128));
+        goods.setCustomsNameCn(text(cells, 32, 512));
+        goods.setCustomsNameEn(text(cells, 33, 512));
+        goods.setMaterialCn(text(cells, 34, 512));
+        goods.setMaterialEn(text(cells, 35, 512));
+        goods.setUsageCn(text(cells, 36, 512));
+        goods.setUsageEn(text(cells, 37, 512));
+        goods.setCustomsDeclarationHsCode(hsCode(cells, 38));
+        goods.setCustomsImportPrice(decimal(cells, 39));
+        goods.setClearanceCountryCode(text(cells, 40, 32));
+        goods.setBgImportHsCode(hsCode(cells, 41));
+        goods.setClearancePrice(decimal(cells, 42));
         return goods;
     }
 
@@ -211,7 +210,7 @@ public class CompanyGoodsExcelParser {
         if (!value.matches("[0-9]+(\\.[0-9]{1,2})?")) throw invalid(HEADERS.get(index) + "须为非负数字，最多两位小数");
         BigDecimal number = new BigDecimal(value);
         if (number.precision() - number.scale() > 16) throw invalid(HEADERS.get(index) + "整数部分最多16位");
-        boolean money = index == 12 || index == 14 || index == 40 || index == 43;
+        boolean money = index == 11 || index == 13 || index == 39 || index == 42;
         if (!money && number.signum() == 0) throw invalid(HEADERS.get(index) + "必须大于0");
         return number;
     }
@@ -250,15 +249,15 @@ public class CompanyGoodsExcelParser {
             Sheet sheet = workbook.createSheet("失败记录");
             Row header = sheet.createRow(0);
             for (int i = 0; i < HEADERS.size(); i++) header.createCell(i).setCellValue(HEADERS.get(i));
-            header.createCell(44).setCellValue("原文件行号");
-            header.createCell(45).setCellValue("失败原因");
+            header.createCell(HEADERS.size()).setCellValue("原文件行号");
+            header.createCell(HEADERS.size() + 1).setCellValue("失败原因");
             int rowIndex = 1;
             for (ImportRow imported : rows) {
                 if (!failures.containsKey(imported.rowNumber())) continue;
                 Row row = sheet.createRow(rowIndex++);
                 for (int i = 0; i < HEADERS.size(); i++) row.createCell(i).setCellValue(imported.cells().get(i));
-                row.createCell(44).setCellValue(imported.rowNumber());
-                row.createCell(45).setCellValue(failures.get(imported.rowNumber()));
+                row.createCell(HEADERS.size()).setCellValue(imported.rowNumber());
+                row.createCell(HEADERS.size() + 1).setCellValue(failures.get(imported.rowNumber()));
             }
             sheet.createFreezePane(2, 1);
             workbook.write(output);

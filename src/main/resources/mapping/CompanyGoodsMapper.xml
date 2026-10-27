@@ -170,6 +170,7 @@
     </select>
     <update id="update">
         UPDATE company_goods SET
+            goods_status = 1,
             goods_name = #{goods.goodsName},
             sync_scope = #{goods.syncScope},
             unit = #{goods.unit},
@@ -237,11 +238,12 @@
         source_list, create_method, goods_status, conflict_status, exception_status, version, created_time, updated_time
         ) VALUES (
         #{goods.asin}, #{goods.developer}, #{goods.pictureList}, #{goods.sku}, #{goods.productType}, #{goods.groupList}, #{goods.productId}, #{goods.goodsName}, #{goods.syncScope}, #{goods.unit}, #{goods.productAttribute}, #{goods.cgProductLength}, #{goods.cgProductWidth}, #{goods.cgProductHeight}, #{goods.netWeight}, #{goods.grossWeight}, #{goods.purchaseCost}, #{goods.supplierName}, #{goods.supplierQuote}, #{goods.purchaserName}, #{goods.productOwnerNames}, #{goods.cgBoxLength}, #{goods.cgBoxWidth}, #{goods.cgBoxHeight}, #{goods.cgPackageLength}, #{goods.cgPackageWidth}, #{goods.cgPackageHeight}, #{goods.cartonQuantity}, #{goods.cartonWeight}, #{goods.processRoute}, #{goods.productCategory}, #{goods.inspectionType}, #{goods.incomingInspectionStandard}, #{goods.defaultWarehouse}, #{goods.isKeyPart}, #{goods.qualityInspectionMethod}, #{goods.qualityTemplate}, #{goods.customsNameCn}, #{goods.customsNameEn}, #{goods.materialCn}, #{goods.materialEn}, #{goods.usageCn}, #{goods.usageEn}, #{goods.customsDeclarationHsCode}, #{goods.customsImportPrice}, #{goods.clearanceCountryCode}, #{goods.bgImportHsCode}, #{goods.clearancePrice},
-        JSON_ARRAY('企业商品库'), 1, 1, 0, 0, 0, NOW(), NOW()
+        JSON_ARRAY('企业商品库'), 1, 0, 0, 0, 0, NOW(), NOW()
         )
     </insert>
     <update id="modifyLocal">
         UPDATE company_goods SET
+            goods_status = #{goods.goodsStatus},
             group_list = #{goods.groupList},
             product_type = #{goods.productType},
             product_id = #{goods.productId},
