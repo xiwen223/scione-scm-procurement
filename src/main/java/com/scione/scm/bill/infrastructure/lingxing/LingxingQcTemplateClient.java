@@ -26,7 +26,10 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import com.scione.scm.bill.application.vo.LingxingProductVO;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.StringJoiner;
 import java.util.List;
@@ -39,6 +42,8 @@ public class LingxingQcTemplateClient {
     private static final String ENDPOINT = "https://scione.lingxing.com";
 
     // 查询质检模板列表接口
+    private static final String PRODUCT_LIST_PATH = "/api/product/lists";
+
     private static final String TEMPLATE_LIST_PATH = "/api/module/product/QcTemplate/getAllQcTemplateList";
 
     @Resource
@@ -83,6 +88,95 @@ public class LingxingQcTemplateClient {
         }
         // 未约定远端业务码，保留完整 JSON，包含登录过期等业务失败响应。
         return response;
+    }
+
+    /** 使用当天数据库Cookie查询领星后台产品列表，产品名称搜索值及分页偏移量由调用方传入。 */
+    public List<LingxingProductVO> queryProducts(String searchValue, int offset) {
+        if (offset < 0) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "offset不能小于0");
+        }
+        URI uri = UriComponentsBuilder.fromHttpUrl(ENDPOINT).path(PRODUCT_LIST_PATH).build().toUri();
+        HttpHeaders headers = loadCookieHeaders(uri);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        headers.set("X-AK-Language", "zh");
+        headers.set("X-AK-PLATFORM", "1");
+        headers.set("X-AK-Request-Source", "erp");
+        headers.set("X-AK-Request-Id", UUID.randomUUID().toString());
+        headers.set("AK-Client-Type", "web");
+        headers.set("AK-Origin", ENDPOINT);
+        headers.set(HttpHeaders.REFERER, ENDPOINT + "/erp/productManage");
+
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("search_field_time", "create_time");
+        request.put("product_creator_uid", List.of());
+        request.put("product_developer_uid", List.of());
+        request.put("permission_uid", List.of());
+        request.put("cg_opt_uid", List.of());
+        request.put("supplier_id", List.of());
+        request.put("sort_field", "create_time");
+        request.put("sort_type", "desc");
+        request.put("search_field", "product_name");
+        request.put("search_value", searchValue);
+        request.put("attribute", List.of());
+        request.put("status", List.of());
+        request.put("open_status", "");
+        request.put("gtag_ids", "");
+        request.put("senior_search_list", "[]");
+        request.put("single_product_id", List.of());
+        request.put("is_matched_listing", "");
+        request.put("is_matched_alibaba", "");
+        request.put("relation_aux", "");
+        request.put("is_have_pic", "");
+        request.put("cg_package", "");
+        request.put("cg_product_gross_weight", Map.of("left", "", "right", "", "symbol", "gt"));
+        request.put("cg_price", Map.of("left", "", "right", "", "symbol", "gt"));
+        request.put("cg_transport_costs", Map.of("left", "", "right", "", "symbol", "gt", "country_code", "US"));
+        request.put("offset", offset);
+        request.put("is_combo", "0");
+        request.put("length", 500);
+        request.put("is_aux", 0);
+        request.put("product_type", List.of(1, 2));
+        request.put("selected_product_ids", "");
+        request.put("req_time_sequence", PRODUCT_LIST_PATH + "$$22");
+
+        JsonNode response;
+        try {
+            response = restTemplate.exchange(uri, HttpMethod.POST,
+                    new HttpEntity<>(request, headers), JsonNode.class).getBody();
+        } catch (RestClientException exception) {
+            if (exception instanceof RestClientResponseException responseException) {
+                String body = responseException.getResponseBodyAsString();
+                log.info("领星 API response，path={}，response={}", PRODUCT_LIST_PATH,
+                        ExternalApiResponseSanitizer.sanitize(PRODUCT_LIST_PATH, body, objectMapper));
+                if (!body.isBlank()) throw new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR,
+                        "领星后台产品列表接口请求失败", body);
+            }
+            throw new BusinessException(ResultCode.LINGXING_API_ERROR, "领星后台产品列表接口请求失败");
+        }
+        log.info("领星 API response，path={}，response={}", PRODUCT_LIST_PATH,
+                ExternalApiResponseSanitizer.sanitize(PRODUCT_LIST_PATH, response == null ? null : response.toString(), objectMapper));
+        if (response == null || response.isNull()) {
+            throw new BusinessException(ResultCode.LINGXING_API_ERROR, "领星后台产品列表接口返回为空");
+        }
+        if (!"1".equals(response.path("code").asText())) {
+            throw new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR,
+                    "领星后台产品列表查询失败", response.toString());
+        }
+        JsonNode products = response.get("list");
+        if (products == null || !products.isArray()) {
+            throw new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR,
+                    "领星后台产品列表响应缺少list数组", response.toString());
+        }
+        List<LingxingProductVO> result = new ArrayList<>();
+        for (JsonNode product : products) {
+            LingxingProductVO summary = new LingxingProductVO();
+            summary.setSku(product.path("sku").asText(null));
+            summary.setProductName(product.path("product_name").asText(null));
+            summary.setCgPrice(product.path("cg_price").asText(null));
+            result.add(summary);
+        }
+        return result;
     }
 
     private HttpHeaders loadCookieHeaders(URI uri) {
