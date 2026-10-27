@@ -298,6 +298,26 @@ public class MybatisSopReminderRepository implements SopReminderRepository {
         }
     }
 
+    @Override
+    public int purgeClosedTodoDetails(LocalDateTime closedBefore, int limit) {
+        return mapper.deleteClosedTodoDetails(closedBefore, limit);
+    }
+
+    @Override
+    public int purgeSkippedRecords(LocalDateTime scheduledBefore, int limit) {
+        return mapper.deleteSkippedRecords(scheduledBefore, limit);
+    }
+
+    @Override
+    public int countClosedTodoDetails(LocalDateTime closedBefore) {
+        return mapper.countClosedTodoDetails(closedBefore);
+    }
+
+    @Override
+    public int countSkippedRecords(LocalDateTime scheduledBefore) {
+        return mapper.countSkippedRecords(scheduledBefore);
+    }
+
     /** 同一责任人按普通催办/关联货件分别保持稳定链接，不按自然日重建历史。 */
     private String tokenFor(String userid, boolean packing) {
         List<String> tokens = mapper.findStableTokens(userid, packing);

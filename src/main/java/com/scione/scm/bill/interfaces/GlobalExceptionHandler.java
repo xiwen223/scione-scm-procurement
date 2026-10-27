@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * 将校验、领域和基础设施异常转换为统一 API 响应，同时保留正确的 HTTP 状态。
@@ -88,6 +89,16 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> database(DataAccessException exception) {
         log.error("Database operation failed", exception);
         return response(ResultCode.DATABASE_ERROR);
+    }
+
+    /**
+     * 浏览器直接访问后端根路径、favicon.ico 等不存在的静态资源时，Spring 会抛这个异常。
+     * 它不是业务错误，落到 Exception 兜底里会打整段堆栈、还返回 500，日志被刷得看不清真正的问题。
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> staticResourceMissing(NoResourceFoundException exception) {
+        log.info("静态资源不存在：path={}", exception.getResourcePath());
+        return ResponseEntity.notFound().build();
     }
 
     @ExceptionHandler(Exception.class)

@@ -55,6 +55,7 @@ public class DeliveryAlertAppService {
         dto.setSuppliers(repository.findDistinctSuppliers(query));
         dto.setBuyers(repository.findDistinctBuyers(query));
         dto.setWarehouses(repository.findDistinctWarehouses(query));
+        dto.setFollowers(repository.findDistinctFollowers(query));
         return dto;
     }
 

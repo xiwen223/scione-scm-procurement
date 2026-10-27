@@ -41,6 +41,8 @@ public class SopReminderProperties {
     private Send send = new Send();
     /** 必填：key使用业务节点编码；仅配置了的节点会被注册定时任务。 */
     private Map<String, Node> nodes;
+    /** 可选：历史记录清理。不配置时不注册清理任务，库里的记录永不自动删除。 */
+    private Purge purge;
 
     /** 启动即校验，缺一项直接抛异常，不用代码里的默认值兜底。 */
     @PostConstruct
@@ -84,6 +86,21 @@ public class SopReminderProperties {
                 require(node.getDeliveryDueDays() != null, "sop.reminder.nodes." + code + ".delivery-due-days");
             }
         });
+        // 不配置就不注册清理任务；一旦配置，每一项都必须写全，避免用代码默认值掩盖漏配。
+        if (purge != null) {
+            require(purge.getEnabled() != null, "sop.reminder.purge.enabled");
+            require(purge.getDryRun() != null, "sop.reminder.purge.dry-run");
+            require(purge.getClosedTodoDays() != null && purge.getClosedTodoDays() >= 0,
+                    "sop.reminder.purge.closed-todo-days（≥0）");
+            require(purge.getSkippedDays() != null && purge.getSkippedDays() >= 1,
+                    "sop.reminder.purge.skipped-days（≥1）");
+            require(purge.getAttemptDays() != null && purge.getAttemptDays() >= 1,
+                    "sop.reminder.purge.attempt-days（≥1）");
+            require(purge.getBatchSize() != null && purge.getBatchSize() >= 1 && purge.getBatchSize() <= 10_000,
+                    "sop.reminder.purge.batch-size（1~10000）");
+            require(purge.getMaxRowsPerRun() != null && purge.getMaxRowsPerRun() >= purge.getBatchSize(),
+                    "sop.reminder.purge.max-rows-per-run（需≥batch-size）");
+        }
     }
 
     private static boolean positive(Duration value) {
@@ -152,6 +169,25 @@ public class SopReminderProperties {
         private Person fallbackPerson;
         /** 关联货件专用SMTP，不依赖企微自建应用。 */
         private PackingMail packingMail = new PackingMail();
+    }
+
+    /** 历史记录清理配置：按业务生命周期删除，避免推送记录表随时间无限增长。 */
+    @Data
+    public static class Purge {
+        /** 必填：清理开关；false 时定时任务不注册，库里的记录永不自动删除。 */
+        private Boolean enabled;
+        /** 必填：预演开关；true 时只统计待删行数并打日志，不执行删除。 */
+        private Boolean dryRun;
+        /** 必填：已关闭待办的推送明细保留天数；待办关闭后再无催办价值，只留短期追溯窗口。 */
+        private Integer closedTodoDays;
+        /** 必填：未发送异常记录（record_type=3）保留天数；只用于排查，不参与去重和额度判断。 */
+        private Integer skippedDays;
+        /** 必填：轮次执行记录保留天数；补发只扫描当天，历史仅用于事后巡检。 */
+        private Integer attemptDays;
+        /** 必填：单批删除行数，控制单事务锁范围。 */
+        private Integer batchSize;
+        /** 必填：单次执行删除总上限；达到后停止，剩余部分下次继续。 */
+        private Integer maxRowsPerRun;
     }
 
     @Data

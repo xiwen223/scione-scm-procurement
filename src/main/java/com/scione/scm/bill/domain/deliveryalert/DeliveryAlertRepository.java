@@ -21,6 +21,8 @@ public interface DeliveryAlertRepository {
 
     List<String> findDistinctWarehouses(DeliveryAlertQuery query);
 
+    List<String> findDistinctFollowers(DeliveryAlertQuery query);
+
     List<DeliveryAlertComponent> findComponents(String groupKey);
 
     DeliveryAlertDetail findDetail(String groupKey);

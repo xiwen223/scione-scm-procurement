@@ -81,4 +81,21 @@
           AND scheduled_at &gt;= #{todayStart}
     </select>
 
+    <!--
+      历史轮次清理。
+      补发扫描只认当天（scheduled_at >= todayStart），超过保留期的行不再参与任何判断，
+      留着的唯一价值是事后查「那天几点为什么没发」，保留期按排查需要定。
+    -->
+    <delete id="deleteBefore">
+        DELETE FROM reminder_dispatch_attempt
+        WHERE scheduled_at &lt;= #{scheduledBefore}
+        LIMIT #{limit}
+    </delete>
+
+    <select id="countBefore" resultType="int">
+        SELECT COUNT(1)
+        FROM reminder_dispatch_attempt
+        WHERE scheduled_at &lt;= #{scheduledBefore}
+    </select>
+
 </mapper>

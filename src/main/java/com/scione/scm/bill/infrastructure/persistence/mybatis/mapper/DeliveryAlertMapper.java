@@ -35,6 +35,7 @@ public interface DeliveryAlertMapper {
                @Param("suppliers") List<String> suppliers,
                @Param("buyers") List<String> buyers,
                @Param("warehouses") List<String> warehouses,
+               @Param("followers") List<String> followers,
                @Param("riskLevels") List<String> riskLevels,
                @Param("view") String view,
                @Param("createDateFrom") LocalDate createDateFrom,
@@ -46,6 +47,7 @@ public interface DeliveryAlertMapper {
                                    @Param("suppliers") List<String> suppliers,
                                    @Param("buyers") List<String> buyers,
                                    @Param("warehouses") List<String> warehouses,
+               @Param("followers") List<String> followers,
                                    @Param("riskLevels") List<String> riskLevels,
                                    @Param("view") String view,
                                    @Param("createDateFrom") LocalDate createDateFrom,
@@ -59,6 +61,7 @@ public interface DeliveryAlertMapper {
                                    @Param("suppliers") List<String> suppliers,
                                    @Param("buyers") List<String> buyers,
                                    @Param("warehouses") List<String> warehouses,
+               @Param("followers") List<String> followers,
                                    @Param("riskLevels") List<String> riskLevels,
                                    @Param("createDateFrom") LocalDate createDateFrom,
                                    @Param("createDateTo") LocalDate createDateTo);
@@ -70,6 +73,8 @@ public interface DeliveryAlertMapper {
     List<String> findDistinctBuyers(@Param("startDate") LocalDate startDate);
 
     List<String> findDistinctWarehouses(@Param("startDate") LocalDate startDate);
+
+    List<String> findDistinctFollowers(@Param("startDate") LocalDate startDate);
 
     List<DeliveryAlertComponentPO> findComponents(@Param("groupKey") String groupKey);
 

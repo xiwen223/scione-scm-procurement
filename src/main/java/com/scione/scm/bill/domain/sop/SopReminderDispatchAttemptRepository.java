@@ -49,6 +49,12 @@ public interface SopReminderDispatchAttemptRepository {
     /** 放弃补发：不做重试，仅把原因写进记录，便于事后核对这一轮为什么没补。 */
     void abandon(String nodeCodes, LocalDateTime scheduledAt, String reason);
 
+    /** 清理指定时点之前的轮次记录；补发只扫描当天，历史仅用于事后巡检。返回删除行数。 */
+    int purgeBefore(LocalDateTime scheduledBefore, int limit);
+
+    /** 只统计不删除，供预演模式确认待清理数量。 */
+    int countBefore(LocalDateTime scheduledBefore);
+
     /** 补发需要的原始时点与节点组合。 */
     record RetryAttempt(long id, String nodeCodes, LocalDateTime scheduledAt, int attempts) { }
 }

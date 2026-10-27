@@ -51,4 +51,10 @@ public interface SopReminderDispatchAttemptMapper {
     int countLaterAttempts(@Param("nodeCodes") String nodeCodes,
                            @Param("scheduledAt") LocalDateTime scheduledAt,
                            @Param("todayStart") LocalDateTime todayStart);
+
+    /** 清理历史轮次；补发只扫描当天，超过保留期的记录不再影响任何判断。 */
+    int deleteBefore(@Param("scheduledBefore") LocalDateTime scheduledBefore,
+                     @Param("limit") int limit);
+
+    int countBefore(@Param("scheduledBefore") LocalDateTime scheduledBefore);
 }

@@ -89,6 +89,7 @@ public class DeliveryAlertController {
             @RequestParam(value = "suppliers", required = false) List<String> suppliers,
             @RequestParam(value = "buyers", required = false) List<String> buyers,
             @RequestParam(value = "warehouses", required = false) List<String> warehouses,
+            @RequestParam(value = "followers", required = false) List<String> followers,
             @RequestParam(value = "riskLevels", required = false) List<String> riskLevels,
             @RequestParam(value = "view", required = false) String view,
             @RequestParam(value = "createDateFrom", required = false)
@@ -100,7 +101,7 @@ public class DeliveryAlertController {
             @Max(value = 100, message = "每页条数不能超过 100") int pageSize) {
         DeliveryAlertQuery query = new DeliveryAlertQuery(
                 null, blankToNull(keyword), blankToNull(types), blankToNull(suppliers),
-                blankToNull(buyers), blankToNull(warehouses), blankToNull(riskLevels), blankToNull(view),
+                blankToNull(buyers), blankToNull(warehouses), blankToNull(followers), blankToNull(riskLevels), blankToNull(view),
                 createDateFrom, createDateTo, pageNum, pageSize);
         return ApiResponse.success(deliveryAlertAppService.findPage(query));
     }
@@ -112,6 +113,7 @@ public class DeliveryAlertController {
             @RequestParam(value = "suppliers", required = false) List<String> suppliers,
             @RequestParam(value = "buyers", required = false) List<String> buyers,
             @RequestParam(value = "warehouses", required = false) List<String> warehouses,
+            @RequestParam(value = "followers", required = false) List<String> followers,
             @RequestParam(value = "riskLevels", required = false) List<String> riskLevels,
             @RequestParam(value = "createDateFrom", required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createDateFrom,
@@ -119,7 +121,7 @@ public class DeliveryAlertController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createDateTo) {
         DeliveryAlertQuery query = new DeliveryAlertQuery(
                 null, blankToNull(keyword), blankToNull(types), blankToNull(suppliers),
-                blankToNull(buyers), blankToNull(warehouses), blankToNull(riskLevels), null,
+                blankToNull(buyers), blankToNull(warehouses), blankToNull(followers), blankToNull(riskLevels), null,
                 createDateFrom, createDateTo, 1, 1);
         return ApiResponse.success(deliveryAlertAppService.summary(query));
     }
@@ -127,7 +129,7 @@ public class DeliveryAlertController {
     @GetMapping("/filter-options")
     public ApiResponse<FilterOptionsVO> filterOptions() {
         DeliveryAlertQuery query = new DeliveryAlertQuery(
-                null, null, null, null, null, null, null, null, null, null, 1, 1);
+                null, null, null, null, null, null, null, null, null, null, null, 1, 1);
         return ApiResponse.success(deliveryAlertAppService.filterOptions(query));
     }
 

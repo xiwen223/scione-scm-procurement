@@ -119,6 +119,12 @@
 
     <!-- 内层过滤：作用于采购单 / 明细行 -->
     <sql id="innerFilters">
+        <if test="followers != null and followers.size() > 0">
+            AND EXISTS (SELECT 1 FROM reminder_excel_import f
+                WHERE BINARY f.order_sn=BINARY poi.order_sn AND BINARY f.sku=BINARY poi.sku
+                  AND f.follower_name IN
+                  <foreach collection="followers" item="follower" open="(" separator="," close=")">#{follower}</foreach>)
+        </if>
         <if test="keyword != null and keyword != ''">
             AND (
                 poi.order_sn LIKE CONCAT('%', #{keyword}, '%')
@@ -531,5 +537,15 @@
         FROM lx_business_log bl
         WHERE bl.business_id = CONCAT('1_', #{orderSn})
         ORDER BY bl.ol_time ASC, bl.id ASC
+    </select>
+    <select id="findDistinctFollowers" resultType="string">
+        SELECT DISTINCT f.follower_name
+        FROM reminder_excel_import f
+        WHERE f.follower_name IS NOT NULL AND TRIM(f.follower_name)&lt;&gt;''
+          AND EXISTS (SELECT 1 FROM lx_purchase_order_item poi
+              JOIN lx_purchase_order po ON po.order_sn=poi.order_sn
+              WHERE BINARY poi.order_sn=BINARY f.order_sn AND BINARY poi.sku=BINARY f.sku
+                AND poi.is_delete=0 AND po.status NOT IN (-1,124) AND po.create_time&gt;=#{startDate})
+        ORDER BY f.follower_name
     </select>
 </mapper>
