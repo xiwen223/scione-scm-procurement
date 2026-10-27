@@ -25,6 +25,8 @@ public class CompanyGoodsLocalSaveService {
     private CompanyGoodsMapper goodsMapper;
     @Resource
     private ObjectMapper objectMapper;
+    @Resource
+    private CompanyGoodsImageService imageService;
 
     public Long create(CompanyGoodsCreateDTO request) {
         List<CompanyGoodsPO> children = new ArrayList<>();
@@ -62,8 +64,14 @@ public class CompanyGoodsLocalSaveService {
     }
 
     public void modify(CompanyGoodsModifyDTO request) {
-        if (request.getId() == null) throw invalid("修改货品时id不能为空");
-        CompanyGoodsPO stored = goodsMapper.findById(request.getId());
+        if (request.getProductId() == null || request.getProductId().isBlank()
+                || request.getGoodsName() == null || request.getGoodsName().isBlank()) {
+            throw invalid("修改货品时productId和goodsName不能为空");
+        }
+        List<CompanyGoodsPO> matches = goodsMapper.lockByProductIdAndGoodsName(
+                request.getProductId().trim(), request.getGoodsName().trim());
+        if (matches.size() > 1) throw invalid("productId和goodsName对应多条货品，无法确定修改记录");
+        CompanyGoodsPO stored = CollectionUtil.isEmpty(matches) ? null : matches.get(0);
         if (stored == null) throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "货品不存在");
         Long expectedVersion = validateModification(request, request.getVersion(), stored);
         CompanyGoodsPO goods = prepare(request, stored, null);
@@ -83,10 +91,16 @@ public class CompanyGoodsLocalSaveService {
             for (CompanyGoodsChildModifyDTO childRequest : request.getGroupList()) {
                 CompanyGoodsPO childStored = null;
                 Long childVersion = null;
-                if (childRequest.getId() != null) {
-                    if (!editedIds.add(childRequest.getId())) throw invalid("主、子货品ID不能重复");
-                    childStored = goodsMapper.findById(childRequest.getId());
-                    if (childStored == null) throw invalid("子货品不存在：" + childRequest.getId());
+                if (childRequest.getProductId() == null || childRequest.getProductId().isBlank()
+                        || childRequest.getGoodsName() == null || childRequest.getGoodsName().isBlank()) {
+                    throw invalid("子货品productId和goodsName不能为空");
+                }
+                List<CompanyGoodsPO> childMatches = goodsMapper.lockByProductIdAndGoodsName(
+                        childRequest.getProductId().trim(), childRequest.getGoodsName().trim());
+                if (childMatches.size() > 1) throw invalid("子货品productId和goodsName对应多条记录");
+                if (CollectionUtil.isNotEmpty(childMatches)) {
+                    childStored = childMatches.get(0);
+                    if (!editedIds.add(childStored.getId())) throw invalid("主、子货品不能重复");
                     if (Objects.equals(childStored.getProductType(), 1)) throw invalid("仅支持关联普通子货品");
                     childVersion = validateModification(childRequest, childRequest.getVersion(), childStored);
                 }
@@ -171,7 +185,7 @@ public class CompanyGoodsLocalSaveService {
         CompanyGoodsPO goods = new CompanyGoodsPO();
         if (stored != null) BeanUtils.copyProperties(stored, goods);
         // 修改只覆盖非空字段；集合单独序列化，空数组表示明确清空。
-        List<String> ignoredProperties = new ArrayList<>(List.of("groupList", "inspectionType", "pictureList", "version"));
+        List<String> ignoredProperties = new ArrayList<>(List.of("groupList", "inspectionType", "pictureList", "version", "id"));
         BeanWrapperImpl properties = new BeanWrapperImpl(request);
         for (java.beans.PropertyDescriptor property : properties.getPropertyDescriptors()) {
             if (properties.isReadableProperty(property.getName()) && properties.getPropertyValue(property.getName()) == null) {
@@ -188,7 +202,11 @@ public class CompanyGoodsLocalSaveService {
                 goods.setInspectionType(objectMapper.writeValueAsString(request.getInspectionType() == null ? List.of() : request.getInspectionType()));
             }
             if (request.getPictureList() != null || stored == null) {
-                goods.setPictureList(objectMapper.writeValueAsString(request.getPictureList() == null ? List.of() : request.getPictureList()));
+                List<CompanyGoodsImageDTO> copiedPictures = List.of();
+                if (CollectionUtil.isNotEmpty(request.getPictureList())) {
+                    copiedPictures = imageService.copyToPublic(request.getPictureList());
+                }
+                goods.setPictureList(objectMapper.writeValueAsString(copiedPictures));
             }
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("货品数据序列化失败", exception);

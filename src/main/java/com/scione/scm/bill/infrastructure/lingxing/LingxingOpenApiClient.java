@@ -254,9 +254,11 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
                 }
                 offset += supplierPage.size();
             } catch (RestClientException exception) {
+                log.error("查询领星供应商列表失败，path={}, offset={}", SUPPLIER_LIST_PATH, offset, exception);
                 throw responseFailure("查询供应商列表请求失败", exception);
             }
         } while (offset < total);
+        log.info("供应商数量:{}", suppliers.size());
         return suppliers;
     }
 

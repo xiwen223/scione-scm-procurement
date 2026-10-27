@@ -140,6 +140,15 @@
         SELECT <include refid="columns"/> FROM company_goods g <include refid="filters"/>
         ORDER BY g.updated_time DESC, g.id DESC LIMIT #{query.pageSize} OFFSET #{offset}
     </select>
+    <select id="lockByProductIdAndGoodsName" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
+        SELECT <include refid="columns"/> FROM company_goods g
+        WHERE g.product_id = #{productId} AND g.goods_name = #{goodsName}
+        ORDER BY g.id FOR UPDATE
+    </select>
+    <select id="findByProductIds" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
+        SELECT <include refid="columns"/> FROM company_goods g WHERE g.product_id IN
+        <foreach collection="productIds" item="productId" open="(" separator="," close=")">#{productId}</foreach>
+    </select>
     <select id="findById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
         SELECT <include refid="columns"/> FROM company_goods g WHERE g.id = #{id}
     </select>
@@ -241,11 +250,7 @@
         JSON_ARRAY('企业商品库'), 1, 0, 0, 0, 0, NOW(), NOW()
         )
     </insert>
-    <update id="modifyLocal">
-        UPDATE company_goods SET
-            goods_status = #{goods.goodsStatus},
-            group_list = #{goods.groupList},
-            product_type = #{goods.productType},
+    <sql id="goodsDetailAssignments">
             product_id = #{goods.productId},
             asin = #{goods.asin},
             clearance_country_code = #{goods.clearanceCountryCode},
@@ -293,6 +298,19 @@
             picture_list = #{goods.pictureList},
             version = version + 1,
             updated_time = NOW()
+    </sql>
+    <update id="modifyLocal">
+        UPDATE company_goods SET
+            goods_status = #{goods.goodsStatus},
+            group_list = #{goods.groupList},
+            product_type = #{goods.productType},
+        <include refid="goodsDetailAssignments"/>
+        WHERE id = #{goods.id} AND version = #{expectedVersion}
+    </update>
+    <update id="updateImport">
+        UPDATE company_goods SET
+            goods_status = #{goods.goodsStatus},
+        <include refid="goodsDetailAssignments"/>
         WHERE id = #{goods.id} AND version = #{expectedVersion}
     </update>
 </mapper>

@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
-/** 企业商品库已上传图片信息，此接口不上传或删除 S3 文件。 */
+/** 企业商品库图片信息，保存时按objectKey复制到公开桶并生成访问地址。 */
 @Data
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class CompanyGoodsImageDTO {

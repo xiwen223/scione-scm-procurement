@@ -17,6 +17,7 @@ import lombok.EqualsAndHashCode;
 public class CompanyGoodsModifyDTO extends CompanyGoodsSaveDTO {
     @Valid
     private List<@NotNull @Valid CompanyGoodsChildModifyDTO> groupList;
+    /** 兼容保留，不参与修改定位；按productId和goodsName定位。 */
     @Positive
     private Long id;
     @PositiveOrZero

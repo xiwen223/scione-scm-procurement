@@ -9,6 +9,8 @@ import java.util.List;
 public interface CompanyGoodsMapper {
     long count(@Param("query") CompanyGoodsQueryDTO query);
     List<CompanyGoodsPO> findPage(@Param("query") CompanyGoodsQueryDTO query, @Param("offset") long offset);
+    List<CompanyGoodsPO> lockByProductIdAndGoodsName(@Param("productId") String productId, @Param("goodsName") String goodsName);
+    List<CompanyGoodsPO> findByProductIds(@Param("productIds") List<String> productIds);
     CompanyGoodsPO findById(@Param("id") Long id);
     List<CompanyGoodsPO> findBySkus(@Param("skus") List<String> skus);
     List<CompanyGoodsPO> findExportParents(@Param("ids") List<Long> ids);
@@ -18,5 +20,7 @@ public interface CompanyGoodsMapper {
     List<CompanyGoodsPO> lockImportConflicts(@Param("sku") String sku, @Param("name") String name);
     int insertImport(@Param("goods") CompanyGoodsPO goods);
     int insertLocal(@Param("goods") CompanyGoodsPO goods);
+    /** 导入仅更新货品资料，不修改主子关系和产品类型。 */
+    int updateImport(@Param("goods") CompanyGoodsPO goods, @Param("expectedVersion") Long expectedVersion);
     int modifyLocal(@Param("goods") CompanyGoodsPO goods, @Param("expectedVersion") Long expectedVersion);
 }

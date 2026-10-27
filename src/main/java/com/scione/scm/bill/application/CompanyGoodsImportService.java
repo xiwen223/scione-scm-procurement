@@ -1,15 +1,12 @@
 package com.scione.scm.bill.application;
 
 import cn.hutool.core.collection.CollectionUtil;
+
 import com.scione.scm.bill.domain.goods.enums.GoodsSyncOperationEnum;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scione.scm.bill.application.vo.CompanyGoodsImportVO;
 import com.scione.scm.bill.application.port.LingxingSupplierClient;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
-import com.scione.scm.bill.domain.goods.GoodsSkuRelation;
 import com.scione.scm.bill.infrastructure.excel.CompanyGoodsExcelParser;
 import com.scione.scm.bill.infrastructure.blacklake.BlacklakeOpenApiClient;
 import com.scione.scm.bill.infrastructure.excel.CompanyGoodsExcelParser.ImportRow;
@@ -27,7 +24,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.*;
-import java.math.BigDecimal;
 
 /** 模板校验后，按企业商品ID分组，第一行为主货品；按SKU修改已有记录，每组独立事务。 */
 @Slf4j
@@ -37,8 +33,6 @@ public class CompanyGoodsImportService {
     private CompanyGoodsExcelParser excelParser;
     @Resource
     private CompanyGoodsMapper mapper;
-    @Resource
-    private ObjectMapper objectMapper;
     @Resource
     private PlatformTransactionManager transactionManager;
     @Resource
@@ -155,18 +149,10 @@ public class CompanyGoodsImportService {
         List<Integer> previousStatuses = new ArrayList<>();
         for (ImportRow row : group) {
             CompanyGoodsPO incoming = row.goods();
-            List<CompanyGoodsPO> conflicts = mapper.lockImportConflicts(incoming.getSku(), incoming.getGoodsName());
-            CompanyGoodsPO stored = null;
-            for (CompanyGoodsPO conflict : conflicts) {
-                if (normalize(incoming.getSku()).equals(normalize(conflict.getSku()))) {
-                    if (stored != null) throw invalid("第" + row.rowNumber() + "行SKU在本地存在重复记录");
-                    stored = conflict;
-                }
-            }
-            if (stored == null) throw invalid("第" + row.rowNumber() + "行SKU在本地不存在，导入仅支持修改");
-            for (CompanyGoodsPO conflict : conflicts) {
-                if (!stored.getId().equals(conflict.getId())) throw invalid("第" + row.rowNumber() + "行SKU名称已被其他货品使用");
-            }
+            List<CompanyGoodsPO> matches = mapper.lockByProductIdAndGoodsName(incoming.getProductId(), incoming.getGoodsName());
+            if (CollectionUtil.isEmpty(matches)) throw invalid("第" + row.rowNumber() + "行企业商品ID和SKU名称对应的货品不存在，导入仅支持修改");
+            if (matches.size() != 1) throw invalid("第" + row.rowNumber() + "行企业商品ID和SKU名称对应多条货品，无法确定修改记录");
+            CompanyGoodsPO stored = matches.get(0);
             if (stored.getGoodsStatus() == null || (stored.getGoodsStatus() != GoodsSyncOperationEnum.CREATE.getCode() && stored.getGoodsStatus() != GoodsSyncOperationEnum.UPDATE.getCode())) {
                 throw invalid("第" + row.rowNumber() + "行货品状态无效，不能确定外部新增或修改操作");
             }
@@ -176,7 +162,7 @@ public class CompanyGoodsImportService {
             BeanWrapperImpl target = new BeanWrapperImpl(updated);
             for (java.beans.PropertyDescriptor property : source.getPropertyDescriptors()) {
                 String name = property.getName();
-                if (!target.isWritableProperty(name)) continue;
+                if (!target.isWritableProperty(name) || "groupList".equals(name) || "productType".equals(name) || "sku".equals(name)) continue;
                 Object value = source.getPropertyValue(name);
                 if (value != null) target.setPropertyValue(name, value);
             }
@@ -184,43 +170,7 @@ public class CompanyGoodsImportService {
             updatedGoods.add(updated);
         }
         CompanyGoodsPO parent = updatedGoods.get(0);
-        if (group.size() > 1 && CollectionUtil.isNotEmpty(mapper.findParentIds(parent.getSku(), parent.getId()))) {
-            throw invalid("已被其他主货品关联的子SKU不能再关联子货品");
-        }
-        Map<String, BigDecimal> storedQuantities = new LinkedHashMap<>();
-        if (group.size() > 1 && parent.getGroupList() != null && !parent.getGroupList().isBlank()) {
-            List<GoodsSkuRelation> storedRelations;
-            try {
-                storedRelations = objectMapper.readValue(parent.getGroupList(), new TypeReference<List<GoodsSkuRelation>>() { });
-            } catch (JsonProcessingException exception) {
-                throw invalid("主SKU原有子SKU关联格式错误：" + parent.getSku());
-            }
-            if (CollectionUtil.isNotEmpty(storedRelations)) {
-                for (GoodsSkuRelation storedRelation : storedRelations) {
-                    if (storedRelation == null) throw invalid("主SKU原有子SKU关联格式错误：" + parent.getSku());
-                    storedQuantities.putIfAbsent(normalize(storedRelation.getSku()), storedRelation.getQuantity());
-                }
-            }
-        }
-        List<GoodsSkuRelation> relations = new ArrayList<>();
-        for (int index = 1; index < updatedGoods.size(); index++) {
-            CompanyGoodsPO child = updatedGoods.get(index);
-            GoodsSkuRelation relation = new GoodsSkuRelation();
-            relation.setSku(child.getSku());
-            relation.setGoodsName(child.getGoodsName());
-            // 模板没有比例数量列，重建关联时只能保留该主SKU下原有的数量。
-            BigDecimal quantity = storedQuantities.get(normalize(child.getSku()));
-            if (quantity == null || quantity.signum() <= 0) {
-                throw invalid("主SKU " + parent.getSku() + " 的子SKU " + child.getSku() + " 缺少有效比例数量，请先维护主货品group_list中的quantity");
-            }
-            relation.setQuantity(quantity);
-            relations.add(relation);
-            child.setProductType(0);
-            child.setGroupList("[]");
-        }
-        parent.setProductType(CollectionUtil.isEmpty(relations) ? 0 : 1);
-        try { parent.setGroupList(objectMapper.writeValueAsString(relations)); }
-        catch (JsonProcessingException exception) { throw new IllegalStateException("子SKU关系序列化失败", exception); }
+        // 导入只修改货品资料，主子关系及产品类型由创建、修改接口维护。
         // 子货品先写入，主货品最后写入；修改、状态和消息在同一事务中保存。
         for (int index = 1; index < updatedGoods.size(); index++) {
             saveRow(updatedGoods.get(index), previousStatuses.get(index), dictionaries);
@@ -231,7 +181,7 @@ public class CompanyGoodsImportService {
     private void saveRow(CompanyGoodsPO goods, Integer previousStatus, GoodsSyncDictionarySnapshot dictionaries) {
         Long expectedVersion = goods.getVersion();
         goods.setGoodsStatus(1);
-        if (mapper.modifyLocal(goods, expectedVersion) != 1) {
+        if (mapper.updateImport(goods, expectedVersion) != 1) {
             throw new BusinessException(ResultCode.COMPANY_GOODS_VERSION_CONFLICT);
         }
         goods.setVersion(expectedVersion + 1);

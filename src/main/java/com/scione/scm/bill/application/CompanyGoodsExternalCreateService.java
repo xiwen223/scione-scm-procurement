@@ -69,9 +69,7 @@ public class CompanyGoodsExternalCreateService {
         payload.put("unit", goods.getUnit());
         List<Map<String, Object>> groups = new ArrayList<>();
         if (Objects.equals(goods.getProductType(), COMBINATION_PRODUCT_TYPE)) {
-            CompanyGoodsPO storedGoods = goodsMapper.findById(goods.getId());
-            if (storedGoods == null) throw invalid("组合货品不存在：" + goods.getSku());
-            List<GoodsSkuRelation> relations = childRelations(storedGoods);
+            List<GoodsSkuRelation> relations = childRelations(goods);
             if (CollectionUtil.isEmpty(relations)) throw invalid("组合货品缺少子SKU关联：" + goods.getSku());
             for (GoodsSkuRelation child : relations) {
                 if (child.getQuantity() == null || child.getQuantity().signum() <= 0) {
@@ -121,9 +119,10 @@ public class CompanyGoodsExternalCreateService {
             }
         }
         if (supplierId == null) throw invalid("领星供应商不存在：" + goods.getSupplierName());
+        java.math.BigDecimal supplierQuote = goods.getSupplierQuote() == null ? java.math.BigDecimal.ZERO : goods.getSupplierQuote();
         payload.put("supplier_quote", List.of(Map.of("erp_supplier_id", supplierId, "is_primary", 1,
                 "supplier_product_url", List.of(), "quotes", List.of(Map.of("currency", "CNY", "is_tax", 0,
-                        "tax_rate", "0", "step_prices", List.of(Map.of("moq", 1, "price_with_tax", goods.getSupplierQuote().toPlainString())))))));
+                        "tax_rate", "0", "step_prices", List.of(Map.of("moq", 1, "price_with_tax", supplierQuote.toPlainString())))))));
         Map<String, Object> inspection = new LinkedHashMap<>();
         inspection.put("qc_method", goods.getQualityInspectionMethod());
         inspection.put("custom_qc_template", Map.of("template_item", List.of()));
@@ -174,6 +173,29 @@ public class CompanyGoodsExternalCreateService {
             putLingxing(logistics, country + "_bg_import_hs_code", goods.getBgImportHsCode());
             payload.put("product_logistics_list", logistics);
         }
+        // 图片使用本地最新记录；组合比例仍沿用消息中的数量快照。
+        CompanyGoodsPO stored = goodsMapper.findById(goods.getId());
+        if (stored == null) throw invalid("本地货品不存在，无法读取图片：" + goods.getSku());
+        List<Map<String, Object>> pictures = new ArrayList<>();
+        if (stored.getPictureList() != null && !stored.getPictureList().isBlank()) {
+            try {
+                JsonNode pictureList = objectMapper.readTree(stored.getPictureList());
+                if (pictureList == null || !pictureList.isArray()) throw invalid("本地货品图片必须为JSON数组：" + goods.getSku());
+                for (JsonNode picture : pictureList) {
+                    JsonNode url = picture.get("pic_url");
+                    JsonNode primary = picture.get("is_primary");
+                    if (url == null || !url.isTextual() || url.asText().isBlank()
+                            || primary == null || !primary.isIntegralNumber()
+                            || !(primary.asText().equals("0") || primary.asText().equals("1"))) {
+                        throw invalid("本地货品图片pic_url或is_primary无效：" + goods.getSku());
+                    }
+                    pictures.add(Map.of("pic_url", url.asText(), "is_primary", primary.intValue()));
+                }
+            } catch (JsonProcessingException exception) {
+                throw invalid("本地货品图片JSON格式错误：" + goods.getSku());
+            }
+        }
+        payload.put("picture_list", pictures);
         return payload;
     }
 

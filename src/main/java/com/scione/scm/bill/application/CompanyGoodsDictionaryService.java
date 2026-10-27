@@ -12,11 +12,8 @@ import com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 
 /** 导入写库前加载本批次需要的字典，名称是否存在仍由消费者校验。 */
@@ -34,17 +31,21 @@ public class CompanyGoodsDictionaryService {
     public GoodsSyncDictionarySnapshot loadForImport(List<CompanyGoodsPO> importedGoods) {
         GoodsSyncDictionarySnapshot snapshot = new GoodsSyncDictionarySnapshot();
         if (CollectionUtil.isEmpty(importedGoods)) return snapshot;
-        List<String> skus = new ArrayList<>();
-        for (CompanyGoodsPO goods : importedGoods) skus.add(goods.getSku());
-        Map<String, CompanyGoodsPO> storedBySku = new LinkedHashMap<>();
-        for (CompanyGoodsPO stored : goodsMapper.findBySkus(skus)) {
-            storedBySku.putIfAbsent(stored.getSku().toLowerCase(Locale.ROOT), stored);
-        }
+        List<String> productIds = new ArrayList<>();
+        for (CompanyGoodsPO goods : importedGoods) productIds.add(goods.getProductId());
+        List<CompanyGoodsPO> storedGoods = goodsMapper.findByProductIds(productIds);
         boolean needsTemplates = false;
         boolean needsRoutings = false;
         Set<String> warehouseNames = new LinkedHashSet<>();
         for (CompanyGoodsPO goods : importedGoods) {
-            CompanyGoodsPO stored = storedBySku.get(goods.getSku().toLowerCase(Locale.ROOT));
+            CompanyGoodsPO stored = null;
+            for (CompanyGoodsPO candidate : storedGoods) {
+                if (candidate.getProductId().equalsIgnoreCase(goods.getProductId())
+                        && candidate.getGoodsName().equalsIgnoreCase(goods.getGoodsName())) {
+                    stored = candidate;
+                    break;
+                }
+            }
             // Excel空白会保留本地值，字典加载必须包含这些保留字段。
             String template = goods.getQualityTemplate();
             if (template == null && stored != null) template = stored.getQualityTemplate();

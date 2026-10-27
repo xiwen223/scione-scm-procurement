@@ -15,6 +15,7 @@ import java.math.BigDecimal;
 @EqualsAndHashCode(callSuper = true)
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class CompanyGoodsChildModifyDTO extends CompanyGoodsSaveDTO {
+    /** 兼容保留，不参与修改定位；按productId和goodsName定位。 */
     @Positive
     private Long id;
     @PositiveOrZero

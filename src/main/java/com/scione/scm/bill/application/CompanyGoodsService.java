@@ -141,6 +141,7 @@ public class CompanyGoodsService {
                     uploadedImageKeys.add(objectKey);
                     CompanyGoodsPictureVO picture = new CompanyGoodsPictureVO();
                     picture.setObjectKey(objectKey);
+                    picture.setPicUrl(imageService.publicUrl(objectKey));
                     picture.setIsPrimary(1);
                     pictures.add(picture);
                 }

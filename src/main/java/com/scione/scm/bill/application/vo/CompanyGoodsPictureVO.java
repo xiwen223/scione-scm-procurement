@@ -10,7 +10,7 @@ import lombok.Data;
 public class CompanyGoodsPictureVO {
     /** 对象存储文件键；历史数据可能仅包含 pic_url。 */
     private String objectKey;
-    /** 历史图片链接；新上传图片使用 object_key。 */
+    /** 图片访问链接；新上传图片保存公开桶固定URL。 */
     private String picUrl;
     /** 主图标记：1 是主图，0 是其他图片。 */
     private Integer isPrimary;

@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO;
 import com.scione.scm.bill.domain.goods.enums.GoodsSyncTargetEnum;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.GoodsLocalMessageMapper;
+import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.CompanyGoodsMapper;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.GoodsLocalMessagePO;
 import jakarta.annotation.Resource;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,6 +26,8 @@ public class CompanyGoodsMessageService {
     private GoodsLocalMessageMapper messageMapper;
     @Resource
     private ObjectMapper objectMapper;
+    @Resource
+    private CompanyGoodsMapper goodsMapper;
     @Value("${scm.goods-sync.topic:scm-company-goods-create}")
     private String topic;
 
@@ -55,6 +58,12 @@ public class CompanyGoodsMessageService {
         String snapshot;
         try {
             ObjectNode snapshotNode = objectMapper.valueToTree(goods);
+            // 在货品写入的同一事务中固定组合关系，消费历史版本时不能读取最新关系。
+            if (Integer.valueOf(1).equals(goods.getProductType())) {
+                CompanyGoodsPO storedGoods = goodsMapper.findById(goods.getId());
+                if (storedGoods == null) throw new IllegalStateException("组合货品不存在：" + goods.getSku());
+                snapshotNode.put("groupList", storedGoods.getGroupList());
+            }
             snapshotNode.put("syncOperation", previousStatus);
             if (dictionaries != null) snapshotNode.set("syncDictionaries", objectMapper.valueToTree(dictionarySnapshotForGoods(goods, dictionaries)));
             snapshot = objectMapper.writeValueAsString(snapshotNode);
