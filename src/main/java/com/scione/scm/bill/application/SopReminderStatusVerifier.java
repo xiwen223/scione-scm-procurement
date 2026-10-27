@@ -133,17 +133,20 @@ public class SopReminderStatusVerifier {
         if(po==null||status(po)==null)return Decision.UNKNOWN;
         if(status(po)!=2)return Decision.EXITED;
         if(!po.path("item_list").isArray())return Decision.UNKNOWN;
-        List<DeliveryFollowUp> all=new ArrayList<>();boolean missing=false;
+        List<DeliveryFollowUp> all=new ArrayList<>();
         for(JsonNode item:po.path("item_list"))if(item.path("is_delete").asInt()==0&&!text(item,"sku").isBlank()) {
             var row=facts.followUps().get(candidate.businessSn()+"|"+text(item,"sku"));
-            if(row==null||row.followerName()==null||row.followerName().isBlank())missing=true;else all.add(row);
+            //未导入跟单员的SKU只跳过自己，不再让整单无法确认；与预览规则保持一致。
+            if(row==null||row.followerName()==null||row.followerName().isBlank())continue;
+            all.add(row);
         }
         if(all.isEmpty())return Decision.UNKNOWN;
         var mine=all.stream().filter(row->matches(userid,"name:"+row.followerName(),0)).toList();
-        if("DELIVERY_CONFIRM".equals(code))return mine.stream().anyMatch(row->row.expectedDeliveryDate()==null)?Decision.ELIGIBLE:missing?Decision.UNKNOWN:Decision.EXITED;
-        if(missing||all.isEmpty()||all.stream().anyMatch(row->row.expectedDeliveryDate()==null))return Decision.UNKNOWN;
+        if("DELIVERY_CONFIRM".equals(code))return mine.stream().anyMatch(row->row.expectedDeliveryDate()==null)?Decision.ELIGIBLE:Decision.EXITED;
+        //GOODS_READY只按该收件人名下的SKU判断阶段，同一PO可能由多人分头负责。
         if(mine.isEmpty())return Decision.EXITED;
-        var earliest=all.stream().map(DeliveryFollowUp::expectedDeliveryDate).min(LocalDate::compareTo).orElseThrow();
+        if(mine.stream().anyMatch(row->row.expectedDeliveryDate()==null))return Decision.UNKNOWN;
+        var earliest=mine.stream().map(DeliveryFollowUp::expectedDeliveryDate).min(LocalDate::compareTo).orElseThrow();
         var node=properties.getNodes().get(code);Duration remaining=Duration.between(now,earliest.atStartOfDay());
         if(remaining.compareTo(Duration.ofDays(node.getFirstDueDays()))>0)return Decision.EXITED;
         int stage=remaining.compareTo(Duration.ofDays(node.getSecondDueDays()))<=0?2:1;
