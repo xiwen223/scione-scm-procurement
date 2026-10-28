@@ -30,14 +30,15 @@ public class SopReminderLinkService {
     private final com.scione.scm.bill.config.SopReminderProperties properties;
 
     /**
-     * 打开链接：返回该催办人本轮的待办。页面不做登录校验，访问控制完全依赖不可猜的 token。
+     * 打开链接：按这条消息发送时的快照返回待办，内容不随后续状态变化。
+     * 页面不做登录校验，访问控制完全依赖不可猜的 token。
      */
     public SopReminderLinkView open(String token) {
         if (token == null || !TOKEN_PATTERN.matcher(token).matches()) {
             throw new BusinessException(ResultCode.REMINDER_LINK_INVALID, "催办链接格式错误");
         }
         SopReminderRepository.Link link = repository.findLink(token);
-        List<SopReminderRepository.TodoRow> todos = repository.loadTodos(token);
+        List<SopReminderRepository.TodoRow> todos = repository.loadTodos(link);
         Map<Long, List<ReasonItem>> reasons =
                 repository.loadReasons(todos.stream().map(SopReminderRepository.TodoRow::id).toList());
 
@@ -54,7 +55,8 @@ public class SopReminderLinkService {
                 .map(entry -> new NodeGroup(entry.getKey(),
                         nodeName(entry.getKey()), List.copyOf(entry.getValue())))
                 .toList();
-        return new SopReminderLinkView(link.assigneeUserid(), ownerName(link.assigneeUserid()), nodes);
+        return new SopReminderLinkView(link.assigneeUserid(), ownerName(link.assigneeUserid()),
+                link.sentAt(), nodes);
     }
 
     private String ownerName(String userid) {

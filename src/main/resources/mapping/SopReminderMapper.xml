@@ -262,14 +262,18 @@
     <!-- ========== 免登录外链 ========== -->
 
     <select id="findAssigneeByToken" resultType="string">
-        SELECT recipient_userid FROM reminder_push_record
+        SELECT assignee_userid FROM reminder_todo WHERE view_token=#{token} LIMIT 1
+    </select>
+
+    <!-- 外链token解析成消息批次：链接里的token是每条消息独立的viewToken。 -->
+    <select id="findLinkBatch" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderMapper$LinkBatch">
+        SELECT id,recipient_userid AS recipientUserid,sent_at
+        FROM reminder_push_record
         WHERE record_type=1 AND JSON_UNQUOTE(JSON_EXTRACT(send_result,'$.viewToken'))=#{token}
-        UNION ALL
-        SELECT assignee_userid FROM reminder_todo WHERE view_token=#{token}
         LIMIT 1
     </select>
 
-    <!-- 成功次数只统计关联到成功批次的明细，不把发送中/未知结果算成成功。 -->
+    <!-- 老token兜底：按待办实时状态读，只服务稳定view_token的旧链接。 -->
     <select id="findActiveTodos" resultType="com.scione.scm.bill.domain.sop.SopReminderRepository$TodoRow">
         SELECT t.id,t.node_code,t.business_type,t.business_sn,t.entered_at,
                COALESCE(p.cnt,0) AS reminder_count,p.first_at AS first_reminded_at
@@ -279,13 +283,23 @@
                    JOIN reminder_push_record b ON b.id=d.parent_id AND b.record_type=1
                    WHERE d.record_type=2 AND b.send_status=2
                    GROUP BY d.todo_id) p ON p.todo_id=t.id
-        WHERE (EXISTS (
-            SELECT 1 FROM reminder_push_record b
-            JOIN reminder_push_record d ON d.parent_id=b.id AND d.record_type=2
-            WHERE b.record_type=1
-              AND JSON_UNQUOTE(JSON_EXTRACT(b.send_result,'$.viewToken'))=#{token}
-              AND d.todo_id=t.id AND b.recipient_userid=t.assignee_userid
-        ) OR t.view_token=#{token}) AND t.status=0
+        WHERE t.view_token=#{token} AND t.status=0
+        ORDER BY t.node_code,t.entered_at,t.id
+    </select>
+
+    <!-- 消息快照读：待办清单以这条消息发出时为准（后来被关闭也照常显示）；
+         催办次数/首次催办时间只统计这条消息发出之前的成功推送，保证再次打开内容不变。 -->
+    <select id="findSnapshotTodos" resultType="com.scione.scm.bill.domain.sop.SopReminderRepository$TodoRow">
+        SELECT t.id,t.node_code,t.business_type,t.business_sn,t.entered_at,
+               COALESCE(p.cnt,0) AS reminder_count,p.first_at AS first_reminded_at
+        FROM reminder_push_record d
+        JOIN reminder_todo t ON t.id=d.todo_id
+        LEFT JOIN (SELECT d2.todo_id,COUNT(*) AS cnt,MIN(b.sent_at) AS first_at
+                   FROM reminder_push_record d2
+                   JOIN reminder_push_record b ON b.id=d2.parent_id AND b.record_type=1
+                   WHERE d2.record_type=2 AND b.send_status=2 AND b.sent_at&lt;=#{sentAt}
+                   GROUP BY d2.todo_id) p ON p.todo_id=t.id
+        WHERE d.parent_id=#{batchId} AND d.record_type=2
         ORDER BY t.node_code,t.entered_at,t.id
     </select>
 
@@ -296,17 +310,18 @@
         ORDER BY created_at DESC,id DESC
     </select>
 
-    <!-- 插入同时校验token归属与待办状态：不属于当前链接时不写任何行。 -->
+    <!-- 插入同时校验token归属：消息快照里的待办即使后来被关闭，也允许在老链接上补填原因；
+         稳定view_token兜底路径仍要求待办未关闭。 -->
     <insert id="insertReason">
         INSERT INTO reminder_reason_history (todo_id,reason,author_userid)
         SELECT t.id,#{reason},t.assignee_userid
         FROM reminder_todo t
-        WHERE t.id=#{todoId} AND t.status=0 AND (EXISTS (
+        WHERE t.id=#{todoId} AND (EXISTS (
             SELECT 1 FROM reminder_push_record b
             JOIN reminder_push_record d ON d.parent_id=b.id AND d.record_type=2
             WHERE b.record_type=1
               AND JSON_UNQUOTE(JSON_EXTRACT(b.send_result,'$.viewToken'))=#{token}
               AND d.todo_id=t.id AND b.recipient_userid=t.assignee_userid
-        ) OR t.view_token=#{token})
+        ) OR (t.view_token=#{token} AND t.status=0))
     </insert>
 </mapper>

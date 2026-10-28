@@ -267,14 +267,18 @@ public class MybatisSopReminderRepository implements SopReminderRepository {
 
     @Override
     public Link findLink(String token) {
+        SopReminderMapper.LinkBatch batch = mapper.findLinkBatch(token);
+        if (batch != null) return new Link(token, batch.id(), batch.recipientUserid(), batch.sentAt());
         String assignee = mapper.findAssigneeByToken(token);
         if (assignee == null) throw new BusinessException(ResultCode.REMINDER_LINK_NOT_FOUND);
-        return new Link(assignee);
+        return new Link(token, null, assignee, null);
     }
 
     @Override
-    public List<TodoRow> loadTodos(String token) {
-        return mapper.findActiveTodos(token);
+    public List<TodoRow> loadTodos(Link link) {
+        // 有批次快照按消息明细读，待办后来被关闭也不影响这条链接展示的内容；否则老token兜底实时读。
+        if (link.batchId() != null) return mapper.findSnapshotTodos(link.batchId(), link.sentAt());
+        return mapper.findActiveTodos(link.token());
     }
 
     @Override
