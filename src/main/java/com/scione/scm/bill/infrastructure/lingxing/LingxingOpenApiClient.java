@@ -228,10 +228,10 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         long total;
         do {
             try {
-                JsonNode response = requestQueryWithRetry(SUPPLIER_LIST_PATH,
+                JsonNode response = requestQueued(SUPPLIER_LIST_PATH,
                         Map.of("offset", offset, "length", SUPPLIER_PAGE_SIZE));
                 String code = response == null ? "" : response.path("code").asText();
-                if (!"0".equals(code) && !"200".equals(code)) {
+                if (!"0".equals(code)) {
                     throw responseError("查询供应商列表失败；业务码=" + code, response);
                 }
                 JsonNode supplierPage = response.path("data");

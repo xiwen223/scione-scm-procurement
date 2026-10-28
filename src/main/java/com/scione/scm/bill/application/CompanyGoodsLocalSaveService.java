@@ -55,7 +55,6 @@ public class CompanyGoodsLocalSaveService {
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("子货品关联序列化失败", exception);
         }
-        goods.setProductType(CollectionUtil.isEmpty(children) ? 0 : 1);
         for (CompanyGoodsPO child : children) {
             if (goodsMapper.insertLocal(child) != 1) throw invalid("子货品创建失败");
         }
@@ -133,7 +132,6 @@ public class CompanyGoodsLocalSaveService {
             } catch (JsonProcessingException exception) {
                 throw new IllegalStateException("子货品关联序列化失败", exception);
             }
-            goods.setProductType(CollectionUtil.isEmpty(relations) ? 0 : 1);
         }
         // 所有主、子项校验完成后统一写入；任何写入或版本检查失败均由事务回滚。
         for (int index = 0; index < children.size(); index++) {
@@ -195,7 +193,6 @@ public class CompanyGoodsLocalSaveService {
         BeanUtils.copyProperties(request, goods, ignoredProperties.toArray(new String[0]));
         try {
             if (relations != null || stored == null) {
-                goods.setProductType(CollectionUtil.isEmpty(requestedRelations) ? 0 : 1);
                 goods.setGroupList(objectMapper.writeValueAsString(requestedRelations));
             }
             if (request.getInspectionType() != null || stored == null) {

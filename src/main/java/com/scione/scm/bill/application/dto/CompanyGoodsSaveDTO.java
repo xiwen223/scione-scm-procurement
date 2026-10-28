@@ -14,6 +14,10 @@ import java.util.List;
 @Data
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class CompanyGoodsSaveDTO {
+    /** 产品类型由上游提供：0普通产品，1组合产品。 */
+    @Min(0) @Max(1)
+    @JsonDeserialize(using = CompanyGoodsIntegerDeserializer.class)
+    private Integer productType;
     @Size(max = 128)
     private String sku;
     @Size(max = 128)
