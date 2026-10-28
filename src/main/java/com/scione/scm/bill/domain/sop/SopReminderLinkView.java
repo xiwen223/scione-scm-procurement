@@ -6,11 +6,13 @@ import java.util.List;
 /**
  * 免登录催办外链的返回结构。
  * 页面按 nodeCode 分组展示；ownerName为实际收件人配置姓名，不包含手机号等敏感信息。
- * 2026-10 需求调整：不再记录和展示浏览时间、打开次数。
+ * snapshotAt为消息发送时刻：链接内容按该时刻冻结，之后待办关闭/催办次数增加都不影响展示；
+ * 为null表示老token兜底链接，页面按当前时间实时展示。
  */
 public record SopReminderLinkView(
         String ownerUserid,
         String ownerName,
+        LocalDateTime snapshotAt,
         List<NodeGroup> nodes) {
 
     /** 一个节点（如 PO创建未完成）下的全部待办。 */

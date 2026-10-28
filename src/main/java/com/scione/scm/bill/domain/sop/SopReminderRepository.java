@@ -14,7 +14,11 @@ import java.util.function.Supplier;
  */
 public interface SopReminderRepository {
 
-    record Link(String assigneeUserid) { }
+    /**
+     * 外链解析结果。batchId/sentAt非空表示按消息批次快照读取（内容固定）；
+     * 为空表示老token兜底，仍按待办实时状态读取。
+     */
+    record Link(String token, Long batchId, String assigneeUserid, LocalDateTime sentAt) { }
 
     record TodoRow(long id, String nodeCode, String businessType, String businessSn,
                    LocalDateTime enteredAt, int reminderCount, LocalDateTime firstRemindedAt) { }
@@ -92,8 +96,8 @@ public interface SopReminderRepository {
 
     Link findLink(String token);
 
-    /** 成功次数只统计关联到成功批次的明细，不把发送中/未知结果算成成功。 */
-    List<TodoRow> loadTodos(String token);
+    /** 按外链读待办：有批次快照时读该消息发送时的明细，无快照时按待办实时状态兜底。 */
+    List<TodoRow> loadTodos(Link link);
 
     Map<Long, List<ReasonItem>> loadReasons(List<Long> todoIds);
 

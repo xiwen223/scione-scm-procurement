@@ -29,6 +29,9 @@ public interface SopReminderMapper {
 
     record ReasonRow(long todoId, String reason, LocalDateTime createdAt) { }
 
+    /** 外链token对应的消息批次：id用于按明细读快照，sentAt用于冻结催办次数和卡滞时长。 */
+    record LinkBatch(long id, String recipientUserid, LocalDateTime sentAt) { }
+
     /** 发送历史汇总：成功次数、最高成功阶段、时点占用、结果未知与受控重试。 */
     record DispatchHistoryRow(long todoId, int successes, int highestStage,
                               boolean slotBlocked, boolean sending, int unknownCount,
@@ -98,7 +101,13 @@ public interface SopReminderMapper {
 
     String findAssigneeByToken(@Param("token") String token);
 
+    /** 外链token对应的消息批次；查不到返回null，走老token兜底。 */
+    LinkBatch findLinkBatch(@Param("token") String token);
+
     List<TodoRow> findActiveTodos(@Param("token") String token);
+
+    /** 按消息批次快照读待办：不看待办当前状态，催办次数只统计该批次发出之前的成功推送。 */
+    List<TodoRow> findSnapshotTodos(@Param("batchId") long batchId, @Param("sentAt") LocalDateTime sentAt);
 
     List<ReasonRow> findReasons(@Param("ids") List<Long> ids);
 
