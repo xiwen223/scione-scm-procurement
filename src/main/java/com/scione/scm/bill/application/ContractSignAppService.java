@@ -57,6 +57,7 @@ public class ContractSignAppService {
         // 受理步骤：以合同关联公司而非页面默认公司校验印章和免验证签配置，防止子公司签错章。
         BuyerCompany buyer = buyerCompanyRepository.findById(contract.getBuyerCompanyId())
                 .orElseThrow(() -> new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "合同关联需方不存在"));
+        assertBuyerActive(buyer);
         assertFreeSignBusinessIdConfigured(contract, buyer, operatorEmail);
         validateSigningData(contract, buyer, contract.getSupplierPhone(), contract.getSupplierCreditCode());
         // 先完成本地校验，再用条件 UPDATE 将创建状态推进签署队列；返回的是受理，不是我方已盖章。
@@ -84,6 +85,7 @@ public class ContractSignAppService {
                 StringUtils.hasText(buyer.getFadadaFreeSignBusinessId()), mask(buyer.getFadadaFreeSignBusinessId()), buyer.getFadadaFreeSignExpireTime());
         // 免验证签场景码是法大大建任务的必填项：缺失/过期时必须在任何外部调用之前拦下来，
         // 否则后续领星复核、PDF 生成、文件上传都会白跑一遍，最后仍以法大大报错收场。
+        assertBuyerActive(buyer);
         assertFreeSignBusinessIdConfigured(contract, buyer, operatorEmail);
         // 合同创建/编辑时已完成信息回填并持久化；点击开始签署时不再实时查询或复核领星，
         // 统一使用本合同快照，避免签署结果受领星接口状态或 PO 后续变化影响。
@@ -464,6 +466,12 @@ public class ContractSignAppService {
         log.info("发起签署拦截日志已写入：contractId={}, contractNo={}, operationType={}",
                 contract.getId(), contract.getContractNo(), ContractOperationLog.TYPE_START_SIGN_BLOCKED);
         throw new BusinessException(ResultCode.CONTRACT_SIGN_FREE_SIGN_NOT_CONFIGURED, userMessage);
+    }
+
+    private static void assertBuyerActive(BuyerCompany buyer) {
+        if (!Integer.valueOf(1).equals(buyer.getIsActive())) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "合同关联的需方公司已停用，不能发起签署");
+        }
     }
 
     private void validateSigningData(Contract contract, BuyerCompany buyer, String latestSupplierPhone,

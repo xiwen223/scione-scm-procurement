@@ -698,6 +698,8 @@ public class ContractAutoCreateService {
     private long saveContractAndMarkPo(Contract contract, String purchaseOrderNo) {
         TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
         Long contractId = transactionTemplate.execute(status -> {
+            // 外部资料查询可能耗时，落库前重新确认公司仍启用，自动/手动创建共用。
+            resolveManualBuyerCompany(contract.getBuyerCompanyId());
             long createdContractId = contractRepository.create(contract);
             poSyncRepository.markContractCreated(purchaseOrderNo, createdContractId);
             return createdContractId;

@@ -53,8 +53,7 @@ public class SopReminderSchedule {
             catch (Exception exception) { log.error("催办轮次补偿未完成：{}", exception.getMessage()); }
         }, java.time.Duration.ofMinutes(1));
 
-        //4.每天清理历史记录。23:15 是同步的确定空档：测试库22:40已停，生产库0:00才开始连续同步。
-        //  不配置 purge 就完全不注册，库里的记录永不自动删除。
+        //每天清理历史记录。23:15 是同步的确定空档：小时同步22:40已停，全量同步0:00才开始同步。
         SopReminderProperties.Purge purge = properties.getPurge();
         if (purge != null && Boolean.TRUE.equals(purge.getEnabled())) {
             log.info("催办历史清理已启用：每日23:15，预演={}，关闭待办明细保留{}天，跳过记录{}天，轮次{}天",
@@ -132,7 +131,7 @@ public class SopReminderSchedule {
 
     /**
      * 按业务生命周期清理历史记录。
-     * 待办一旦关闭就不会再被催办，它的推送明细对去重和节点9额度判断都已无用，只保留短期追溯窗口；
+     * 待办一旦关闭就不会再被催办，它的推送明细对去重和节点额度判断都已无用，只保留短期追溯窗口；
      * 未发送异常记录和轮次记录只用于事后排查，超过保留期即可删除。
      * 待办本身和卡滞原因历史永不在这里删除。
      */

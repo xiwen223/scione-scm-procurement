@@ -15,7 +15,7 @@ public interface ContractMapper {
     @org.apache.ibatis.annotations.Update("UPDATE contract c JOIN contract_template t ON t.id=#{newTemplateId} SET c.template_id=t.id,c.update_time=NOW() WHERE c.id=#{id} AND c.is_deleted=0 AND c.contract_type=#{contractType} AND c.template_id <=> #{oldTemplateId} AND t.contract_type=c.contract_type AND t.is_default=1 AND t.is_active=1 AND t.is_deleted=0")
     int rebindDefaultTemplate(@Param("id") Long id, @Param("contractType") Integer contractType,
                              @Param("oldTemplateId") Long oldTemplateId, @Param("newTemplateId") Long newTemplateId);
-    @org.apache.ibatis.annotations.Update("UPDATE contract SET status=2,sign_launch_state='QUEUED', sign_launch_error=NULL, sign_launch_operator=#{operator}, update_time=NOW() WHERE id=#{id} AND status=1 AND is_deleted=0 AND COALESCE(sign_launch_state,'') NOT IN ('QUEUED','RUNNING','WAIT_CALLBACK','UNKNOWN')")
+    @org.apache.ibatis.annotations.Update("UPDATE contract c JOIN buyer_company b ON b.id=c.buyer_company_id SET c.status=2,c.sign_launch_state='QUEUED', c.sign_launch_error=NULL, c.sign_launch_operator=#{operator}, c.update_time=NOW() WHERE c.id=#{id} AND c.status=1 AND c.is_deleted=0 AND b.is_active=1 AND b.is_deleted=0 AND COALESCE(c.sign_launch_state,'') NOT IN ('QUEUED','RUNNING','WAIT_CALLBACK','UNKNOWN')")
     // 受理成功即 status=2、QUEUED；原子条件避免重复点击把同一合同排队两次。
     int enqueueSign(@Param("id") Long id, @Param("operator") String operator);
 
