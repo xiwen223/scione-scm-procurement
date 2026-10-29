@@ -18,16 +18,21 @@ public interface SopReminderSourceRepository {
     /** 由统一入口校验后的来源标识，各节点都可使用。 */
     record PublishedSource(long taskId, LocalDateTime syncedAt) { }
 
+    /** 一条单据操作日志：time时间、type操作类型、detail详情、uid操作人领星UID、actor操作人姓名。 */
     record Event(LocalDateTime time, String type, String detail, Long uid, String actor) { }
 
+    /** 一份合同：id合同ID、poSn关联PO单号、createdAt合同创建时间。 */
     record ActiveContract(long id, String poSn, LocalDateTime createdAt) { }
 
+    /** 普通节点共享的完整来源数据包：published来源标识、documents单据原文、logs操作日志、contracts合同、followUps跟单信息。 */
     record NodeData(PublishedSource published, Map<String, JsonNode> documents,
                     Map<String, List<Event>> logs, Map<String, ActiveContract> contracts,
                     Map<String, DeliveryFollowUp> followUps) { }
 
+    /** 一条收货状态：poSn关联PO、status收货单状态。 */
     record ReceiptState(String poSn, int status) { }
 
+    /** 发送前复核用的小范围数据包：contracts合同、followUps跟单、receipts收货、collectedAt采集基线时间。 */
     record CompletionFacts(Map<String, ActiveContract> contracts, Map<String, DeliveryFollowUp> followUps,
                            Map<String, ReceiptState> receipts, LocalDateTime collectedAt) { }
 

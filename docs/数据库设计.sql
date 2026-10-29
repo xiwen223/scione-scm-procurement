@@ -395,3 +395,9 @@ CREATE TABLE IF NOT EXISTS `po_sync_state` (
 -- 未初始化进度时，可在Nacos配置contract.auto-create.initial-start-time指定首轮回补起点。
 -- 如不配置，首轮兼容原来的最近6分钟；指定时间的手动回补不会改变自动进度。
 -- Java与Python请求协调仅在连接同一MySQL实例、使用同一appId和接口路径时生效。
+
+-- 2026-10-28：催办关联表补齐领星采购单子项ID；类型与原表lx_pp_po_sku_ass一致。
+-- 已有库仅在该列不存在时执行以下ALTER；新建表定义见同步项目docs/schema.sql。
+ALTER TABLE `lx_pp_po_sku_ass_h`
+  ADD COLUMN `item_id` bigint DEFAULT NULL COMMENT '采购单子项id' AFTER `sku`;
+-- 后续同步从采购单item_list[].id写入；历史数据按plan_sn/order_sn/sku核对后补值。

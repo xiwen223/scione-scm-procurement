@@ -20,11 +20,14 @@ public interface SopReminderRepository {
      */
     record Link(String token, Long batchId, String assigneeUserid, LocalDateTime sentAt) { }
 
+    /** 外链里的一条待办：id待办ID、nodeCode节点、businessType业务类型、businessSn业务单号、enteredAt进入时间、reminderCount催办次数、firstRemindedAt首次催办时间。 */
     record TodoRow(long id, String nodeCode, String businessType, String businessSn,
                    LocalDateTime enteredAt, int reminderCount, LocalDateTime firstRemindedAt) { }
 
+    /** 建待办的返回：token稳定外链令牌、todoIds待办ID列表、stages对应阶段列表。 */
     record PreparedGroup(String token, List<Long> todoIds, List<Integer> stages) { }
 
+    /** 一条因收件人问题被跳过的记录：businessSn业务单号、receiverKey找人键、errorCode错误码、errorMessage错误说明、itemKey明细键、stage阶段。 */
     record SkippedRecipient(String businessSn, String receiverKey, String errorCode, String errorMessage,
                             String itemKey, int stage) { }
 
@@ -32,8 +35,10 @@ public interface SopReminderRepository {
     /** unknownCount 为该待办历史上发送结果未知的次数，用于邮件标注第几次提醒。 */
     record DispatchDecision(boolean sendable, boolean hideFromPage, String reason, int unknownCount) { }
 
+    /** 一条待补发的失败消息批次：id批次ID、contextJson消息上下文JSON。 */
     record RetryBatch(long id, String contextJson) { }
 
+    /** 补发时需要核对的待办快照：businessSn业务单号、itemKey明细键、roundKey轮次键、stage阶段、nodeCode节点。 */
     record RetryTodo(String businessSn, String itemKey, String roundKey, int stage, String nodeCode) { }
 
     /** 类型3为未发送异常，不关联推送明细，因此不会占用发送去重或成功次数。 */

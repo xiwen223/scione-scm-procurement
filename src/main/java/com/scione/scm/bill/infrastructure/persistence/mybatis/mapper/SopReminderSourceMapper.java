@@ -26,9 +26,6 @@ public interface SopReminderSourceMapper {
 
     record ReceiptRow(String orderSn, String poSn, int status) { }
 
-    /** 配置校验：实际连接的库必须与 Nacos 声明的库一致。 */
-    String selectCurrentDatabase();
-
     /** 最新一轮小时同步，不看历史成功记录：失败或仍在running都必须停止。 */
     SyncTaskRow selectLatestIncrementalTask();
 
@@ -37,7 +34,7 @@ public interface SopReminderSourceMapper {
 
     LocalDateTime selectLatestSuccessCollectedAt();
 
-    /** 节点1专属SQL：待采购/部分采购PP、杭州店铺及全部SKU。 */
+    /** 节点1SQL：待采购/部分采购PP、杭州店铺及全部SKU。 */
     List<PlanRow> selectPoCreatePlans(@Param("shopIds") List<Long> shopIds, @Param("createdFrom") LocalDateTime createdFrom);
 
     List<DocumentRow> selectDocuments();

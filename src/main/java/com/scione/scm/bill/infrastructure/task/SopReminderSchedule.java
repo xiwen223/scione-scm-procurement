@@ -35,6 +35,7 @@ public class SopReminderSchedule {
     // 等待同步可能很久，催办使用独立线程池，不占用合同等模块的默认调度线程。
     private final ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
 
+    //启动时注册所有定时任务
     @PostConstruct
     public void registerTasks() {
         scheduler.setPoolSize(Math.max(2, properties.getNodes().size() + 1));//线程数=节点数+1，给重试留一个线程
@@ -79,6 +80,7 @@ public class SopReminderSchedule {
         if (!crons.isEmpty()) registerLane(crons);//剩下的普通节点不为空的话再注册一组
     }
 
+    //把一组节点(普通或装箱)按它们的 cron 注册成一个调度任务,用trigger决定下次几点醒。
     private void registerLane(java.util.Map<String, String> crons) {//crons就是节点代码->cron表达式的映射
         // 普通节点仍按同一时点汇总；装箱单独计算下次执行时间。
         java.util.concurrent.atomic.AtomicReference<java.time.Instant> nextSlot = new java.util.concurrent.atomic.AtomicReference<>();
@@ -97,7 +99,7 @@ public class SopReminderSchedule {
         scheduler.shutdown();
     }
 
-    //触发器唤醒，回答：这一刻到底该发哪几个节点
+    //到时间点后决定这一刻到底该发哪几个节点，把符合要求的节点筛出来交给execute
     private void runSlot(java.time.Instant instant, java.util.Map<String, String> crons) {
         if (instant == null) return;
         java.time.LocalDateTime slot = java.time.LocalDateTime.ofInstant(instant, ZoneId.of("Asia/Shanghai"));//这里不能用now()，线程池刚好忙，9:00的任务9:00:03才轮到的话，会直接计算到下一个时间节点发
@@ -194,34 +196,34 @@ public class SopReminderSchedule {
      * attemptNo：这是第几次重试。
      * */
     private void execute(String scene, java.util.List<String> codes, java.time.LocalDateTime slot, int attemptNo) {
-        String nodeCodes = String.join(",", codes);
-        java.time.LocalDateTime startedAt = java.time.LocalDateTime.now(ZoneId.of("Asia/Shanghai"));
-        attempts.begin(nodeCodes, slot, startedAt);
+        String nodeCodes = String.join(",", codes); // 把 ["GOODS_READY","RF_CREATE"] 拼成 "GOODS_READY,RF_CREATE"，作为 attempt 表的主键一部分
+        java.time.LocalDateTime startedAt = java.time.LocalDateTime.now(ZoneId.of("Asia/Shanghai"));//真正开始跑的时刻
+        attempts.begin(nodeCodes, slot, startedAt);// 往 attempt 表插一行，状态=running。这轮的身份是 (node_codes, scheduled_at)
         long started = System.nanoTime();
         log.info("{}开始：nodes={}, scheduledAt={}, attempt={}", scene, codes, slot, attemptNo);
         try {
+            //返回的 SendResult 里有几个数：todos（建了几条待办）、pushes（发了几条消息）、skipped（跳过几条）、unresolvedCount（发出去但结果未知的消息条数）。
             SopReminderSendService.SendResult sent = sendService.sendNodes(codes, slot, null);
-            // 11 个节点一视同仁：跑完但仍有 UNKNOWN 就排下一次补发，直到全部确认为止。
+            // 如果跑完但仍有 UNKNOWN 且尝试次数还没到3次的，就需要补发，重试时间设置在15分钟后。
             boolean needRetry = sent.unresolvedCount() > 0 && attemptNo < MAX_ATTEMPTS;
-            // 用满次数仍有未决消息：不能再标 SUCCESS，否则「成功」这个状态就失去了「已全部确认」的含义，
-            // 事后巡检也容易漏掉。标 GIVE_UP 转人工，让它出现在待核对清单里。
+            // 如果跑了3次还有UNKNOWN状态的，也不能标记成功，就会把状态置为GIVE_UP。
             boolean exhausted = sent.unresolvedCount() > 0 && attemptNo >= MAX_ATTEMPTS;
             if (exhausted) {
                 log.error("{}仍有{}条发送结果未知，已达补发上限{}次，转人工核对", scene, sent.unresolvedCount(), MAX_ATTEMPTS);
-                attempts.fail(nodeCodes, slot,
+                attempts.fail(nodeCodes, slot,//3次还失败就置为fail，不安排重试了
                         "补发" + MAX_ATTEMPTS + "次后仍有" + sent.unresolvedCount() + "条发送结果未知，需人工核对", null, true);
             } else {
-                attempts.succeed(nodeCodes, slot, sent.todos(), sent.pushes(), sent.unresolvedCount(),
+                attempts.succeed(nodeCodes, slot, sent.todos(), sent.pushes(), sent.unresolvedCount(),//否则的话就继续重试
                         needRetry ? java.time.LocalDateTime.now(ZoneId.of("Asia/Shanghai")).plus(RETRY_DELAY) : null);
             }
             log.info("{}执行完成：node={}, todos={}, pushes={}, skipped={}, unresolved={}",
                     scene, codes, sent.todos(), sent.pushes(), sent.skipped().size(), sent.unresolvedCount());
-        } catch (Exception exception) {
+        } catch (Exception exception) {//这里是一整轮都失败了，比如库连不上等，也是最多重试三次，没到 3 次：状态=failed，next_retry_at=15 分钟后，等 retryDueSlots 补；已到 3 次：giveUp=true，不再排下次，转人工。
             boolean giveUp = attemptNo >= MAX_ATTEMPTS;
             log.error("{}执行失败：nodes={}, attempt={}, giveUp={}", scene, codes, attemptNo, giveUp, exception);
             attempts.fail(nodeCodes, slot, exception.getMessage(),
                     java.time.LocalDateTime.now(ZoneId.of("Asia/Shanghai")).plus(RETRY_DELAY), giveUp);
-        } finally {
+        } finally {//记录耗时日志
             log.info("{}结束：nodes={}, elapsedMs={}", scene, codes,
                     java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
         }
