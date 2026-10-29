@@ -30,6 +30,7 @@ public record SopReminderLinkView(
             List<ReasonItem> reasons) {
     }
 
+    /** 一条历史原因：reason原因内容、createdAt填写时间。 */
     public record ReasonItem(String reason, LocalDateTime createdAt) {
     }
 }

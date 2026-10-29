@@ -47,12 +47,10 @@
     </update>
 
     <!--
-      当天、未超次数、且满足下列任一条件的轮次：
-      1) 失败待补，或跑完但仍有未决消息（next_retry_at 到点）；
-      2) RUNNING 悬挂：进程在轮次执行中被杀，行会永远停在 RUNNING，
-         只认 FAILED 的话这一轮就再也补不上了。阈值取 15 分钟，远大于单轮最长耗时（约 3 分钟），不会误杀在跑的轮次。
-      当天边界由 todayStart 传入而不是用 CURDATE()：CURDATE() 取数据库时区，
-      RDS 常见配置是 UTC，会在北京时间 0:00-8:00 之间把补发窗口算到前一天。
+      三种情况会整轮重试
+      1.整轮炸了（抛异常），attempt表状态为FAILED，execute 的 catch 分支挂 now+15分钟，靠每分钟扫描扫
+      2.跑完但是有结果未知的消息：企微和邮箱没有给明确回执，attempt表状态为SUCCESS，execute 的 else 分支挂 now+15分钟
+      3.进程跑到一半被杀/重启，attempt 行永远停在 RUNNING(超30分钟)
     -->
     <select id="selectDueRetries"
             resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderDispatchAttemptMapper$AttemptRow">

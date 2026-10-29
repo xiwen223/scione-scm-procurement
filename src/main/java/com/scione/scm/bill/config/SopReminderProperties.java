@@ -1,6 +1,6 @@
 package com.scione.scm.bill.config;
 
-import com.scione.scm.bill.domain.sop.SopReminderPreview.NodeCode;
+import com.scione.scm.bill.domain.sop.enums.NodeCode;
 import jakarta.annotation.PostConstruct;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -30,7 +30,6 @@ public class SopReminderProperties {
     private Duration maxSyncAge;
     /** 必填：撞上同步最多等待多久；超时停止，不用旧成功记录替代正在等待的这一轮。 */
     private Duration syncWaitTimeout;
-    private Source source = new Source();
     /** 必填：仅比较真实创建日志中的人员，不使用PO的opt_uid（采购员）冒充创建人。 */
     private List<String> allowedPoCreators;
     /** 必填：RF审批链按顺序填写3个实际领星UID，缺失时不猜当前人。 */
@@ -44,73 +43,74 @@ public class SopReminderProperties {
     /** 可选：历史记录清理。不配置时不注册清理任务，库里的记录永不自动删除。 */
     private Purge purge;
 
-    /** 启动即校验，缺一项直接抛异常，不用代码里的默认值兜底。 */
+    /** 启动即校验所有必填配置，缺一项直接抛异常，不用代码里的默认值兜底。 */
     @PostConstruct
     void validate() {
-        require(ppStartDate != null, "sop.reminder.pp-start-date");
-        require(positive(maxSyncAge), "sop.reminder.max-sync-age");
-        require(positive(syncWaitTimeout), "sop.reminder.sync-wait-timeout");
-        require(packingStartDate != null, "sop.reminder.packing-start-date");
-        require(allowedPoCreators != null && !allowedPoCreators.isEmpty(), "sop.reminder.allowed-po-creators");
+        require(ppStartDate != null, "sop.reminder.pp-start-date");//PP范围下限必填
+        require(positive(maxSyncAge), "sop.reminder.max-sync-age");//数据最大年龄必填且>0
+        require(positive(syncWaitTimeout), "sop.reminder.sync-wait-timeout");//同步等待超时必填且>0
+        require(packingStartDate != null, "sop.reminder.packing-start-date");//装箱批次日期下限必填
+        require(allowedPoCreators != null && !allowedPoCreators.isEmpty(), "sop.reminder.allowed-po-creators");//创建人白名单不能为空
         require(financeApprovalUids != null && financeApprovalUids.size() == 3
                         && new HashSet<>(financeApprovalUids).size() == 3
                         && financeApprovalUids.stream().allMatch(uid -> uid != null && uid > 0),
-                "sop.reminder.finance-approval-uids（需3个不重复的正整数领星UID）");
-        require(source != null && hasText(source.getExpectedDatabase()), "sop.reminder.source.expected-database");
-        require(send != null, "sop.reminder.send");
-        require(hasText(send.getWebhookKey()), "sop.reminder.send.webhook-key");
-        require(hasText(send.getFrontBaseUrl()), "sop.reminder.send.front-base-url");
-        require(send.getTestEnabled() != null, "sop.reminder.send.test-enabled");
-        require(send.getRetryEnabled() != null, "sop.reminder.send.retry-enabled");
+                "sop.reminder.finance-approval-uids（需3个不重复的正整数领星UID）");//财务审批链必须是3个不重复的正整数UID
+        require(send != null, "sop.reminder.send");//发送配置整体必填
+        require(hasText(send.getWebhookKey()), "sop.reminder.send.webhook-key");//群机器人key必填
+        require(hasText(send.getFrontBaseUrl()), "sop.reminder.send.front-base-url");//外链根地址必填
+        require(send.getRetryEnabled() != null, "sop.reminder.send.retry-enabled");//补偿开关必填
         require(send.getMaxAttempts() != null && send.getMaxAttempts() >= 1 && send.getMaxAttempts() <= 5,
-                "sop.reminder.send.max-attempts（1~5）");
-        require(positive(send.getRetryDelay()), "sop.reminder.send.retry-delay");
+                "sop.reminder.send.max-attempts（1~5）");//重试总次数1~5
+        require(positive(send.getRetryDelay()), "sop.reminder.send.retry-delay");//重试间隔必填且>0
         require(positive(send.getRetryMaxAge()) && send.getRetryMaxAge().compareTo(send.getRetryDelay()) > 0,
-                "sop.reminder.send.retry-max-age（需大于retry-delay）");
-        require(nodes != null && !nodes.isEmpty(), "sop.reminder.nodes");
+                "sop.reminder.send.retry-max-age（需大于retry-delay）");//重试有效期必填且大于间隔
+        require(nodes != null && !nodes.isEmpty(), "sop.reminder.nodes");//节点配置不能为空
         nodes.forEach((code, node) -> {
-            require(node != null, "sop.reminder.nodes." + code);
-            require(node.getEnabled() != null, "sop.reminder.nodes." + code + ".enabled");
-            require(hasText(node.getCron()), "sop.reminder.nodes." + code + ".cron");
+            require(node != null, "sop.reminder.nodes." + code);//每个节点配置对象不能为空
+            require(node.getEnabled() != null, "sop.reminder.nodes." + code + ".enabled");//节点开关必填
+            require(hasText(node.getCron()), "sop.reminder.nodes." + code + ".cron");//节点cron必填
             if (NodeCode.PO_CREATE.name().equals(code)) {
-                require(hasText(node.getShopNamePrefix()), "sop.reminder.nodes." + code + ".shop-name-prefix");
+                require(hasText(node.getShopNamePrefix()), "sop.reminder.nodes." + code + ".shop-name-prefix");//PO_CREATE必须配店铺前缀
             }
             if (Set.of("PO_APPROVAL", "RF_PAYMENT", "CR_RECEIPT").contains(code)) {
-                require(hasText(node.getReceiverKey()), "sop.reminder.nodes." + code + ".receiver-key");
+                require(hasText(node.getReceiverKey()), "sop.reminder.nodes." + code + ".receiver-key");//固定角色节点必须配receiver-key
             }
             if (NodeCode.GOODS_READY.name().equals(code)) {
-                require(node.getFirstDueDays() != null, "sop.reminder.nodes." + code + ".first-due-days");
-                require(node.getSecondDueDays() != null, "sop.reminder.nodes." + code + ".second-due-days");
+                require(node.getFirstDueDays() != null, "sop.reminder.nodes." + code + ".first-due-days");//货物备齐第一阶段天数必填
+                require(node.getSecondDueDays() != null, "sop.reminder.nodes." + code + ".second-due-days");//货物备齐第二阶段天数必填
             }
             if (NodeCode.DELIVERY_CONFIRM.name().equals(code)) {
-                require(node.getDeliveryDueDays() != null, "sop.reminder.nodes." + code + ".delivery-due-days");
+                require(node.getDeliveryDueDays() != null, "sop.reminder.nodes." + code + ".delivery-due-days");//交期确认天数必填
             }
         });
         // 不配置就不注册清理任务；一旦配置，每一项都必须写全，避免用代码默认值掩盖漏配。
         if (purge != null) {
-            require(purge.getEnabled() != null, "sop.reminder.purge.enabled");
-            require(purge.getDryRun() != null, "sop.reminder.purge.dry-run");
+            require(purge.getEnabled() != null, "sop.reminder.purge.enabled");//清理开关必填
+            require(purge.getDryRun() != null, "sop.reminder.purge.dry-run");//预演开关必填
             require(purge.getClosedTodoDays() != null && purge.getClosedTodoDays() >= 0,
-                    "sop.reminder.purge.closed-todo-days（≥0）");
+                    "sop.reminder.purge.closed-todo-days（≥0）");//已关闭待办明细保留天数≥0
             require(purge.getSkippedDays() != null && purge.getSkippedDays() >= 1,
-                    "sop.reminder.purge.skipped-days（≥1）");
+                    "sop.reminder.purge.skipped-days（≥1）");//跳过记录保留天数≥1
             require(purge.getAttemptDays() != null && purge.getAttemptDays() >= 1,
-                    "sop.reminder.purge.attempt-days（≥1）");
+                    "sop.reminder.purge.attempt-days（≥1）");//轮次记录保留天数≥1
             require(purge.getBatchSize() != null && purge.getBatchSize() >= 1 && purge.getBatchSize() <= 10_000,
-                    "sop.reminder.purge.batch-size（1~10000）");
+                    "sop.reminder.purge.batch-size（1~10000）");//单批删除行数1~10000
             require(purge.getMaxRowsPerRun() != null && purge.getMaxRowsPerRun() >= purge.getBatchSize(),
-                    "sop.reminder.purge.max-rows-per-run（需≥batch-size）");
+                    "sop.reminder.purge.max-rows-per-run（需≥batch-size）");//单次总上限≥单批
         }
     }
 
+    /** 判断Duration是否为正（非null、非负、非零），用于校验那些必须大于0的时长配置。 */
     private static boolean positive(Duration value) {
         return value != null && !value.isNegative() && !value.isZero();
     }
 
+    /** 判断字符串是否非空（非null且去掉首尾空白后仍有内容）。 */
     private static boolean hasText(String value) {
         return value != null && !value.isBlank();
     }
 
+    /** 配置校验的兜底：条件不满足就抛异常并带上配置项key，方便定位是哪一项配错了。 */
     private static void require(boolean condition, String key) {
         if (!condition) throw new IllegalStateException("催办配置缺失或非法：" + key);
     }
@@ -136,19 +136,7 @@ public class SopReminderProperties {
     }
 
     @Data
-    public static class Source {
-        /** 留空复用SCM数据源；配置独立连接时三项必须同时填写。 */
-        private String jdbcUrl;
-        private String username;
-        private String password;
-        /** 必填：防止读错数据库，但仍需由实际数据源配置保证连接测试环境。 */
-        private String expectedDatabase;
-    }
-
-    @Data
     public static class Send {
-        /** 必填：手动测试发送接口开关，上线前置false。 */
-        private Boolean testEnabled;
         /** 必填：失败补偿开关；只处理已确认可重试的批次。 */
         private Boolean retryEnabled;
         /** 必填：含首次发送的总次数，1~5。 */
@@ -165,8 +153,6 @@ public class SopReminderProperties {
         private Map<String, Person> purchasers = new LinkedHashMap<>();
         /** 可选：role:PO_APPROVER、role:FINANCE_PAYER、role:RECEIVER、name:姓名、uid:领星UID。 */
         private Map<String, Person> people = new LinkedHashMap<>();
-        /** 可选：仅测试模式下people与purchasers均未匹配时使用；正式模式缺映射不发送。 */
-        private Person fallbackPerson;
         /** 关联货件专用SMTP，不依赖企微自建应用。 */
         private PackingMail packingMail = new PackingMail();
     }
@@ -192,28 +178,28 @@ public class SopReminderProperties {
 
     @Data
     public static class PackingMail {
-        private String host;
-        private Integer port;
-        private String username;
-        private String password;
-        private String from;
-        private Boolean ssl;
-        private Boolean starttls;
+        private String host;//SMTP服务器地址
+        private Integer port;//SMTP端口（SSL通常465）
+        private String username;//发件邮箱账号
+        private String password;//发件邮箱授权码
+        private String from;//发件人地址（与username通常一致）
+        private Boolean ssl;//是否启用SSL
+        private Boolean starttls;//是否启用STARTTLS
     }
 
-    /** 统一人员解析顺序：业务映射键、领星UID；仅测试模式允许兜底。发送和实时复核共用。 */
+    /** 统一人员解析顺序：业务映射键、领星UID；查不到返回null（发送层跳过该责任人，不兜底）。 */
     public Person resolvePerson(String recipientKey,long recipientUid) {
         Person person=send.getPeople().get(recipientKey);
         if(person==null && recipientUid>0) person=send.getPurchasers().get(Long.toString(recipientUid));
-        return person!=null?person:Boolean.TRUE.equals(send.getTestEnabled())?send.getFallbackPerson():null;
+        return person;
     }
 
     /** 领星UID与企微账号的对应关系；缺映射时跳过该责任人，不用UID伪造userid。 */
     @Data
     public static class Person {
-        private String userid;
-        private String name;
-        private String mobile;
+        private String userid;//企微userid，实际发送对象
+        private String name;//中文姓名，页面展示用
+        private String mobile;//手机号，群机器人@人用
         /** 关联货件邮件收件地址，不能用手机号或企微userid猜测。 */
         private String email;
     }
