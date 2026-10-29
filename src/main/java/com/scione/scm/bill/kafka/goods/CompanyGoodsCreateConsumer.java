@@ -33,6 +33,11 @@ public class CompanyGoodsCreateConsumer {
     @Resource
     private ObjectMapper objectMapper;
 
+    /**
+     * 根据消息ID领取本地消息，解析快照并按目标系统同步，记录成功或失败结果。
+     *
+     * @param record Kafka收到的消息记录，消息值为本地业务消息ID
+     */
     @KafkaListener(topics = "${scm.goods-sync.topic:scm-company-goods-create}",
             groupId = "${scm.goods-sync.group-id:scm-company-goods-create-consumer}",
             containerFactory = "goodsSyncKafkaListenerContainerFactory")

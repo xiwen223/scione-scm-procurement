@@ -24,6 +24,13 @@ public class LingxingSigner {
 
     private final ObjectMapper objectMapper;
 
+    /**
+     * 按领星签名规则排序参数、生成摘要并进行AES加密。
+     *
+     * @param parameters 参与签名的请求参数
+     * @param aesKey 领星签名加密密钥，不得写入日志
+     * @return 领星请求使用的签名字符串，不得写入日志
+     */
     public String sign(Map<String, ?> parameters, String aesKey) {
         String plainText = parameters.entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
@@ -43,6 +50,12 @@ public class LingxingSigner {
         }
     }
 
+    /**
+     * 将待签名参数转换为参与签名的文本表示。
+     *
+     * @param value 待处理字段值
+     * @return 按领星规则转换的参数文本
+     */
     private String stringify(Object value) {
         if (value == null) {
             return "None";

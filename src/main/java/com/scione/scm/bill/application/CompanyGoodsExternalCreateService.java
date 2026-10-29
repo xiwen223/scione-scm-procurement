@@ -47,22 +47,51 @@ public class CompanyGoodsExternalCreateService {
     @Resource
     private CompanyGoodsMapper goodsMapper;
 
+    /**
+     * 转换货品字段并调用领星产品set接口执行新增同步。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     */
     public void createInLingxing(CompanyGoodsPO goods) {
         createInLingxing(goods, null);
     }
 
+    /**
+     * 转换货品字段并调用领星产品set接口执行新增同步。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
     public void createInLingxing(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
         lingxingClient.createProduct(lingxingPayload(goods, dictionaries));
     }
 
+    /**
+     * 转换货品字段并调用领星产品set接口执行修改同步。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     */
     public void updateInLingxing(CompanyGoodsPO goods) {
         updateInLingxing(goods, null);
     }
 
+    /**
+     * 转换货品字段并调用领星产品set接口执行修改同步。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
     public void updateInLingxing(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
         lingxingClient.updateProduct(lingxingPayload(goods, dictionaries));
     }
 
+    /**
+     * 转换人员、供应商及模板等外部编码，组装领星请求并使用快照数量和本地图片。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     * @return 领星产品新增或修改接口的请求参数
+     */
     private Map<String, Object> lingxingPayload(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("sku", goods.getSku());
@@ -207,23 +236,50 @@ public class CompanyGoodsExternalCreateService {
         return payload;
     }
 
+    /**
+     * 同步货品到黑湖，通过SKU存在性查询选择创建或更新。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     */
     public void createInBlacklake(CompanyGoodsPO goods) {
         createInBlacklake(goods, null);
     }
 
+    /**
+     * 同步货品到黑湖，通过SKU存在性查询选择创建或更新。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
     public void createInBlacklake(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
         blacklakeClient.createProduct(blacklakePayload(goods, dictionaries));
     }
 
+    /**
+     * 同步货品到黑湖，通过SKU存在性查询选择创建或更新。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     */
     public void updateInBlacklake(CompanyGoodsPO goods) {
         updateInBlacklake(goods, null);
     }
 
+    /**
+     * 同步货品到黑湖，通过SKU存在性查询选择创建或更新。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
     public void updateInBlacklake(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
         blacklakeClient.updateProduct(blacklakePayload(goods, dictionaries));
     }
 
-    /** 每次同步先按SKU精确查询，按黑湖实际存在情况选择新增或修改。 */
+    /**
+     *  每次同步先按SKU精确查询，按黑湖实际存在情况选择新增或修改。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
     public void syncInBlacklake(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
         boolean exists = blacklakeClient.productExists(goods.getSku());
         if (exists) {
@@ -233,6 +289,13 @@ public class CompanyGoodsExternalCreateService {
         }
     }
 
+    /**
+     * 转换工艺路线、检验类型、规范及仓库编码并组装黑湖产品请求。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     * @return 黑湖产品创建或更新接口的请求参数
+     */
     private Map<String, Object> blacklakePayload(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("productCode", goods.getSku());
@@ -287,19 +350,45 @@ public class CompanyGoodsExternalCreateService {
         return payload;
     }
 
+    /**
+     * 解析消息快照中的主货品关联数组，保留保存消息时固定的数量。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @return JSON解析得到的子货品关联列表
+     */
     private List<GoodsSkuRelation> childRelations(CompanyGoodsPO goods) {
         try { return objectMapper.readValue(goods.getGroupList(), new TypeReference<List<GoodsSkuRelation>>() { }); }
         catch (JsonProcessingException exception) { throw invalid("子SKU快照格式错误"); }
     }
 
+    /**
+     * 将BigDecimal转为不含科学计数法的文本，其他非null字段保持原类型加入领星请求。
+     *
+     * @param payload 发往第三方接口的请求参数
+     * @param key 第三方请求字段名
+     * @param value 待处理字段值
+     */
     private void putLingxing(Map<String, Object> payload, String key, Object value) {
         if (value instanceof java.math.BigDecimal decimal) payload.put(key, decimal.toPlainString());
         else put(payload, key, value);
     }
 
+    /**
+     * 将非null字段加入请求，保留原始字段类型及空字符串。
+     *
+     * @param payload 发往第三方接口的请求参数
+     * @param key 第三方请求字段名
+     * @param value 待处理字段值
+     */
     private void put(Map<String, Object> payload, String key, Object value) {
         if (value != null) payload.put(key, value);
     }
 
+    /**
+     * 创建货品参数校验失败的业务异常。
+     *
+     * @param message 向调用方说明的业务失败原因
+     * @return 参数错误业务异常
+     */
     private BusinessException invalid(String message) { return new BusinessException(ResultCode.PARAM_ERROR, message); }
 }

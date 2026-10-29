@@ -55,7 +55,11 @@ public class CompanyGoodsService {
     @Resource
     private CompanyGoodsDictionaryService dictionaryService;
 
-    /** 只更新表单开放字段；主、子 SKU 任一校验或版本检查失败，整单回滚。 */
+    /**
+     *  只更新表单开放字段；主、子 SKU 任一校验或版本检查失败，整单回滚。
+     *
+     * @param request 当前操作的请求参数
+     */
     @Transactional(isolation = Isolation.REPEATABLE_READ, rollbackFor = Exception.class)
     public void update(CompanyGoodsUpdateDTO request) {
         CompanyGoodsPO parent = goodsMapper.findById(request.getId());
@@ -175,17 +179,30 @@ public class CompanyGoodsService {
         }
     }
 
-    /** 数据库回滚只清理本次新文件；旧文件必须等提交成功后才能删除。 */
+    /**
+     *  数据库回滚只清理本次新文件；旧文件必须等提交成功后才能删除。
+     *
+     * @param uploadedKeys 本次操作新上传的图片对象键
+     * @param removedKeys 保存成功后需要删除的旧图片对象键
+     */
     private void registerImageCleanup(List<String> uploadedKeys, Set<String> removedKeys) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             throw new IllegalStateException("货品图片修改必须在事务中执行");
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            /**
+             * 事务提交成功后删除已从货品中移除的图片。
+             */
             @Override
             public void afterCommit() {
                 cleanupImages(removedKeys, true);
             }
 
+            /**
+             * 事务结束时按提交结果清理不再需要的新上传图片。
+             *
+             * @param status 事务完成状态，使用Spring事务同步状态常量
+             */
             @Override
             public void afterCompletion(int status) {
                 if (status == STATUS_ROLLED_BACK) cleanupImages(uploadedKeys, false);
@@ -193,6 +210,12 @@ public class CompanyGoodsService {
         });
     }
 
+    /**
+     * 逐个清理图片对象，并记录清理失败及原保存操作是否已提交。
+     *
+     * @param objectKeys 需要删除的公共桶图片对象键
+     * @param saved 原货品保存事务是否已经提交
+     */
     private void cleanupImages(Collection<String> objectKeys, boolean saved) {
         RuntimeException firstFailure = null;
         for (String objectKey : objectKeys) {
@@ -209,6 +232,11 @@ public class CompanyGoodsService {
         }
     }
 
+    /**
+     * 校验页面可编辑字段的编码范围、名称、金额及规格合法性。
+     *
+     * @param edit 当前主货品或子货品的页面编辑参数
+     */
     private void validateEditableFields(CompanyGoodsEditDTO edit) {
         if (!List.of("套", "张", "个", "KG", "次").contains(edit.getUnit())) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "单位不在可选范围内");
@@ -250,12 +278,26 @@ public class CompanyGoodsService {
         }
     }
 
+    /**
+     * 校验一组长宽高必须同时填写或同时留空。
+     *
+     * @param length 长度，单位沿用对应规格字段
+     * @param width 宽度，单位沿用对应规格字段
+     * @param height 高度，单位沿用对应规格字段
+     * @param label 校验失败时显示的字段或规格组名称
+     */
     private void validateDimensions(BigDecimal length, BigDecimal width, BigDecimal height, String label) {
         if ((length != null || width != null || height != null) && (length == null || width == null || height == null)) {
             throw new BusinessException(ResultCode.PARAM_ERROR, label + "请完整填写长、宽、高");
         }
     }
 
+    /**
+     * 将货品集合字段序列化为数据库保存的JSON字符串。
+     *
+     * @param value 待处理字段值
+     * @return 序列化后的JSON字符串
+     */
     private String writeJson(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
@@ -264,7 +306,12 @@ public class CompanyGoodsService {
         }
     }
 
-    /** 主货品按更新时间、主键倒序分页；整个页面的子货品只执行一次批量查询。 */
+    /**
+     *  主货品按更新时间、主键倒序分页；整个页面的子货品只执行一次批量查询。
+     *
+     * @param query 货品筛选及分页条件
+     * @return 包含一层子货品和数量信息的主货品分页结果
+     */
     public PageResult<CompanyGoodsListItemVO> findPage(CompanyGoodsQueryDTO query) {
         query.setSku(likePattern(query.getSku()));
         query.setGoodsName(likePattern(query.getGoodsName()));
@@ -291,7 +338,12 @@ public class CompanyGoodsService {
         return PageResult.of(query.getPageNum(), query.getPageSize(), total, records);
     }
 
-    /** 按主键读取任意货品；子 SKU 完整字段只展开一层，查询不会修改存储的比例关系。 */
+    /**
+     * 按主键查询完整货品详情，并按产品ID加载一层子货品及关联数量。
+     *
+     * @param id 货品数据库主键
+     * @return 货品完整详情；不存在时抛出资源不存在异常
+     */
     public CompanyGoodsDetailVO getDetail(Long id) {
         CompanyGoodsPO goods = goodsMapper.findById(id);
         if (goods == null) {
@@ -308,7 +360,12 @@ public class CompanyGoodsService {
         return detail;
     }
 
-    /** 产品ID建立展示关联，批量读取避免每个主货品查询一次。 */
+    /**
+     *  产品ID建立展示关联，批量读取避免每个主货品查询一次。
+     *
+     * @param parents 当前需要加载子货品的主货品记录
+     * @return 主货品主键到其一层子货品列表的映射
+     */
     private Map<Long, List<CompanyGoodsPO>> findProductChildren(List<CompanyGoodsPO> parents) {
         Map<Long, List<CompanyGoodsPO>> result = new LinkedHashMap<>();
         Map<String, CompanyGoodsPO> parentByProductId = new LinkedHashMap<>();
@@ -335,7 +392,13 @@ public class CompanyGoodsService {
         return result;
     }
 
-    /** 数量优先按SKU匹配，历史空编码关联按名称匹配，不修改原关联数据。 */
+    /**
+     *  数量优先按SKU匹配，历史空编码关联按名称匹配，不修改原关联数据。
+     *
+     * @param parent 维护关联或展示数量的主货品记录
+     * @param children 同一产品ID下需要匹配比例数量的子货品记录
+     * @return 子货品数据库主键到比例数量的映射
+     */
     private Map<Long, BigDecimal> relationQuantities(CompanyGoodsPO parent, List<CompanyGoodsPO> children) {
         Map<Long, BigDecimal> quantities = new LinkedHashMap<>();
         if (!Integer.valueOf(1).equals(parent.getProductType())) return quantities;
@@ -358,6 +421,12 @@ public class CompanyGoodsService {
         return quantities;
     }
 
+    /**
+     * 将数据库货品转换为列表展示对象并补充图片信息。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @return 货品列表展示对象
+     */
     private CompanyGoodsListItemVO toListItem(CompanyGoodsPO goods) {
         CompanyGoodsListItemVO item = new CompanyGoodsListItemVO();
         BeanUtils.copyProperties(goods, item, "groupList");
@@ -366,6 +435,12 @@ public class CompanyGoodsService {
         return item;
     }
 
+    /**
+     * 将数据库货品转换为详情对象并解析图片及检验类型。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @return 尚未装配子货品的详情对象
+     */
     private CompanyGoodsDetailVO toDetail(CompanyGoodsPO goods) {
         CompanyGoodsDetailVO detail = new CompanyGoodsDetailVO();
         BeanUtils.copyProperties(goods, detail, "groupList", "sourceList", "inspectionType", "pictureList");
@@ -378,6 +453,12 @@ public class CompanyGoodsService {
         return detail;
     }
 
+    /**
+     * 优先选择主图引用，没有主图时取首个有效引用；同一图片优先使用对象键。
+     *
+     * @param pictures 包含图片地址、对象键及主图标识的图片列表
+     * @return 图片对象键或已保存URL；没有可用图片时返回null
+     */
     private String primaryImage(List<CompanyGoodsPictureVO> pictures) {
         if (CollectionUtil.isEmpty(pictures)) {
             return null;
@@ -398,6 +479,12 @@ public class CompanyGoodsService {
         return firstImage;
     }
 
+    /**
+     * 判断当前选中图片引用是否对应对象键，供后续生成预签名访问地址。
+     *
+     * @param pictures 包含图片地址、对象键及主图标识的图片列表
+     * @return 图片对象键；未提供时返回null
+     */
     private String primaryImageObjectKey(List<CompanyGoodsPictureVO> pictures) {
         String reference = primaryImage(pictures);
         if (CollectionUtil.isNotEmpty(pictures)) {
@@ -410,17 +497,38 @@ public class CompanyGoodsService {
         return null;
     }
 
+    /**
+     * 按图片对象键生成临时访问地址，无法提供时使用已保存图片地址。
+     *
+     * @param pictures 包含图片地址、对象键及主图标识的图片列表
+     * @return 页面访问图片使用的URL
+     */
     private String imageAccessUrl(List<CompanyGoodsPictureVO> pictures) {
         String objectKey = primaryImageObjectKey(pictures);
         return objectKey == null ? primaryImage(pictures) : imageService.accessUrl(objectKey);
     }
 
+    /**
+     * 解析JSON数组，空字段或JSON空值转换为空列表。
+     *
+     * @param <T> 业务返回值或JSON数组元素类型
+     * @param json 数据库保存的JSON数组文本
+     * @param type 保留数组元素类型的Jackson类型信息
+     * @return 解析后的列表，未提供数组时为空列表
+     */
     private <T> List<T> readArray(String json, TypeReference<List<T>> type) {
         List<T> values = readNullableArray(json, type);
         return values == null ? new ArrayList<>() : values;
     }
 
-    /** 使用抛错的 JSON 解析，避免异常数据被转成空集合后伪装成正常货品。 */
+    /**
+     *  使用抛错的 JSON 解析，避免异常数据被转成空集合后伪装成正常货品。
+     *
+     * @param <T> 业务返回值或JSON数组元素类型
+     * @param json 允许为空的数据库JSON数组文本
+     * @param type 保留数组元素类型的Jackson类型信息
+     * @return 解析后的列表；字段为null或JSON空值时返回null
+     */
     private <T> List<T> readNullableArray(String json, TypeReference<List<T>> type) {
         if (json == null) {
             return null;
@@ -432,6 +540,12 @@ public class CompanyGoodsService {
         }
     }
 
+    /**
+     * 转义LIKE通配符并生成包含匹配条件，空白条件不参与查询。
+     *
+     * @param value 待处理字段值
+     * @return 带包含匹配通配符的SQL参数；空白时返回null
+     */
     private String likePattern(String value) {
         String keyword = StringUtils.trimToNull(value);
         if (keyword == null) {

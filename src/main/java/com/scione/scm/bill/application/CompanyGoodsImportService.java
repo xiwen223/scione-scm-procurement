@@ -46,6 +46,12 @@ public class CompanyGoodsImportService {
     @Resource
     private BlacklakeOpenApiClient blacklakeOpenApiClient;
 
+    /**
+     * 解析并校验Excel，预加载共享字典，再按产品ID分组事务修改本地货品并记录同步消息。
+     *
+     * @param file 上传的xlsx导入文件
+     * @return 成功失败统计、逐行结果及失败文件
+     */
     public CompanyGoodsImportVO importFile(MultipartFile file) {
         List<ImportRow> rows = excelParser.parse(file);
         // 暂停领星供应商、黑湖工艺路线系统校验；恢复时一并启用列表查询和下方逐行校验。
@@ -146,6 +152,12 @@ public class CompanyGoodsImportService {
         return result;
     }
 
+    /**
+     * 按产品ID与品名锁定已有记录，合并非空字段、维护SKU引用并保存整组货品。
+     *
+     * @param group 同一企业商品ID下按文件顺序排列的导入行
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
     private void saveGroup(List<ImportRow> group, GoodsSyncDictionarySnapshot dictionaries) {
         List<CompanyGoodsPO> updatedGoods = new ArrayList<>();
         Map<Long, CompanyGoodsPO> originals = new LinkedHashMap<>();
@@ -185,6 +197,14 @@ public class CompanyGoodsImportService {
         saveRow(parent, previousStatuses.get(0), previousScopes.get(0), dictionaries);
     }
 
+    /**
+     * 按版本更新单条货品并置为已创，在当前事务中保存对应的外部同步消息。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param previousStatus 修改前货品状态，0表示新增同步，1表示修改同步
+     * @param previousScope 修改前同步范围；0领星、1领星黑湖，未提供时不记录范围变更标识
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
     private void saveRow(CompanyGoodsPO goods, Integer previousStatus, Integer previousScope, GoodsSyncDictionarySnapshot dictionaries) {
         Long expectedVersion = goods.getVersion();
         goods.setGoodsStatus(1);
@@ -195,6 +215,18 @@ public class CompanyGoodsImportService {
         messageService.createSyncMessages(goods, previousStatus, previousScope, dictionaries);
     }
 
+    /**
+     * 统一去除首尾空白并转小写，用于导入分组及重复比较。
+     *
+     * @param value 待处理字段值
+     * @return 归一化文本；null转换为空字符串
+     */
     private String normalize(String value) { return value == null ? "" : value.trim().toLowerCase(Locale.ROOT); }
+    /**
+     * 创建货品参数校验失败的业务异常。
+     *
+     * @param message 向调用方说明的业务失败原因
+     * @return 参数错误业务异常
+     */
     private BusinessException invalid(String message) { return new BusinessException(ResultCode.PARAM_ERROR, message); }
 }

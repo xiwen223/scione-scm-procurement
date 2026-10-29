@@ -131,7 +131,11 @@ public class BlacklakeOpenApiClient {
         return response;
     }
 
-    /** 每次调用只查询第一页100条工艺路线，不继续翻页或缓存列表。 */
+    /**
+     *  每次调用只查询第一页100条工艺路线，不继续翻页或缓存列表。
+     *
+     * @return 工艺路线编号及名称列表
+     */
     public List<ProcessRoutingVO> queryProcessRoutings() {
         BlacklakeSession session = getSession();
         JsonNode response = post(session.restClient(), PROCESS_ROUTING_LIST_PATH, session.token(),
@@ -159,7 +163,11 @@ public class BlacklakeOpenApiClient {
     public record ProcessRoutingVO(String processRoutingCode, String processRoutingName) {
     }
 
-    /** 详情/编辑页规范选项；沿用最近一年创建范围，仅发送创建时间上下限。 */
+    /**
+     *  详情/编辑页规范选项；沿用最近一年创建范围，仅发送创建时间上下限。
+     *
+     * @return 编号与名称以连字符拼接的选项列表
+     */
     public List<String> queryInspectionSpecifications() {
         java.time.LocalDateTime end = java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"));
         java.time.format.DateTimeFormatter format = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -183,14 +191,24 @@ public class BlacklakeOpenApiClient {
         return new ArrayList<>(options);
     }
 
-    /** 仓库名称精确匹配，同名取第一条。 */
+    /**
+     *  仓库名称精确匹配，同名取第一条。
+     *
+     * @param name 需要精确匹配的仓库名称
+     * @return 匹配的仓库编码；不存在时抛出业务异常
+     */
     public String findWarehouseCode(String name) {
         String code = queryAllWarehouseCodes().get(name);
         if (code == null) throw remoteError("未找到名称对应的编码：" + name);
         return code;
     }
 
-    /** 按名称查询并读取所有分页；未匹配时返回空映射，留给消费端校验。 */
+    /**
+     *  按名称查询并读取所有分页；未匹配时返回空映射，留给消费端校验。
+     *
+     * @param name 可选仓库名称过滤条件；null表示查询全部仓库
+     * @return 仓库名称到编码的映射，同名保留首项
+     */
     public Map<String, String> queryWarehouseCodes(String name) {
         BlacklakeSession session = getSession();
         Map<String, String> codes = new LinkedHashMap<>();
@@ -224,12 +242,21 @@ public class BlacklakeOpenApiClient {
         return codes;
     }
 
-    /** 不按名称过滤，统一分页读取全部仓库供本次操作共享。 */
+    /**
+     *  不按名称过滤，统一分页读取全部仓库供本次操作共享。
+     *
+     * @return 全部仓库名称到编码的映射
+     */
     public Map<String, String> queryAllWarehouseCodes() {
         return queryWarehouseCodes(null);
     }
 
-    /** 按SKU精确查询产品；查询失败不能视为不存在，避免误发新增请求。 */
+    /**
+     *  按SKU精确查询产品；查询失败不能视为不存在，避免误发新增请求。
+     *
+     * @param sku 货品SKU编码
+     * @return 存在精确匹配的产品时返回true，否则返回false
+     */
     public boolean productExists(String sku) {
         if (StringUtils.isBlank(sku)) throw remoteError("查询产品时SKU不能为空");
         BlacklakeSession session = getSession();
@@ -252,7 +279,11 @@ public class BlacklakeOpenApiClient {
         return !products.isEmpty();
     }
 
-    /** 黑湖新增产品以产品编号判重，已存在时由远端拒绝；仅明确的认证失效允许刷新后重试一次。 */
+    /**
+     *  黑湖新增产品以产品编号判重，已存在时由远端拒绝；仅明确的认证失效允许刷新后重试一次。
+     *
+     * @param payload 发往第三方接口的请求参数
+     */
     public void createProduct(Map<String, Object> payload) {
         BlacklakeSession session = getSession();
         JsonNode response = post(session.restClient(), "/api/dytin/external/product/create", session.token(), payload);
@@ -261,7 +292,11 @@ public class BlacklakeOpenApiClient {
         }
     }
 
-    /** 按productCode定位已有货品；远端不存在时返回失败，不回落为新增。 */
+    /**
+     *  按productCode定位已有货品；远端不存在时返回失败，不回落为新增。
+     *
+     * @param payload 发往第三方接口的请求参数
+     */
     public void updateProduct(Map<String, Object> payload) {
         BlacklakeSession session = getSession();
         JsonNode response = post(session.restClient(), "/api/dytin/external/product/update", session.token(), payload);
@@ -270,7 +305,11 @@ public class BlacklakeOpenApiClient {
         }
     }
 
-    /** 读取共享 Token；Redis 不可用时明确失败，不以重复登录掩盖缓存故障。 */
+    /**
+     *  读取共享 Token；Redis 不可用时明确失败，不以重复登录掩盖缓存故障。
+     *
+     * @return 可用于发送黑湖请求的认证会话
+     */
     private BlacklakeSession getSession() {
         String token;
         try {
@@ -284,6 +323,11 @@ public class BlacklakeOpenApiClient {
         return login();
     }
 
+    /**
+     * 创建使用配置超时和独立Cookie管理器的黑湖HTTP客户端。
+     *
+     * @return 以黑湖地址为基础URL的HTTP客户端
+     */
     private RestClient createRestClient() {
         CookieManager cookieManager = new CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER);
         HttpClient httpClient = HttpClient.newBuilder()
@@ -295,6 +339,15 @@ public class BlacklakeOpenApiClient {
                 .requestFactory(requestFactory).build();
     }
 
+    /**
+     * 发送黑湖请求，仅在指定401认证失效时刷新会话并重试原请求一次。
+     *
+     * @param restClient 当前黑湖会话的HTTP客户端
+     * @param path 第三方接口路径，不包含域名和鉴权查询参数
+     * @param token 当前请求使用的认证Token；登录请求可为null
+     * @param payload 发往第三方接口的请求参数
+     * @return 通过JSON格式校验的黑湖响应对象
+     */
     private JsonNode post(RestClient restClient, String path, String token, Object payload) {
         try {
             return postOnce(restClient, path, token, payload);
@@ -312,6 +365,12 @@ public class BlacklakeOpenApiClient {
         }
     }
 
+    /**
+     * 判断是否为HTTP 401且业务码及子码明确表示Token解析失败。
+     *
+     * @param exception 当前HTTP或请求调用抛出的异常
+     * @return 满足指定Token失效响应条件时返回true
+     */
     private boolean isTokenExpired(RestClientResponseException exception) {
         if (exception.getStatusCode().value() != 401) {
             return false;
@@ -325,7 +384,12 @@ public class BlacklakeOpenApiClient {
         }
     }
 
-    /** 同一实例内串行刷新，等待期间已更新缓存时直接复用新 Token。 */
+    /**
+     *  同一实例内串行刷新，等待期间已更新缓存时直接复用新 Token。
+     *
+     * @param expiredToken 被黑湖明确拒绝的旧Token
+     * @return 复用缓存或重新登录得到的有效会话
+     */
     private BlacklakeSession refreshSession(String expiredToken) {
         synchronized (tokenRefreshMonitor) {
             String cachedToken;
@@ -341,6 +405,13 @@ public class BlacklakeOpenApiClient {
         }
     }
 
+    /**
+     * 将HTTP错误转换为业务异常，并保留非空原始响应。
+     *
+     * @param path 第三方接口路径，不包含域名和鉴权查询参数
+     * @param exception 当前HTTP或请求调用抛出的异常
+     * @return 包含响应正文或空响应提示的业务异常
+     */
     private BusinessException httpFailure(String path, RestClientResponseException exception) {
         String responseBody = exception.getResponseBodyAsString();
         if (StringUtils.isNotBlank(responseBody)) {
@@ -350,6 +421,15 @@ public class BlacklakeOpenApiClient {
         return remoteError("HTTP请求失败且响应为空，接口=" + path);
     }
 
+    /**
+     * 经过接口限速器发送一次黑湖POST请求，校验响应格式，不自行刷新Token。
+     *
+     * @param restClient 当前黑湖会话的HTTP客户端
+     * @param path 第三方接口路径，不包含域名和鉴权查询参数
+     * @param token 当前请求使用的认证Token；登录请求可为null
+     * @param payload 发往第三方接口的请求参数
+     * @return 远端JSON对象响应
+     */
     private JsonNode postOnce(RestClient restClient, String path, String token, Object payload) {
         String body = null;
         try {
@@ -382,14 +462,33 @@ public class BlacklakeOpenApiClient {
         }
     }
 
+    /**
+     * 将黑湖业务失败转换为保留完整响应正文的异常。
+     *
+     * @param message 向调用方说明的业务失败原因
+     * @param response 第三方响应对象
+     * @return 携带原始JSON响应的业务异常
+     */
     private BusinessException responseError(String message, JsonNode response) {
         return new ExternalApiResponseException(ResultCode.SYSTEM_ERROR, "黑湖接口调用失败：" + message, response.toString());
     }
 
+    /**
+     * 创建黑湖调用参数或登录配置校验异常。
+     *
+     * @param message 向调用方说明的业务失败原因
+     * @return 参数错误业务异常
+     */
     private BusinessException parameterError(String message) {
         return new BusinessException(ResultCode.PARAM_ERROR, message);
     }
 
+    /**
+     * 创建不附带远端正文的黑湖调用异常。
+     *
+     * @param message 向调用方说明的业务失败原因
+     * @return 黑湖调用失败业务异常
+     */
     private BusinessException remoteError(String message) {
         return new BusinessException(ResultCode.SYSTEM_ERROR, "黑湖接口调用失败：" + message);
     }

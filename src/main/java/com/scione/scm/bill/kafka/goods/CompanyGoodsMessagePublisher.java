@@ -35,6 +35,9 @@ public class CompanyGoodsMessagePublisher {
     @Value("${scm.goods-sync.topic:scm-company-goods-create}")
     private String topic;
 
+    /**
+     * 处理超时消费消息，检查子项依赖并领取及投递已提交的待发送消息。
+     */
     @Scheduled(fixedDelay = 3000, initialDelay = 10000, scheduler = "goodsMessageScheduler")
     public void publishPending() {
         for (GoodsLocalMessagePO stale : messageMapper.findStaleConsumers(topic)) {
@@ -58,6 +61,12 @@ public class CompanyGoodsMessagePublisher {
         }
     }
 
+    /**
+     * 检查领星父货品的子SKU消息依赖，黑湖目标无需等待此依赖。
+     *
+     * @param message 当前需要投递或更新处理结果的本地同步消息
+     * @return 允许发布时返回true；仍需等待或已标记关联失败时返回false
+     */
     private boolean childrenReady(GoodsLocalMessagePO message) {
         if (message.getTargetSystem() != GoodsSyncTargetEnum.LINGXING.getCode()) return true;
         List<String> childSkus = new ArrayList<>();

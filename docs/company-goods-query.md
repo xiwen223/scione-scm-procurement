@@ -77,7 +77,7 @@
 
 ## 查询主业务入口
 
-分类接口 `GET /company-goods/blacklake/product-categories` 读取本地 `BlacklakeProductCategoryEnum`，统一响应的 `data` 为按编码 0～17 排列的18个分类名称字符串，不再返回黑湖元数据。远端 `BlacklakeOpenApiClient.queryProductCategories()` 方法保留不变。
+分类接口 `GET /company-goods/blacklake/product-categories` 读取本地 `BlacklakeProductCategoryEnum`，统一响应的 `data` 为按编码 0～17 排列的18个分类名称字符串，不再返回黑湖元数据。远端产品分类元数据查询方法已移除。
 
 1. `CompanyGoodsController` 映射查询参数并校验，调用 `CompanyGoodsService`。
 2. 列表先查询总数和当页主货品，再合并整页子 SKU 执行一次批量查询，组装列表 VO。
@@ -117,7 +117,7 @@ mvn '-Dtest=CompanyGoodsServiceTest,CompanyGoodsMapperIntegrationTest' '-Dgoods.
 - 响应为统一ApiResponse，data包含 `successCount`、`failureCount`、`records`（rowNumber/sku/success/message）及 `failedFileBase64`。失败文件保留原模板列，追加原文件行号、失败原因；重传时忽略这两列。
 - 主流程：CompanyGoodsController.importFile → CompanyGoodsImportService.importFile → CompanyGoodsExcelParser.parse；解析文件后通过LingxingSupplierClient.findAllSuppliers拉取完整供应商列表，进行供应商名称、文件内重复和关联校验，再按普通货品、关联主货品顺序逐行独立事务保存，最后返回结果与失败文件。
 - 每行填写当前SKU字段。企业商品ID对应product_id；子SKU仅写入group_list中的sku；忽略子SKU名称。空白或 `/` 表示无子SKU，新增判为普通产品；填写一个子SKU则判为组合产品。暂不支持多个子SKU、多层或循环关联。关联货品须已存在或在本文件成功导入；本文件中的子货品失败时，其主货品也失败。
-- 单位默认“个”，外部创建时子SKU比例默认2。新增来源为企业商品库，创建方式0导入，状态1已创，异常标记0，版本0。货品与每个目标系统的本地消息同事务保存，提交后由Kafka消费者异步创建；详见[导入外部创建流程](company-goods-external-create.md)。
+- 单位默认“个”，外部创建时组合产品子SKU比例取数据库group_list中的quantity。新增来源为企业商品库，创建方式0导入，状态1已创，异常标记0，版本0。货品与每个目标系统的本地消息同事务保存，提交后由Kafka消费者异步创建；详见[导入外部创建流程](company-goods-external-create.md)。
 - 导入仅支持新增。SKU已存在时该行失败，提示通过编辑功能修改；不覆盖已有记录。新主货品仍可关联数据库中已有的普通子货品，无需重复导入子货品。
 - 每次有效文件导入实时查询一轮领星供应商列表：`POST /erp/sc/data/local_inventory/supplier`，`length=1000`，从`offset=0`开始，按本页实际数量推进offset，依据total判断是否还有下一页；不跨导入缓存。复用现有领星客户端鉴权、签名、请求排队及限流处理，仅在内存保留supplier_id和supplier_name，不落库供应商字典。
 - 供应商名称去除首尾空格后完整匹配，不做模糊匹配，也不额外按启停或删除状态过滤。名称不存在则该行失败并写入失败文件；关联的本次子货品失败时主货品同样失败。任一页查询失败或响应数据不完整时，整次导入在写库前终止，不使用部分列表校验。其余外部字典仍暂填名称。

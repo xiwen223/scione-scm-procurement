@@ -20,6 +20,12 @@ public class CompanyGoodsSkuService {
     @Resource
     private ObjectMapper objectMapper;
 
+    /**
+     * 校验待保存SKU并维护主货品关联引用，按名称回填空编码且保留原比例数量。
+     *
+     * @param goods 本次待保存的货品集合，方法会更新其中的SKU及关联JSON
+     * @param originals 以货品数据库主键为键的修改前记录
+     */
     public void prepareChanges(List<CompanyGoodsPO> goods, Map<Long, CompanyGoodsPO> originals) {
         Map<String, String> replacements = new LinkedHashMap<>();
         Map<String, Map<String, String>> childSkusByProductId = new LinkedHashMap<>();
@@ -83,6 +89,14 @@ public class CompanyGoodsSkuService {
         }
     }
 
+    /**
+     * 按同产品ID下子货品名称或旧SKU替换关联编码，保留数量及其他关联属性。
+     *
+     * @param parent 维护关联或展示数量的主货品记录
+     * @param replacements 旧SKU到新SKU的替换映射
+     * @param childSkusByProductId 按归一化产品ID及子货品名称索引的新SKU映射
+     * @return 更新后的关联JSON；没有变化时返回原字符串
+     */
     private String replaceReferences(CompanyGoodsPO parent, Map<String, String> replacements,
                                      Map<String, Map<String, String>> childSkusByProductId) {
         String relations = parent.getGroupList();

@@ -26,6 +26,12 @@ public class CompanyGoodsDictionaryService {
     @Resource
     private BlacklakeOpenApiClient blacklakeClient;
 
+    /**
+     * 结合导入字段及本地保留值，加载本批次同步所需的共享字典。
+     *
+     * @param importedGoods 通过行级校验且待加载字典的导入货品
+     * @return 导入批次共享的字典快照；远程查询失败时抛出异常
+     */
     public GoodsSyncDictionarySnapshot loadForImport(List<CompanyGoodsPO> importedGoods) {
         GoodsSyncDictionarySnapshot snapshot = new GoodsSyncDictionarySnapshot();
         if (CollectionUtil.isEmpty(importedGoods)) return snapshot;
@@ -61,7 +67,12 @@ public class CompanyGoodsDictionaryService {
         return loadForSync(effectiveGoods);
     }
 
-    /** 一次导入或编辑共享字典，空列表表示没有待同步货品。 */
+    /**
+     *  一次导入或编辑共享字典，空列表表示没有待同步货品。
+     *
+     * @param goodsToSync 本次需要生成外部同步任务的货品列表
+     * @return 本次保存操作共享的字典快照；无待同步货品时返回空快照
+     */
     public GoodsSyncDictionarySnapshot loadForSync(List<CompanyGoodsPO> goodsToSync) {
         GoodsSyncDictionarySnapshot snapshot = new GoodsSyncDictionarySnapshot();
         if (CollectionUtil.isEmpty(goodsToSync)) return snapshot;

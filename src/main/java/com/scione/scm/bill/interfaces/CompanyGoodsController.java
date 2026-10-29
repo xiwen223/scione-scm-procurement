@@ -62,6 +62,12 @@ public class CompanyGoodsController {
     @Resource
     private CompanyGoodsLocalSaveService companyGoodsLocalSaveService;
 
+    /**
+     * 接收商品库创建请求，事务内保存主货品及完整子货品，仅保存本地。
+     *
+     * @param request 当前操作的请求参数
+     * @return 包含新主货品数据库主键的统一响应
+     */
     @PostMapping("/create")
     @Operation(summary = "创建货品", description = "企业商品库创建主货品及完整子货品，同一事务仅保存本地；主货品group_list维护子SKU、数量及名称")
     public ApiResponse<Long> create(@Valid @RequestBody CompanyGoodsCreateDTO request) {
@@ -73,6 +79,12 @@ public class CompanyGoodsController {
         }
     }
 
+    /**
+     * 接收商品库修改请求，按产品ID与名称更新货品，并为符合条件的已创货品异步同步。
+     *
+     * @param request 当前操作的请求参数
+     * @return 本地修改处理完成的统一响应，不表示外部同步已完成
+     */
     @PostMapping("/modify")
     @Operation(summary = "修改货品", description = "按productId和goodsName修改主、子货品，子项未匹配则新增，移除只解除关联；空值保留原值，修改前已创货品在事务提交后按同步范围异步同步外部系统")
     public ApiResponse<Void> modify(@Valid @RequestBody CompanyGoodsModifyDTO request) {
@@ -85,6 +97,12 @@ public class CompanyGoodsController {
         }
     }
 
+    /**
+     * 将勾选的主货品及关联子货品按当前模板导出为Excel。
+     *
+     * @param request 当前操作的请求参数
+     * @return 包含xlsx文件及下载响应头的响应
+     */
     @PostMapping("/export")
     @Operation(summary = "导出企业货品", description = "按勾选的主货品ID导出主、子SKU，使用当前Excel模板")
     public ResponseEntity<byte[]> export(@Valid @RequestBody CompanyGoodsExportDTO request) {
@@ -96,12 +114,24 @@ public class CompanyGoodsController {
                 .body(content);
     }
 
+    /**
+     * 接收xlsx文件并按产品ID分组更新本地货品，返回部分成功及失败明细。
+     *
+     * @param file 上传的xlsx导入文件
+     * @return 包含逐行结果及失败文件的统一响应
+     */
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "批量导入企业货品", description = "Excel按企业商品ID及品名修改已有记录，支持SKU改码，按企业商品ID分组事务保存，按原状态异步新增或修改外部产品")
     public ApiResponse<CompanyGoodsImportVO> importFile(@RequestPart("file") MultipartFile file) {
         return ApiResponse.success("导入处理完成", companyGoodsImportService.importFile(file));
     }
 
+    /**
+     * 读取classpath中的当前导入模板并提供下载。
+     *
+     * @return 包含当前xlsx模板及下载响应头的响应
+     * @throws IOException 模板资源不存在或读取失败时抛出
+     */
     @GetMapping("/import/template")
     @Operation(summary = "下载企业货品导入模板")
     public ResponseEntity<byte[]> importTemplate() throws IOException {
@@ -113,6 +143,12 @@ public class CompanyGoodsController {
                 .body(template);
     }
 
+    /**
+     * 保存页面编辑的主、子货品，置为已创并记录异步同步任务。
+     *
+     * @param request 当前操作的请求参数
+     * @return 本地保存处理完成的统一响应
+     */
     @PostMapping("/update")
     @Operation(summary = "编辑企业货品", description = "主、子SKU整体保存后置为已创，并按修改前状态异步新增或修改外部产品")
     public ApiResponse<Void> update(@Valid @RequestBody CompanyGoodsUpdateDTO request) {
@@ -120,6 +156,11 @@ public class CompanyGoodsController {
         return ApiResponse.success("货品已保存", null);
     }
 
+    /**
+     * 查询最近一年黑湖来料检验规范供详情及编辑页下拉选择。
+     *
+     * @return 包含code-name选项列表的统一响应
+     */
     @GetMapping("/blacklake/inspection-specifications")
     @Operation(summary = "查询黑湖来料检验规范选项", description = "查询最近一年创建的检验规范，返回code-name格式的下拉选项")
     public ApiResponse<List<String>> queryBlacklakeInspectionSpecifications() {
@@ -178,7 +219,7 @@ public class CompanyGoodsController {
     }
 
     /**
-     * 按货品主键查看完整详情，关联只展开一层，避免循环及无界查询。
+     * 按货品主键查看完整详情及按产品ID关联的一层子货品。
      * @param id 必填正整数主键
      * @return 完整货品及一层完整子货品，不存在时返回项目统一 404 响应
      */

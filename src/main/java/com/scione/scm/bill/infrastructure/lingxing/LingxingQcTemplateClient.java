@@ -53,6 +53,11 @@ public class LingxingQcTemplateClient {
     @Resource
     private ObjectMapper objectMapper;
 
+    /**
+     * 使用当天数据库Cookie查询领星网页后台质检模板列表。
+     *
+     * @return 领星后台完整JSON响应，由调用方校验业务码及列表结构
+     */
     public JsonNode getAllQcTemplateList() {
         URI uri = UriComponentsBuilder.fromHttpUrl(ENDPOINT)
                 .path(TEMPLATE_LIST_PATH)
@@ -90,7 +95,13 @@ public class LingxingQcTemplateClient {
         return response;
     }
 
-    /** 使用当天数据库Cookie查询领星后台产品列表，产品名称搜索值及分页偏移量由调用方传入。 */
+    /**
+     *  使用当天数据库Cookie查询领星后台产品列表，产品名称搜索值及分页偏移量由调用方传入。
+     *
+     * @param searchValue 领星后台产品名称搜索值
+     * @param offset 分页偏移量，从0开始
+     * @return 当前分页的产品精简字段列表
+     */
     public List<LingxingProductVO> queryProducts(String searchValue, int offset) {
         if (offset < 0) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "offset不能小于0");
@@ -179,6 +190,12 @@ public class LingxingQcTemplateClient {
         return result;
     }
 
+    /**
+     * 加载上海时区当天的领星Cookie，并为请求组装所需请求头。
+     *
+     * @param uri 需要组装Cookie及防伪请求头的目标地址
+     * @return 携带Cookie及对应请求所需认证信息的请求头
+     */
     private HttpHeaders loadCookieHeaders(URI uri) {
         LocalDate cookieDate = LocalDate.now(ZoneId.of("Asia/Shanghai"));
         String cookiesJson = lingxingCookiesCacheMapper.findCookiesByDate(cookieDate);

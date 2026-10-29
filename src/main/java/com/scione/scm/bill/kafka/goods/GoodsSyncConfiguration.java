@@ -20,19 +20,34 @@ import java.util.Map;
 
 @Configuration
 public class GoodsSyncConfiguration {
-    /** 管理客户端沿用Starter的Broker和认证，避免落到spring.kafka的localhost默认地址。 */
+    /**
+     *  管理客户端沿用Starter的Broker和认证，避免落到spring.kafka的localhost默认地址。
+     *
+     * @param producerFactory 沿用平台Broker及认证配置的生产者工厂
+     * @return 货品消息使用的Kafka管理客户端
+     */
     @Bean
     public KafkaAdmin goodsKafkaAdmin(ProducerFactory<String, Object> producerFactory) {
         return new KafkaAdmin(new HashMap<>(producerFactory.getConfigurationProperties()));
     }
 
-    /** 副本数沿用Broker默认配置，不在业务代码中固定为单副本。 */
+    /**
+     *  副本数沿用Broker默认配置，不在业务代码中固定为单副本。
+     *
+     * @param topic 货品同步Kafka Topic名称
+     * @return 货品同步Topic声明
+     */
     @Bean
     public NewTopic goodsCreateTopic(@Value("${scm.goods-sync.topic:scm-company-goods-create}") String topic) {
         return TopicBuilder.name(topic).partitions(3).build();
     }
 
-    /** 外部API可能较慢，每次只拉取一条，避免一批100条超过poll处理时限。 */
+    /**
+     *  外部API可能较慢，每次只拉取一条，避免一批100条超过poll处理时限。
+     *
+     * @param consumerFactory 沿用平台Broker及认证配置的消费者工厂
+     * @return 货品同步专用Kafka监听容器工厂
+     */
     @Bean("goodsSyncKafkaListenerContainerFactory")
     public ConcurrentKafkaListenerContainerFactory<String, Object> goodsSyncKafkaListenerContainerFactory(
             ConsumerFactory<String, Object> consumerFactory) {
@@ -49,14 +64,22 @@ public class GoodsSyncConfiguration {
         return factory;
     }
 
-    /** 保留其他未指定scheduler的任务所使用的默认单线程调度器。 */
+    /**
+     *  保留其他未指定scheduler的任务所使用的默认单线程调度器。
+     *
+     * @return 默认单线程任务调度器
+     */
     @Bean("taskScheduler")
     @ConditionalOnMissingBean(name = "taskScheduler")
     public ThreadPoolTaskScheduler taskScheduler() {
         return new ThreadPoolTaskScheduler();
     }
 
-    /** Kafka确认等待不占用采购合同等现有业务的调度线程。 */
+    /**
+     *  Kafka确认等待不占用采购合同等现有业务的调度线程。
+     *
+     * @return 货品消息发布任务调度器
+     */
     @Bean("goodsMessageScheduler")
     public ThreadPoolTaskScheduler goodsMessageScheduler() {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();

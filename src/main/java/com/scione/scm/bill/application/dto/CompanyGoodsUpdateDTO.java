@@ -14,7 +14,11 @@ import java.util.List;
 @EqualsAndHashCode(callSuper = true)
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class CompanyGoodsUpdateDTO extends CompanyGoodsEditDTO {
-    /** 主货品同步范围必填；子货品允许为空。 */
+    /**
+     *  主货品同步范围必填；子货品允许为空。
+     *
+     * @return 当前主货品的同步范围编码
+     */
     @Override
     @NotNull
     public Integer getSyncScope() {

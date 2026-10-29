@@ -26,15 +26,31 @@ public enum BlacklakeProductCategoryEnum {
     /** 分类名称。 */
     private final String name;
 
+    /**
+     * 初始化黑湖产品分类枚举的稳定业务编码及显示信息。
+     *
+     * @param code 稳定业务编码，不使用枚举序号
+     * @param name 业务显示名称
+     */
     BlacklakeProductCategoryEnum(int code, String name) {
         this.code = code;
         this.name = name;
     }
 
+    /**
+     * 取得黑湖产品分类的稳定业务编码。
+     *
+     * @return 黑湖产品分类业务编码
+     */
     public int getCode() {
         return code;
     }
 
+    /**
+     * 取得黑湖产品分类的中文显示名称。
+     *
+     * @return 黑湖产品分类显示名称
+     */
     public String getName() {
         return name;
     }

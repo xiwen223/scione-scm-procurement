@@ -35,29 +35,62 @@ public class CompanyGoodsMessageService {
     @Value("${scm.goods-sync.topic:scm-company-goods-create}")
     private String topic;
 
+    /**
+     * 在货品保存事务中创建以新增操作触发的目标系统同步消息。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public void createImportMessages(CompanyGoodsPO goods) {
         saveMessages(goods, GoodsSyncOperationEnum.CREATE.getCode(), GoodsMessageTriggerEnum.IMPORT_CREATE, null, null);
     }
 
-    /** 操作取修改前状态：0新增、1修改；不能在消费时读取已被置1的当前状态。 */
+    /**
+     *  操作取修改前状态：0新增、1修改；不能在消费时读取已被置1的当前状态。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param previousStatus 修改前货品状态，0表示新增同步，1表示修改同步
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public void createSyncMessages(CompanyGoodsPO goods, Integer previousStatus) {
         saveMessages(goods, previousStatus, GoodsMessageTriggerEnum.GOODS_MODIFY, null, null);
     }
 
+    /**
+     * 根据修改前状态和保存后的同步范围，在当前事务内保存目标系统同步消息。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param previousStatus 修改前货品状态，0表示新增同步，1表示修改同步
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public void createSyncMessages(CompanyGoodsPO goods, Integer previousStatus, GoodsSyncDictionarySnapshot dictionaries) {
         saveMessages(goods, previousStatus, GoodsMessageTriggerEnum.GOODS_MODIFY, dictionaries, null);
     }
 
-    /** 页面编辑及导入扩大同步范围时，消费端先确认黑湖是否已存在该SKU。 */
+    /**
+     *  页面编辑及导入扩大同步范围时，消费端先确认黑湖是否已存在该SKU。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param previousStatus 修改前货品状态，0表示新增同步，1表示修改同步
+     * @param previousScope 修改前同步范围；0领星、1领星黑湖，未提供时不记录范围变更标识
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public void createSyncMessages(CompanyGoodsPO goods, Integer previousStatus, Integer previousScope,
                                    GoodsSyncDictionarySnapshot dictionaries) {
         saveMessages(goods, previousStatus, GoodsMessageTriggerEnum.GOODS_MODIFY, dictionaries, previousScope);
     }
 
+    /**
+     * 固定货品版本、组合数量及字典快照，按同步范围为每个目标系统插入一条消息。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param previousStatus 修改前货品状态，0表示新增同步，1表示修改同步
+     * @param trigger 本地消息的业务触发来源
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     * @param previousScope 修改前同步范围；0领星、1领星黑湖，未提供时不记录范围变更标识
+     */
     private void saveMessages(CompanyGoodsPO goods, Integer previousStatus, GoodsMessageTriggerEnum trigger,
                               GoodsSyncDictionarySnapshot dictionaries, Integer previousScope) {
         if (previousStatus == null || (previousStatus != GoodsSyncOperationEnum.CREATE.getCode() && previousStatus != GoodsSyncOperationEnum.UPDATE.getCode())) {
@@ -99,7 +132,13 @@ public class CompanyGoodsMessageService {
         }
     }
 
-    /** 每条消息只存该货品需要的字典项，避免完整供应商列表被重复写入数千次。 */
+    /**
+     *  每条消息只存该货品需要的字典项，避免完整供应商列表被重复写入数千次。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     * @return 仅保留当前货品所需匹配项的字典快照
+     */
     private GoodsSyncDictionarySnapshot dictionarySnapshotForGoods(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
         GoodsSyncDictionarySnapshot snapshot = new GoodsSyncDictionarySnapshot();
         if (dictionaries.getAccounts() != null) {
@@ -143,6 +182,12 @@ public class CompanyGoodsMessageService {
         return snapshot;
     }
 
+    /**
+     * 记录消息消费失败，仅在版本及目标系统仍有效时设置货品异常标记。
+     *
+     * @param message 当前需要投递或更新处理结果的本地同步消息
+     * @param reason 待保存或展示的失败原因
+     */
     @Transactional
     public void fail(GoodsLocalMessagePO message, String reason) {
         CompanyGoodsPO goods = goodsMapper.lockById(message.getGoodsId());
@@ -164,6 +209,11 @@ public class CompanyGoodsMessageService {
         }
     }
 
+    /**
+     * 记录消息消费成功，当前版本所需目标均成功后清除货品同步异常。
+     *
+     * @param message 当前需要投递或更新处理结果的本地同步消息
+     */
     @Transactional
     public void succeed(GoodsLocalMessagePO message) {
         // 两个系统完成时锁定同一货品，保证后完成的一方能看到另一方已提交的结果。

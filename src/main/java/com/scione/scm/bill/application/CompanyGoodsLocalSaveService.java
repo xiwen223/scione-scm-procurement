@@ -35,6 +35,12 @@ public class CompanyGoodsLocalSaveService {
     @Resource
     private CompanyGoodsDictionaryService dictionaryService;
 
+    /**
+     * 在同一事务内保存主货品、完整子货品及关联关系，仅写入本地货品库。
+     *
+     * @param request 当前操作的请求参数
+     * @return 创建的主货品数据库主键
+     */
     public Long create(CompanyGoodsCreateDTO request) {
         log.info("企业货品库开始同步新增");
         if (request.getProductId() != null) request.setProductId(request.getProductId().trim());
@@ -97,6 +103,11 @@ public class CompanyGoodsLocalSaveService {
         return goods.getId();
     }
 
+    /**
+     * 按产品ID及名称修改主、子货品，未匹配子项则新增，仅为修改前已创货品保存同步消息。
+     *
+     * @param request 当前操作的请求参数
+     */
     public void modify(CompanyGoodsModifyDTO request) {
         log.info("企业货品库开始同步更新");
         if (request.getProductId() == null || request.getProductId().isBlank()
@@ -207,7 +218,14 @@ public class CompanyGoodsLocalSaveService {
         }
     }
 
-    /** 相同产品ID用类型区分主子，防止产生无法唯一展示的多个主货品。 */
+    /**
+     *  相同产品ID用类型区分主子，防止产生无法唯一展示的多个主货品。
+     *
+     * @param productId 企业商品ID，对应数据库product_id
+     * @param productType 产品类型，0普通货品、1组合主货品
+     * @param id 当前主货品主键，用于排除自身；新增时为null
+     * @param hasChildren 当前请求是否包含子货品
+     */
     private void validateParentIdentity(String productId, Integer productType, Long id, boolean hasChildren) {
         if (hasChildren && (productId == null || productId.isBlank())) throw invalid("有子货品时主货品productId不能为空");
         if (hasChildren && !Integer.valueOf(1).equals(productType)) throw invalid("有子货品时主货品productType必须为1");
@@ -219,6 +237,14 @@ public class CompanyGoodsLocalSaveService {
         }
     }
 
+    /**
+     * 校验修改版本及SKU不可变规则，未传版本时使用数据库当前版本。
+     *
+     * @param request 当前操作的请求参数
+     * @param version 调用方提供的原版本号，null时使用数据库当前版本
+     * @param stored 修改前数据库记录；新增时为null
+     * @return 本次更新需要匹配的原版本号
+     */
     private Long validateModification(CompanyGoodsSaveDTO request, Long version, CompanyGoodsPO stored) {
         Long expectedVersion = version == null ? stored.getVersion() : version;
         if (!Objects.equals(expectedVersion, stored.getVersion())) {
@@ -230,6 +256,14 @@ public class CompanyGoodsLocalSaveService {
         return expectedVersion;
     }
 
+    /**
+     * 校验字段及唯一性，合并非空修改字段，并序列化关联、检验类型及公共桶图片。
+     *
+     * @param request 当前操作的请求参数
+     * @param stored 修改前数据库记录；新增时为null
+     * @param relations 待保存的子货品关联；null表示保留原关联
+     * @return 待保存的货品记录；修改时保留请求中未提供的字段
+     */
     private CompanyGoodsPO prepare(CompanyGoodsSaveDTO request, CompanyGoodsPO stored, List<CompanyGoodsRelationDTO> relations) {
         if (request.getSku() != null) request.setSku(request.getSku().trim());
         if (request.getGoodsName() != null) request.setGoodsName(request.getGoodsName().trim());
@@ -282,6 +316,14 @@ public class CompanyGoodsLocalSaveService {
         return goods;
     }
 
+    /**
+     * 校验同一次请求的主、子货品SKU及名称不重复，比较时忽略首尾空白和大小写。
+     *
+     * @param sku 货品SKU编码
+     * @param goodsName 货品名称，对应数据库goods_name
+     * @param skus 本次请求已出现的归一化SKU集合，校验时写入当前SKU
+     * @param names 本次请求已出现的归一化货品名称集合，校验时写入当前名称
+     */
     private void checkRequestDuplicates(String sku, String goodsName, Set<String> skus, Set<String> names) {
         if (sku != null && !skus.add(sku.trim().toLowerCase(Locale.ROOT))) {
             throw invalid("主、子货品SKU不能重复");
@@ -291,6 +333,12 @@ public class CompanyGoodsLocalSaveService {
         }
     }
 
+    /**
+     * 创建货品参数校验失败的业务异常。
+     *
+     * @param message 向调用方说明的业务失败原因
+     * @return 参数错误业务异常
+     */
     private BusinessException invalid(String message) {
         return new BusinessException(ResultCode.PARAM_ERROR, message);
     }

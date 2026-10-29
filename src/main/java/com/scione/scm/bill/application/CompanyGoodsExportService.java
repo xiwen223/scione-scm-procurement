@@ -31,6 +31,12 @@ public class CompanyGoodsExportService {
     @Resource
     private ObjectMapper objectMapper;
 
+    /**
+     * 校验勾选主货品及group_list关联，按当前模板导出主、子货品Excel。
+     *
+     * @param request 当前操作的请求参数
+     * @return 生成的xlsx文件二进制内容
+     */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public byte[] export(CompanyGoodsExportDTO request) {
         if (CollectionUtil.isEmpty(request.getIds())) throw invalid("请先选择货品");
@@ -123,6 +129,13 @@ public class CompanyGoodsExportService {
         } catch (IOException exception) { throw new IllegalStateException("生成货品导出文件失败", exception); }
     }
 
+    /**
+     * 按固定43列表头顺序映射货品字段，并将业务编码转换为导出名称。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param productId 导出当前分组统一使用的主货品企业商品ID
+     * @return 与模板列顺序一致的一行单元格值
+     */
     private List<Object> values(CompanyGoodsPO goods, String productId) {
         return Arrays.asList(productId, goods.getSku(), goods.getGoodsName(),
                 label(goods.getSyncScope(), List.of("领星", "领星黑湖"), 0, "同步范围"),
@@ -138,6 +151,12 @@ public class CompanyGoodsExportService {
                 goods.getCustomsDeclarationHsCode(), goods.getCustomsImportPrice(), goods.getClearanceCountryCode(), goods.getBgImportHsCode(), goods.getClearancePrice());
     }
 
+    /**
+     * 解析导出货品的关联数组，并拒绝空关联项或缺少SKU的关联。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @return 子SKU关联列表；数据库字段为null时为空列表
+     */
     private List<GoodsSkuRelation> readRelations(CompanyGoodsPO goods) {
         if (goods.getGroupList() == null) return Collections.emptyList();
         try {
@@ -150,6 +169,12 @@ public class CompanyGoodsExportService {
         } catch (JsonProcessingException exception) { throw invalid("货品" + goods.getSku() + "的关联数据异常"); }
     }
 
+    /**
+     * 解析数据库检验类型名称数组并使用英文逗号拼接。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @return 逗号分隔的检验类型名称；未填写时返回null
+     */
     private String inspectionNames(CompanyGoodsPO goods) {
         if (goods.getInspectionType() == null) return null;
         try {
@@ -160,6 +185,15 @@ public class CompanyGoodsExportService {
         } catch (JsonProcessingException exception) { throw invalid("货品" + goods.getSku() + "的检验类型数据异常"); }
     }
 
+    /**
+     * 根据连续业务编码取得显示名称，未知编码抛出校验异常。
+     *
+     * @param code 稳定业务编码，不使用枚举序号
+     * @param names 按连续业务编码排列的显示名称列表
+     * @param firstCode 第一个选项对应的业务编码
+     * @param field JSON或业务字段名称
+     * @return 对应的显示名称；编码为空时返回null
+     */
     private String label(Integer code, List<String> names, int firstCode, String field) {
         if (code == null) return null;
         int index = code - firstCode;
@@ -167,6 +201,18 @@ public class CompanyGoodsExportService {
         return names.get(index);
     }
 
+    /**
+     * 将SKU转换为不区分大小写比较时使用的键。
+     *
+     * @param sku 货品SKU编码
+     * @return 使用固定语言环境转小写的SKU
+     */
     private String normalizedSku(String sku) { return sku.toLowerCase(Locale.ROOT); }
+    /**
+     * 创建货品参数校验失败的业务异常。
+     *
+     * @param message 向调用方说明的业务失败原因
+     * @return 参数错误业务异常
+     */
     private BusinessException invalid(String message) { return new BusinessException(ResultCode.PARAM_ERROR, message); }
 }

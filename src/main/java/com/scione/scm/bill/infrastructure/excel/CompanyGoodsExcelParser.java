@@ -36,6 +36,12 @@ public class CompanyGoodsExcelParser {
 
     public record ImportRow(int rowNumber, List<String> cells, CompanyGoodsPO goods, String error) { }
 
+    /**
+     * 校验xlsx文件及固定表头，逐行解析并保留校验失败原因，单次最多2000条。
+     *
+     * @param file 上传的xlsx导入文件
+     * @return 包含原始单元格、货品字段及错误原因的有效数据行列表
+     */
     public List<ImportRow> parse(MultipartFile file) {
         if (file == null || file.isEmpty()) throw invalid("请选择导入文件");
         if (file.getSize() > 5 * 1024 * 1024) throw invalid("文件大小不得超过5MB");
@@ -91,6 +97,13 @@ public class CompanyGoodsExcelParser {
         }
     }
 
+    /**
+     * 读取固定模板列，数值按实际值转文本以避免显示格式造成精度变化。
+     *
+     * @param row 当前Excel数据行，null表示空行
+     * @param formatter Excel单元格显示文本格式化器
+     * @return 按模板列顺序读取并去除首尾空白的文本列表
+     */
     private List<String> readCells(Row row, DataFormatter formatter) {
         List<String> cells = new ArrayList<>();
         for (int column = 0; column < HEADERS.size(); column++) {
@@ -103,6 +116,12 @@ public class CompanyGoodsExcelParser {
         return cells;
     }
 
+    /**
+     * 按模板列解析货品字段，执行必填、长度、枚举、金额及规格校验。
+     *
+     * @param cells 按当前模板列顺序排列的单元格文本
+     * @return 通过字段校验的待导入货品
+     */
     private CompanyGoodsPO parseGoods(List<String> cells) {
         CompanyGoodsPO goods = new CompanyGoodsPO();
         goods.setProductId(text(cells, 0, 128));
@@ -194,6 +213,14 @@ public class CompanyGoodsExcelParser {
         return goods;
     }
 
+    /**
+     * 读取指定列文本并校验必填及长度；可选列空白时表示未提供字段。
+     *
+     * @param cells 按当前模板列顺序排列的单元格文本
+     * @param index 从0开始的模板列下标
+     * @param maxLength 允许的最大文本字符数
+     * @return 字段文本；空白时返回null
+     */
     private String text(List<String> cells, int index, int maxLength) {
         String value = cells.get(index);
         if (value.isBlank()) {
@@ -204,6 +231,13 @@ public class CompanyGoodsExcelParser {
         return value;
     }
 
+    /**
+     * 解析指定列非负且最多两位小数的数值。
+     *
+     * @param cells 按当前模板列顺序排列的单元格文本
+     * @param index 从0开始的模板列下标
+     * @return 十进制数值；未填写时返回null
+     */
     private BigDecimal decimal(List<String> cells, int index) {
         String value = text(cells, index, 64);
         if (value == null) return null;
@@ -215,6 +249,15 @@ public class CompanyGoodsExcelParser {
         return number;
     }
 
+    /**
+     * 校验单选中文名称并转换为从指定起点连续排列的业务编码。
+     *
+     * @param cells 按当前模板列顺序排列的单元格文本
+     * @param index 从0开始的模板列下标
+     * @param choices 按编码顺序排列的合法中文选项
+     * @param firstCode 第一个选项对应的业务编码
+     * @return 对应业务编码；未填写时返回null
+     */
     private Integer option(List<String> cells, int index, List<String> choices, int firstCode) {
         String value = text(cells, index, 128);
         if (value == null) return null;
@@ -223,6 +266,14 @@ public class CompanyGoodsExcelParser {
         return position + firstCode;
     }
 
+    /**
+     * 校验英文逗号分隔的名称非空且不重复，提供选项时校验名称范围。
+     *
+     * @param value 使用英文逗号分隔的名称文本
+     * @param label 校验失败时显示的字段或规格组名称
+     * @param choices 合法名称列表；null表示不限制名称范围
+     * @return 去除各名称首尾空白后以英文逗号拼接的文本
+     */
     private String multipleNames(String value, String label, List<String> choices) {
         Set<String> names = new LinkedHashSet<>();
         for (String name : value.split(",", -1)) {
@@ -233,16 +284,38 @@ public class CompanyGoodsExcelParser {
         return String.join(",", names);
     }
 
+    /**
+     * 读取HS编码并校验为最多32位数字文本，保留前导零。
+     *
+     * @param cells 按当前模板列顺序排列的单元格文本
+     * @param index 从0开始的模板列下标
+     * @return HS编码文本；未填写时返回null
+     */
     private String hsCode(List<String> cells, int index) {
         String value = text(cells, index, 32);
         if (value != null && !value.matches("[0-9]+")) throw invalid(HEADERS.get(index) + "只能填写数字，请按文本格式保留前导零");
         return value;
     }
 
+    /**
+     * 校验长宽高填写完整性，避免只提供部分规格。
+     *
+     * @param length 长度，单位沿用对应规格字段
+     * @param width 宽度，单位沿用对应规格字段
+     * @param height 高度，单位沿用对应规格字段
+     * @param label 校验失败时显示的字段或规格组名称
+     */
     private void dimensions(BigDecimal length, BigDecimal width, BigDecimal height, String label) {
         if ((length != null || width != null || height != null) && (length == null || width == null || height == null)) throw invalid(label + "请完整填写长、宽、高");
     }
 
+    /**
+     * 基于原始单元格生成失败行Excel，追加原文件行号与失败原因。
+     *
+     * @param rows 原文件中解析出的数据行
+     * @param failures 原文件行号到失败原因的映射
+     * @return 失败文件的Base64内容；无失败行时返回null
+     */
     public String failureFile(List<ImportRow> rows, Map<Integer, String> failures) {
         if (failures.isEmpty()) return null;
         try (Workbook workbook = new XSSFWorkbook(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
@@ -265,5 +338,11 @@ public class CompanyGoodsExcelParser {
         } catch (IOException exception) { throw new IllegalStateException("生成导入失败文件失败", exception); }
     }
 
+    /**
+     * 创建货品参数校验失败的业务异常。
+     *
+     * @param message 向调用方说明的业务失败原因
+     * @return 参数错误业务异常
+     */
     private BusinessException invalid(String message) { return new BusinessException(ResultCode.PARAM_ERROR, message); }
 }
