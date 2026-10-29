@@ -7,9 +7,11 @@ import com.scione.scm.bill.application.dto.*;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.domain.goods.enums.BlacklakeProductCategoryEnum;
+import com.scione.scm.bill.domain.goods.enums.GoodsSyncOperationEnum;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.CompanyGoodsMapper;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO;
 import jakarta.annotation.Resource;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.BeanWrapperImpl;
 import org.springframework.stereotype.Service;
@@ -17,9 +19,10 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.*;
 
-/** 企业商品库创建及修改主子货品，仅保存本地，不创建外部同步消息。 */
+/** 企业商品库创建及修改主子货品；修改已创货品时通过本地消息异步同步外部系统。 */
 @Service
 @Transactional(isolation = Isolation.REPEATABLE_READ, rollbackFor = Exception.class)
+@Slf4j
 public class CompanyGoodsLocalSaveService {
     @Resource
     private CompanyGoodsMapper goodsMapper;
@@ -27,16 +30,42 @@ public class CompanyGoodsLocalSaveService {
     private ObjectMapper objectMapper;
     @Resource
     private CompanyGoodsImageService imageService;
+    @Resource
+    private CompanyGoodsMessageService messageService;
+    @Resource
+    private CompanyGoodsDictionaryService dictionaryService;
 
     public Long create(CompanyGoodsCreateDTO request) {
+        log.info("企业货品库开始同步新增");
+        if (request.getProductId() != null) request.setProductId(request.getProductId().trim());
         List<CompanyGoodsPO> children = new ArrayList<>();
+        List<Long> childVersions = new ArrayList<>();
         Set<String> skus = new HashSet<>();
         Set<String> names = new HashSet<>();
         checkRequestDuplicates(request.getSku(), request.getGoodsName(), skus, names);
+        validateParentIdentity(request.getProductId(), request.getProductType(), null, CollectionUtil.isNotEmpty(request.getGroupList()));
         if (CollectionUtil.isNotEmpty(request.getGroupList())) {
             for (CompanyGoodsChildCreateDTO child : request.getGroupList()) {
-                checkRequestDuplicates(child.getSku(), child.getGoodsName(), skus, names);
-                children.add(prepare(child, null, List.of()));
+                child.setProductId(request.getProductId().trim());
+                child.setProductType(0);
+                CompanyGoodsPO childStored = null;
+                Long childVersion = null;
+                // 创建参数允许为空；业务定位字段完整时，复用并更新已有子货品。
+                if (child.getProductId() != null && !child.getProductId().isBlank()
+                        && child.getGoodsName() != null && !child.getGoodsName().isBlank()) {
+                    List<CompanyGoodsPO> matches = goodsMapper.lockByProductIdAndGoodsName(
+                            child.getProductId().trim(), child.getGoodsName().trim());
+                    if (matches.size() > 1) throw invalid("子货品productId和goodsName对应多条记录");
+                    if (CollectionUtil.isNotEmpty(matches)) {
+                        childStored = matches.get(0);
+                        if (Objects.equals(childStored.getProductType(), 1)) throw invalid("仅支持关联普通子货品");
+                        childVersion = validateModification(child, null, childStored);
+                    }
+                }
+                CompanyGoodsPO childGoods = prepare(child, childStored, List.of());
+                checkRequestDuplicates(childGoods.getSku(), childGoods.getGoodsName(), skus, names);
+                children.add(childGoods);
+                childVersions.add(childVersion);
             }
         }
         List<CompanyGoodsRelationDTO> relations = new ArrayList<>();
@@ -55,14 +84,21 @@ public class CompanyGoodsLocalSaveService {
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("子货品关联序列化失败", exception);
         }
-        for (CompanyGoodsPO child : children) {
-            if (goodsMapper.insertLocal(child) != 1) throw invalid("子货品创建失败");
+        for (int index = 0; index < children.size(); index++) {
+            CompanyGoodsPO child = children.get(index);
+            Long childVersion = childVersions.get(index);
+            if (childVersion == null) {
+                if (goodsMapper.insertLocal(child) != 1) throw invalid("子货品创建失败");
+            } else if (goodsMapper.modifyLocal(child, childVersion) != 1) {
+                throw new BusinessException(ResultCode.COMPANY_GOODS_VERSION_CONFLICT);
+            }
         }
         if (goodsMapper.insertLocal(goods) != 1) throw invalid("货品创建失败");
         return goods.getId();
     }
 
     public void modify(CompanyGoodsModifyDTO request) {
+        log.info("企业货品库开始同步更新");
         if (request.getProductId() == null || request.getProductId().isBlank()
                 || request.getGoodsName() == null || request.getGoodsName().isBlank()) {
             throw invalid("修改货品时productId和goodsName不能为空");
@@ -71,11 +107,17 @@ public class CompanyGoodsLocalSaveService {
                 request.getProductId().trim(), request.getGoodsName().trim());
         if (matches.size() > 1) throw invalid("productId和goodsName对应多条货品，无法确定修改记录");
         CompanyGoodsPO stored = CollectionUtil.isEmpty(matches) ? null : matches.get(0);
-        if (stored == null) throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "货品不存在");
+        if (stored == null) {
+            log.info("货品不存在，修改失败");
+            return;
+        }
+        request.setProductId(request.getProductId().trim());
         Long expectedVersion = validateModification(request, request.getVersion(), stored);
         CompanyGoodsPO goods = prepare(request, stored, null);
+        validateParentIdentity(goods.getProductId(), goods.getProductType(), stored.getId(), CollectionUtil.isNotEmpty(request.getGroupList()));
         List<CompanyGoodsPO> children = new ArrayList<>();
         List<Long> childVersions = new ArrayList<>();
+        List<CompanyGoodsPO> goodsToSync = new ArrayList<>();
         List<CompanyGoodsRelationDTO> relations = new ArrayList<>();
         Set<Long> editedIds = new HashSet<>();
         editedIds.add(stored.getId());
@@ -84,10 +126,12 @@ public class CompanyGoodsLocalSaveService {
         checkRequestDuplicates(goods.getSku(), goods.getGoodsName(), skus, names);
         if (request.getGroupList() != null) {
             if (CollectionUtil.isNotEmpty(request.getGroupList())
-                    && CollectionUtil.isNotEmpty(goodsMapper.findParentIds(stored.getSku(), stored.getId()))) {
+                    && CollectionUtil.isNotEmpty(goodsMapper.findProductParentIds(stored.getProductId(), stored.getId()))) {
                 throw invalid("已被关联的子货品不能再关联其他子货品");
             }
             for (CompanyGoodsChildModifyDTO childRequest : request.getGroupList()) {
+                childRequest.setProductId(goods.getProductId().trim());
+                childRequest.setProductType(0);
                 CompanyGoodsPO childStored = null;
                 Long childVersion = null;
                 if (childRequest.getProductId() == null || childRequest.getProductId().isBlank()
@@ -104,6 +148,9 @@ public class CompanyGoodsLocalSaveService {
                     childVersion = validateModification(childRequest, childRequest.getVersion(), childStored);
                 }
                 CompanyGoodsPO child = prepare(childRequest, childStored, List.of());
+                if (childStored != null && Objects.equals(childStored.getGoodsStatus(), GoodsSyncOperationEnum.UPDATE.getCode())) {
+                    goodsToSync.add(child);
+                }
                 checkRequestDuplicates(child.getSku(), child.getGoodsName(), skus, names);
                 children.add(child);
                 childVersions.add(childVersion);
@@ -141,10 +188,34 @@ public class CompanyGoodsLocalSaveService {
                 if (goodsMapper.insertLocal(child) != 1) throw invalid("子货品创建失败");
             } else if (goodsMapper.modifyLocal(child, childVersion) != 1) {
                 throw new BusinessException(ResultCode.COMPANY_GOODS_VERSION_CONFLICT);
+            } else {
+                child.setVersion(childVersion + 1);
             }
         }
         if (goodsMapper.modifyLocal(goods, expectedVersion) != 1) {
             throw new BusinessException(ResultCode.COMPANY_GOODS_VERSION_CONFLICT);
+        }
+        goods.setVersion(expectedVersion + 1);
+        if (Objects.equals(stored.getGoodsStatus(), GoodsSyncOperationEnum.UPDATE.getCode())) {
+            goodsToSync.add(goods);
+        }
+        // 消息与货品同事务保存，发布任务只能读取已提交消息；先保存子货品消息再保存主货品消息。
+        if (CollectionUtil.isEmpty(goodsToSync)) return;
+        GoodsSyncDictionarySnapshot dictionaries = dictionaryService.loadForSync(goodsToSync);
+        for (CompanyGoodsPO updatedGoods : goodsToSync) {
+            messageService.createSyncMessages(updatedGoods, GoodsSyncOperationEnum.UPDATE.getCode(), dictionaries);
+        }
+    }
+
+    /** 相同产品ID用类型区分主子，防止产生无法唯一展示的多个主货品。 */
+    private void validateParentIdentity(String productId, Integer productType, Long id, boolean hasChildren) {
+        if (hasChildren && (productId == null || productId.isBlank())) throw invalid("有子货品时主货品productId不能为空");
+        if (hasChildren && !Integer.valueOf(1).equals(productType)) throw invalid("有子货品时主货品productType必须为1");
+        if (!Integer.valueOf(1).equals(productType) || productId == null || productId.isBlank()) return;
+        for (CompanyGoodsPO existing : goodsMapper.lockProductFamily(productId.trim())) {
+            if (Integer.valueOf(1).equals(existing.getProductType()) && !Objects.equals(existing.getId(), id)) {
+                throw invalid("同一产品ID只允许一个组合主货品");
+            }
         }
     }
 

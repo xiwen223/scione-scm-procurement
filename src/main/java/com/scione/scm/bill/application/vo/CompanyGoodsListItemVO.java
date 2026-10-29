@@ -50,7 +50,7 @@ public class CompanyGoodsListItemVO {
     /** 字段冲突状态：默认0，0正常，1字段冲突 */
     private Integer conflictStatus;
 
-    /** SKU异常状态：默认0，0正常，1黑湖存在且领星不存在 */
+    /** 同步异常状态：默认0，0无异常标记，1外部同步异常 */
     private Integer exceptionStatus;
 
     /** 领星采购员名称，业务必填 */

@@ -25,7 +25,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.*;
 
-/** 模板校验后，按企业商品ID分组，第一行为主货品；按SKU修改已有记录，每组独立事务。 */
+/** 模板校验后，按企业商品ID分组，第一行为主货品；按企业商品ID及品名修改已有记录，每组独立事务。 */
 @Slf4j
 @Service
 public class CompanyGoodsImportService {
@@ -33,6 +33,8 @@ public class CompanyGoodsImportService {
     private CompanyGoodsExcelParser excelParser;
     @Resource
     private CompanyGoodsMapper mapper;
+    @Resource
+    private CompanyGoodsSkuService skuService;
     @Resource
     private PlatformTransactionManager transactionManager;
     @Resource
@@ -146,13 +148,16 @@ public class CompanyGoodsImportService {
 
     private void saveGroup(List<ImportRow> group, GoodsSyncDictionarySnapshot dictionaries) {
         List<CompanyGoodsPO> updatedGoods = new ArrayList<>();
+        Map<Long, CompanyGoodsPO> originals = new LinkedHashMap<>();
         List<Integer> previousStatuses = new ArrayList<>();
+        List<Integer> previousScopes = new ArrayList<>();
         for (ImportRow row : group) {
             CompanyGoodsPO incoming = row.goods();
             List<CompanyGoodsPO> matches = mapper.lockByProductIdAndGoodsName(incoming.getProductId(), incoming.getGoodsName());
             if (CollectionUtil.isEmpty(matches)) throw invalid("第" + row.rowNumber() + "行企业商品ID和SKU名称对应的货品不存在，导入仅支持修改");
             if (matches.size() != 1) throw invalid("第" + row.rowNumber() + "行企业商品ID和SKU名称对应多条货品，无法确定修改记录");
             CompanyGoodsPO stored = matches.get(0);
+            originals.put(stored.getId(), stored);
             if (stored.getGoodsStatus() == null || (stored.getGoodsStatus() != GoodsSyncOperationEnum.CREATE.getCode() && stored.getGoodsStatus() != GoodsSyncOperationEnum.UPDATE.getCode())) {
                 throw invalid("第" + row.rowNumber() + "行货品状态无效，不能确定外部新增或修改操作");
             }
@@ -162,30 +167,32 @@ public class CompanyGoodsImportService {
             BeanWrapperImpl target = new BeanWrapperImpl(updated);
             for (java.beans.PropertyDescriptor property : source.getPropertyDescriptors()) {
                 String name = property.getName();
-                if (!target.isWritableProperty(name) || "groupList".equals(name) || "productType".equals(name) || "sku".equals(name)) continue;
+                if (!target.isWritableProperty(name) || "groupList".equals(name) || "productType".equals(name)) continue;
                 Object value = source.getPropertyValue(name);
                 if (value != null) target.setPropertyValue(name, value);
             }
             previousStatuses.add(stored.getGoodsStatus());
+            previousScopes.add(stored.getSyncScope());
             updatedGoods.add(updated);
         }
+        skuService.prepareChanges(updatedGoods, originals);
         CompanyGoodsPO parent = updatedGoods.get(0);
-        // 导入只修改货品资料，主子关系及产品类型由创建、修改接口维护。
+        // 导入不重建主子关系和产品类型；已有引用中的编码随改码维护。
         // 子货品先写入，主货品最后写入；修改、状态和消息在同一事务中保存。
         for (int index = 1; index < updatedGoods.size(); index++) {
-            saveRow(updatedGoods.get(index), previousStatuses.get(index), dictionaries);
+            saveRow(updatedGoods.get(index), previousStatuses.get(index), previousScopes.get(index), dictionaries);
         }
-        saveRow(parent, previousStatuses.get(0), dictionaries);
+        saveRow(parent, previousStatuses.get(0), previousScopes.get(0), dictionaries);
     }
 
-    private void saveRow(CompanyGoodsPO goods, Integer previousStatus, GoodsSyncDictionarySnapshot dictionaries) {
+    private void saveRow(CompanyGoodsPO goods, Integer previousStatus, Integer previousScope, GoodsSyncDictionarySnapshot dictionaries) {
         Long expectedVersion = goods.getVersion();
         goods.setGoodsStatus(1);
         if (mapper.updateImport(goods, expectedVersion) != 1) {
             throw new BusinessException(ResultCode.COMPANY_GOODS_VERSION_CONFLICT);
         }
         goods.setVersion(expectedVersion + 1);
-        messageService.createSyncMessages(goods, previousStatus, dictionaries);
+        messageService.createSyncMessages(goods, previousStatus, previousScope, dictionaries);
     }
 
     private String normalize(String value) { return value == null ? "" : value.trim().toLowerCase(Locale.ROOT); }

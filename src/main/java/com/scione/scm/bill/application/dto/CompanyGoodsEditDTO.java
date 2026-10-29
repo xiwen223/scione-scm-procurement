@@ -9,20 +9,23 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.util.List;
 
-/** 单个 SKU 可编辑字段；不接收编码、产品类型、来源、状态及关联关系。 */
+/** 单个 SKU 可编辑字段；不接收产品类型、来源、状态及关联关系。 */
 @Data
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class CompanyGoodsEditDTO {
     @NotNull @Positive
     @JsonDeserialize(using = CompanyGoodsLongDeserializer.class)
     private Long id;
+    @Size(max = 128)
+    private String sku;
     /** 客户端读取的版本，防止旧表单覆盖其他人的修改。 */
     @NotNull @PositiveOrZero
     @JsonDeserialize(using = CompanyGoodsLongDeserializer.class)
     private Long version;
     @NotBlank @Size(max = 300)
     private String goodsName;
-    @NotNull @Min(0) @Max(1)
+    /** 子货品为空时由页面更新服务继承主货品本次提交的同步范围。 */
+    @Min(0) @Max(1)
     @JsonDeserialize(using = CompanyGoodsIntegerDeserializer.class)
     private Integer syncScope;
     @NotBlank @Size(max = 32)

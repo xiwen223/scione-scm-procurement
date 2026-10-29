@@ -64,7 +64,6 @@ public class CompanyGoodsMessagePublisher {
         try {
             JsonNode snapshot = objectMapper.readTree(message.getMessageBody());
             JsonNode relations = objectMapper.readTree(snapshot.path("groupList").asText());
-            if (!relations.isArray()) throw new IllegalStateException("子SKU快照不是数组");
             for (JsonNode relation : relations) childSkus.add(relation.path("sku").asText());
         } catch (JsonProcessingException exception) {
             messageService.fail(message, "子SKU快照无法解析");

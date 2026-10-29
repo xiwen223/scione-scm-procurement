@@ -10,7 +10,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import java.math.BigDecimal;
 
-/** 修改请求中的完整子货品及关联比例；字段为空时保留已有值。 */
+/** 修改子货品及比例；productId继承主货品，productType固定0，其余空字段保留已有值。 */
 @Data
 @EqualsAndHashCode(callSuper = true)
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)

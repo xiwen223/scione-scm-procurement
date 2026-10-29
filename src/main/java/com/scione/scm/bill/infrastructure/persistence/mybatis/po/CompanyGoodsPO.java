@@ -49,7 +49,7 @@ public class CompanyGoodsPO {
     /** 字段冲突状态：默认0，0正常，1字段冲突 */
     private Integer conflictStatus;
 
-    /** SKU异常状态：默认0，0正常，1黑湖存在且领星不存在 */
+    /** 同步异常状态：默认0，0无异常标记，1外部同步异常 */
     private Integer exceptionStatus;
 
     /** 创建方式：0导入、1商品库接入、2外部同步 */

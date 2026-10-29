@@ -24,6 +24,7 @@ import java.util.*;
 @Service
 public class CompanyGoodsExternalCreateService {
     private static final int COMBINATION_PRODUCT_TYPE = 1;
+    private static final String DEFAULT_CLEARANCE_COUNTRY = "US";
     private static final Map<String, String> COUNTRY_CODES = Map.ofEntries(
             Map.entry("美国", "US"), Map.entry("加拿大", "CA"), Map.entry("墨西哥", "MX"), Map.entry("日本", "JP"),
             Map.entry("英国", "UK"), Map.entry("德国", "DE"), Map.entry("法国", "FR"), Map.entry("西班牙", "ES"),
@@ -72,6 +73,9 @@ public class CompanyGoodsExternalCreateService {
             List<GoodsSkuRelation> relations = childRelations(goods);
             if (CollectionUtil.isEmpty(relations)) throw invalid("组合货品缺少子SKU关联：" + goods.getSku());
             for (GoodsSkuRelation child : relations) {
+                if (child == null || child.getSku() == null || child.getSku().isBlank()) {
+                    continue;
+                }
                 if (child.getQuantity() == null || child.getQuantity().signum() <= 0) {
                     throw invalid("组合货品子SKU比例数量必须大于0：" + child.getSku());
                 }
@@ -80,20 +84,20 @@ public class CompanyGoodsExternalCreateService {
         }
         payload.put("group_list", groups);
         List<Long> ownerIds = new ArrayList<>();
-        // todo：暂时不要，没有授权
-        // List<LingxingOpenApiClient.AccountVO> accounts = lingxingClient.queryAccounts();
-        // for (String owner : goods.getProductOwnerNames().split(",")) {
-        //     Long ownerId = null;
-        //     for (LingxingOpenApiClient.AccountVO account : accounts) {
-        //         if (owner.trim().equals(account.realname())) { ownerId = account.uid(); break; }
-        //     }
-        //     if (ownerId == null) throw invalid("领星产品负责人不存在：" + owner.trim());
-        //     ownerIds.add(ownerId);
-        // }
+        // 历史消息没有人员快照时仍实时查询，新消息使用本次操作的共享快照。
+        List<LingxingOpenApiClient.AccountVO> accounts = dictionaries == null ? null : dictionaries.getAccounts();
+        if (accounts == null) accounts = lingxingClient.queryAccounts();
+        for (String owner : goods.getProductOwnerNames().split(",")) {
+            Long ownerId = null;
+            for (LingxingOpenApiClient.AccountVO account : accounts) {
+                if (owner.trim().equals(account.realname())) { ownerId = account.uid(); break; }
+            }
+            if (ownerId == null) throw invalid("领星产品负责人不存在：" + owner.trim());
+            ownerIds.add(ownerId);
+        }
         payload.put("product_duty_uids", ownerIds);
         payload.put("is_append_product_duty", 0);
         putLingxing(payload, "cg_opt_username", goods.getPurchaserName());
-        putLingxing(payload, "product_developer", goods.getDeveloper());
         putLingxing(payload, "cg_price", goods.getPurchaseCost());
         putLingxing(payload, "cg_product_length", goods.getCgProductLength());
         putLingxing(payload, "cg_product_width", goods.getCgProductWidth());
@@ -164,9 +168,13 @@ public class CompanyGoodsExternalCreateService {
         putLingxing(clearance, "customs_clearance_en_usage", goods.getUsageEn());
         if (!clearance.isEmpty()) payload.put("clearance", clearance);
         if (goods.getClearancePrice() != null || goods.getBgImportHsCode() != null) {
-            String country = COUNTRY_CODES.get(goods.getClearanceCountryCode());
-            if (country == null && COUNTRY_CODES.containsValue(goods.getClearanceCountryCode())) country = goods.getClearanceCountryCode();
-            if (country == null) throw invalid("领星清关国家不支持或未填写：" + goods.getClearanceCountryCode());
+            // 历史数据及消息快照可能未填写清关国家，统一按美国组装清关参数。
+            String countryCode = goods.getClearanceCountryCode();
+            if (countryCode == null || countryCode.isBlank()) countryCode = DEFAULT_CLEARANCE_COUNTRY;
+            else countryCode = countryCode.trim();
+            String country = COUNTRY_CODES.get(countryCode);
+            if (country == null && COUNTRY_CODES.containsValue(countryCode)) country = countryCode;
+            if (country == null) throw invalid("领星清关国家不支持：" + countryCode);
             Map<String, Object> logistics = new LinkedHashMap<>();
             putLingxing(logistics, country + "_clearance_price", goods.getClearancePrice());
             if (goods.getClearancePrice() != null) logistics.put(country + "_clearance_price_currency", "USD");
@@ -213,6 +221,16 @@ public class CompanyGoodsExternalCreateService {
 
     public void updateInBlacklake(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
         blacklakeClient.updateProduct(blacklakePayload(goods, dictionaries));
+    }
+
+    /** 每次同步先按SKU精确查询，按黑湖实际存在情况选择新增或修改。 */
+    public void syncInBlacklake(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
+        boolean exists = blacklakeClient.productExists(goods.getSku());
+        if (exists) {
+            updateInBlacklake(goods, dictionaries);
+        } else {
+            createInBlacklake(goods, dictionaries);
+        }
     }
 
     private Map<String, Object> blacklakePayload(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {

@@ -21,6 +21,8 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 import java.math.BigDecimal;
+import java.io.EOFException;
+import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -57,6 +59,8 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     private static final int PURCHASE_ORDER_PAGE_SIZE = 500;
     private static final String SUPPLIER_LIST_PATH = "/erp/sc/data/local_inventory/supplier";
     private static final int SUPPLIER_PAGE_SIZE = 1_000;
+    private static final int SUPPLIER_EOF_MAX_ATTEMPTS = 3;
+    private static final long SUPPLIER_EOF_RETRY_INTERVAL_MS = 1_000;
     /**
      * batchGetProductInfo 单次请求最多携带的 SKU 数；合同明细超过这个量时自动分批。
      *
@@ -101,6 +105,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             response = requestQueued("/erp/sc/data/account/lists", Map.of(), HttpMethod.GET);
         }
         catch (RestClientException exception) {
+            log.error("/erp/sc/data/account/lists调用失败：", exception);
             throw responseFailure("查询人员列表请求失败", exception);
         }
         if (response == null || !"0".equals(response.path("code").asText()) || !response.path("data").isArray()) {
@@ -133,10 +138,10 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         JsonNode response;
         try {
             response = requestQueued(path, payload);
-            // log.info("领星接口响应，path={}, response={}", path, ExternalApiResponseSanitizer.sanitize(path, response == null ? null : response.toString(), objectMapper));
+            log.info("领星接口响应，path={}, response={}", path, ExternalApiResponseSanitizer.sanitize(path, response == null ? null : response.toString(), objectMapper));
         } catch (RestClientException exception) {
             if (exception instanceof RestClientResponseException responseException) {
-                // log.info("领星接口响应，path={}, response={}", path, ExternalApiResponseSanitizer.sanitize(path, responseException.getResponseBodyAsString(), objectMapper));
+                log.info("领星接口响应，path={}, response={}", path, ExternalApiResponseSanitizer.sanitize(path, responseException.getResponseBodyAsString(), objectMapper));
             }
             throw responseFailure("保存产品请求失败或结果未知，请核对远端SKU后处理", exception);
         }
@@ -228,8 +233,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         long total;
         do {
             try {
-                JsonNode response = requestQueued(SUPPLIER_LIST_PATH,
-                        Map.of("offset", offset, "length", SUPPLIER_PAGE_SIZE));
+                JsonNode response = requestSupplierListPageWithEofRetry(offset);
                 String code = response == null ? "" : response.path("code").asText();
                 if (!"0".equals(code)) {
                     throw responseError("查询供应商列表失败；业务码=" + code, response);
@@ -260,6 +264,41 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         } while (offset < total);
         log.info("供应商数量:{}", suppliers.size());
         return suppliers;
+    }
+
+    /** 只读供应商列表断流时仅重试当前页，成功读取后才由调用方累加数据和偏移量。 */
+    private JsonNode requestSupplierListPageWithEofRetry(int offset) {
+        Map<String, Object> body = Map.of("offset", offset, "length", SUPPLIER_PAGE_SIZE);
+        for (int attempt = 1; attempt <= SUPPLIER_EOF_MAX_ATTEMPTS; attempt++) {
+            try {
+                // 每次重新排队、生成时间戳和签名，等待期间不占用供应商请求队列。
+                return requestQueued(SUPPLIER_LIST_PATH, body);
+            } catch (RestClientException exception) {
+                if (!isSupplierResponseEof(exception) || attempt == SUPPLIER_EOF_MAX_ATTEMPTS) throw exception;
+                long waitMs = SUPPLIER_EOF_RETRY_INTERVAL_MS * attempt;
+                log.warn("领星供应商响应提前结束，准备重试当前页，path={}, offset={}, attempt={}/{}, waitMs={}",
+                        SUPPLIER_LIST_PATH, offset, attempt, SUPPLIER_EOF_MAX_ATTEMPTS, waitMs);
+                try {
+                    Thread.sleep(waitMs);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw lingxingError("供应商列表EOF重试等待被中断，已停止查询");
+                }
+            }
+        }
+        throw new IllegalStateException("供应商列表EOF重试状态异常");
+    }
+
+    private boolean isSupplierResponseEof(RestClientException exception) {
+        if (exception instanceof RestClientResponseException) return false;
+        Throwable cause = exception;
+        while (cause != null) {
+            if (cause instanceof EOFException) return true;
+            if (cause instanceof IOException && cause.getMessage() != null && cause.getMessage().contains("Premature EOF")) return true;
+            if (cause.getCause() == cause) break;
+            cause = cause.getCause();
+        }
+        return false;
     }
 
     /**
@@ -836,8 +875,12 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             query.put("sign", signature);
             URI uri = requestUri(path, query);
             String responseBody;
-            if (method == HttpMethod.GET) responseBody = restClient.get().uri(uri).retrieve().body(String.class);
-            else responseBody = restClient.post().uri(uri).body(body).retrieve().body(String.class);
+            if (method == HttpMethod.GET) {
+                responseBody = restClient.get().uri(uri).retrieve().body(String.class);
+            }
+            else {
+                responseBody = restClient.post().uri(uri).body(body).retrieve().body(String.class);
+            }
             if (responseBody == null || responseBody.isBlank()) return null;
             try {
                 return objectMapper.readTree(responseBody);

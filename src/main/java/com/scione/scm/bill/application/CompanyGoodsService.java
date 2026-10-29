@@ -43,6 +43,8 @@ import java.math.BigDecimal;
 @Transactional(readOnly = true)
 public class CompanyGoodsService {
     @Resource
+    private CompanyGoodsSkuService skuService;
+    @Resource
     private CompanyGoodsMapper goodsMapper;
     @Resource
     private ObjectMapper objectMapper;
@@ -50,6 +52,8 @@ public class CompanyGoodsService {
     private CompanyGoodsImageService imageService;
     @Resource
     private CompanyGoodsMessageService messageService;
+    @Resource
+    private CompanyGoodsDictionaryService dictionaryService;
 
     /** 只更新表单开放字段；主、子 SKU 任一校验或版本检查失败，整单回滚。 */
     @Transactional(isolation = Isolation.REPEATABLE_READ, rollbackFor = Exception.class)
@@ -58,24 +62,16 @@ public class CompanyGoodsService {
         if (parent == null) {
             throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "货品不存在");
         }
-        if (CollectionUtil.isNotEmpty(goodsMapper.findParentIds(parent.getSku(), parent.getId()))) {
+        if (CollectionUtil.isNotEmpty(goodsMapper.findProductParentIds(parent.getProductId(), parent.getId()))) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "请通过关联主 SKU 编辑子货品");
         }
         List<CompanyGoodsEditDTO> edits = new ArrayList<>();
         edits.add(request);
         edits.addAll(request.getGroupList());
-        List<GoodsSkuRelation> relations = readRelations(parent.getGroupList());
-        Set<String> childSkus = new LinkedHashSet<>();
-        for (GoodsSkuRelation relation : relations) {
-            childSkus.add(relation.getSku());
-        }
-        Map<String, CompanyGoodsPO> children = findChildren(childSkus);
+        List<CompanyGoodsPO> children = findProductChildren(List.of(parent)).get(parent.getId());
         Map<Long, CompanyGoodsPO> storedGoods = new LinkedHashMap<>();
         storedGoods.put(parent.getId(), parent);
-        for (GoodsSkuRelation relation : relations) {
-            CompanyGoodsPO child = requireChild(children, relation.getSku());
-            storedGoods.put(child.getId(), child);
-        }
+        for (CompanyGoodsPO child : children) storedGoods.put(child.getId(), child);
         if (edits.size() != storedGoods.size()) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "主、子 SKU 关联不可变更，请提交完整的原有关联货品");
         }
@@ -90,7 +86,9 @@ public class CompanyGoodsService {
             if (!edit.getVersion().equals(stored.getVersion())) {
                 throw new BusinessException(ResultCode.COMPANY_GOODS_VERSION_CONFLICT);
             }
-            if (!edit.getId().equals(parent.getId()) && !edit.getSyncScope().equals(stored.getSyncScope())) {
+            boolean inheritsParentScope = !edit.getId().equals(parent.getId()) && edit.getSyncScope() == null;
+            if (inheritsParentScope) edit.setSyncScope(request.getSyncScope());
+            if (!edit.getId().equals(parent.getId()) && !inheritsParentScope && !edit.getSyncScope().equals(stored.getSyncScope())) {
                 throw new BusinessException(ResultCode.PARAM_ERROR, "子 SKU 同步范围仅展示，不支持编辑");
             }
             edit.setGoodsName(edit.getGoodsName().trim());
@@ -123,11 +121,25 @@ public class CompanyGoodsService {
         // 先保存子货品及消息，再保存主货品，保证主消息能定位本次子消息依赖。
         List<CompanyGoodsEditDTO> saveOrder = new ArrayList<>(request.getGroupList());
         saveOrder.add(request);
+        List<CompanyGoodsPO> goodsToSync = new ArrayList<>();
+        for (CompanyGoodsEditDTO edit : saveOrder) {
+            CompanyGoodsPO goods = new CompanyGoodsPO();
+            BeanUtils.copyProperties(storedGoods.get(edit.getId()), goods);
+            BeanUtils.copyProperties(edit, goods, "inspectionType", "imageUrl");
+            if (edit.getSku() == null) goods.setSku(storedGoods.get(edit.getId()).getSku());
+            goodsToSync.add(goods);
+        }
+        skuService.prepareChanges(goodsToSync, storedGoods);
+        Map<Long, CompanyGoodsPO> preparedGoods = new LinkedHashMap<>();
+        for (CompanyGoodsPO goods : goodsToSync) preparedGoods.put(goods.getId(), goods);
+        GoodsSyncDictionarySnapshot dictionaries = dictionaryService.loadForSync(goodsToSync);
         for (CompanyGoodsEditDTO edit : saveOrder) {
             CompanyGoodsPO stored = storedGoods.get(edit.getId());
             CompanyGoodsPO updated = new CompanyGoodsPO();
             BeanUtils.copyProperties(stored, updated);
             BeanUtils.copyProperties(edit, updated, "inspectionType", "imageUrl");
+            updated.setSku(preparedGoods.get(edit.getId()).getSku());
+            updated.setGroupList(preparedGoods.get(edit.getId()).getGroupList());
             updated.setInspectionType(writeJson(edit.getInspectionType()));
             List<CompanyGoodsPictureVO> storedPictures = readArray(stored.getPictureList(), new TypeReference<List<CompanyGoodsPictureVO>>() {});
             String currentImage = primaryImage(storedPictures);
@@ -159,7 +171,7 @@ public class CompanyGoodsService {
             }
             updated.setGoodsStatus(1);
             updated.setVersion(edit.getVersion() + 1);
-            messageService.createSyncMessages(updated, previousStatus);
+            messageService.createSyncMessages(updated, previousStatus, stored.getSyncScope(), dictionaries);
         }
     }
 
@@ -265,21 +277,13 @@ public class CompanyGoodsService {
         }
         long offset = ((long) query.getPageNum() - 1) * query.getPageSize();
         List<CompanyGoodsPO> goods = goodsMapper.findPage(query, offset);
-        Map<Long, List<GoodsSkuRelation>> relations = new LinkedHashMap<>();
-        Set<String> childSkus = new LinkedHashSet<>();
-        for (CompanyGoodsPO item : goods) {
-            List<GoodsSkuRelation> children = readRelations(item.getGroupList());
-            relations.put(item.getId(), children);
-            for (GoodsSkuRelation child : children) {
-                childSkus.add(child.getSku());
-            }
-        }
-        Map<String, CompanyGoodsPO> childGoods = findChildren(childSkus);
+        Map<Long, List<CompanyGoodsPO>> childGoods = findProductChildren(goods);
         for (CompanyGoodsPO item : goods) {
             CompanyGoodsListItemVO record = toListItem(item);
-            for (GoodsSkuRelation relation : relations.get(item.getId())) {
-                CompanyGoodsListItemVO child = toListItem(requireChild(childGoods, relation.getSku()));
-                child.setQuantity(relation.getQuantity());
+            Map<Long, BigDecimal> quantities = relationQuantities(item, childGoods.get(item.getId()));
+            for (CompanyGoodsPO childGoodsRecord : childGoods.get(item.getId())) {
+                CompanyGoodsListItemVO child = toListItem(childGoodsRecord);
+                child.setQuantity(quantities.get(childGoodsRecord.getId()));
                 record.getGroupList().add(child);
             }
             records.add(record);
@@ -294,39 +298,64 @@ public class CompanyGoodsService {
             throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "货品不存在");
         }
         CompanyGoodsDetailVO detail = toDetail(goods);
-        List<GoodsSkuRelation> relations = readRelations(goods.getGroupList());
-        Set<String> childSkus = new LinkedHashSet<>();
-        for (GoodsSkuRelation relation : relations) {
-            childSkus.add(relation.getSku());
-        }
-        Map<String, CompanyGoodsPO> children = findChildren(childSkus);
-        for (GoodsSkuRelation relation : relations) {
-            CompanyGoodsDetailVO child = toDetail(requireChild(children, relation.getSku()));
-            child.setQuantity(relation.getQuantity());
+        List<CompanyGoodsPO> children = findProductChildren(List.of(goods)).get(goods.getId());
+        Map<Long, BigDecimal> quantities = relationQuantities(goods, children);
+        for (CompanyGoodsPO childGoods : children) {
+            CompanyGoodsDetailVO child = toDetail(childGoods);
+            child.setQuantity(quantities.get(childGoods.getId()));
             detail.getGroupList().add(child);
         }
         return detail;
     }
 
-    private Map<String, CompanyGoodsPO> findChildren(Set<String> skus) {
-        Map<String, CompanyGoodsPO> children = new LinkedHashMap<>();
-        if (CollectionUtil.isEmpty(skus)) {
-            return children;
-        }
-        for (CompanyGoodsPO child : goodsMapper.findBySkus(new ArrayList<>(skus))) {
-            if (children.put(child.getSku(), child) != null) {
-                throw new BusinessException(ResultCode.DATABASE_ERROR, "关联子 SKU 存在重复记录，无法确定货品");
+    /** 产品ID建立展示关联，批量读取避免每个主货品查询一次。 */
+    private Map<Long, List<CompanyGoodsPO>> findProductChildren(List<CompanyGoodsPO> parents) {
+        Map<Long, List<CompanyGoodsPO>> result = new LinkedHashMap<>();
+        Map<String, CompanyGoodsPO> parentByProductId = new LinkedHashMap<>();
+        Set<String> productIds = new LinkedHashSet<>();
+        for (CompanyGoodsPO parent : parents) {
+            result.put(parent.getId(), new ArrayList<>());
+            if (!Integer.valueOf(1).equals(parent.getProductType()) || StringUtils.isBlank(parent.getProductId())) continue;
+            String key = parent.getProductId().trim().toLowerCase(java.util.Locale.ROOT);
+            if (parentByProductId.put(key, parent) != null) {
+                throw new BusinessException(ResultCode.DATABASE_ERROR, "同一产品ID存在多个组合主货品");
             }
+            productIds.add(parent.getProductId());
         }
-        return children;
+        if (CollectionUtil.isEmpty(productIds)) return result;
+        for (CompanyGoodsPO candidate : goodsMapper.findByProductIds(new ArrayList<>(productIds))) {
+            if (StringUtils.isBlank(candidate.getProductId())) continue;
+            CompanyGoodsPO parent = parentByProductId.get(candidate.getProductId().trim().toLowerCase(java.util.Locale.ROOT));
+            if (parent == null || parent.getId().equals(candidate.getId())) continue;
+            if (Integer.valueOf(1).equals(candidate.getProductType())) {
+                throw new BusinessException(ResultCode.DATABASE_ERROR, "同一产品ID存在多个组合主货品");
+            }
+            if (Integer.valueOf(0).equals(candidate.getProductType())) result.get(parent.getId()).add(candidate);
+        }
+        return result;
     }
 
-    private CompanyGoodsPO requireChild(Map<String, CompanyGoodsPO> children, String sku) {
-        CompanyGoodsPO child = children.get(sku);
-        if (child == null) {
-            throw new BusinessException(ResultCode.DATABASE_ERROR, "关联子货品不存在：" + sku);
+    /** 数量优先按SKU匹配，历史空编码关联按名称匹配，不修改原关联数据。 */
+    private Map<Long, BigDecimal> relationQuantities(CompanyGoodsPO parent, List<CompanyGoodsPO> children) {
+        Map<Long, BigDecimal> quantities = new LinkedHashMap<>();
+        if (!Integer.valueOf(1).equals(parent.getProductType())) return quantities;
+        Map<String, GoodsSkuRelation> relationsBySku = new LinkedHashMap<>();
+        Map<String, GoodsSkuRelation> relationsByName = new LinkedHashMap<>();
+        for (GoodsSkuRelation relation : readArray(parent.getGroupList(), new TypeReference<List<GoodsSkuRelation>>() {})) {
+            if (relation == null) continue;
+            if (StringUtils.isNotBlank(relation.getSku())) relationsBySku.put(relation.getSku(), relation);
+            if (StringUtils.isNotBlank(relation.getGoodsName())) {
+                relationsByName.put(relation.getGoodsName().trim().toLowerCase(java.util.Locale.ROOT), relation);
+            }
         }
-        return child;
+        for (CompanyGoodsPO child : children) {
+            GoodsSkuRelation relation = relationsBySku.get(child.getSku());
+            if (relation == null && StringUtils.isNotBlank(child.getGoodsName())) {
+                relation = relationsByName.get(child.getGoodsName().trim().toLowerCase(java.util.Locale.ROOT));
+            }
+            if (relation != null) quantities.put(child.getId(), relation.getQuantity());
+        }
+        return quantities;
     }
 
     private CompanyGoodsListItemVO toListItem(CompanyGoodsPO goods) {
@@ -384,16 +413,6 @@ public class CompanyGoodsService {
     private String imageAccessUrl(List<CompanyGoodsPictureVO> pictures) {
         String objectKey = primaryImageObjectKey(pictures);
         return objectKey == null ? primaryImage(pictures) : imageService.accessUrl(objectKey);
-    }
-
-    private List<GoodsSkuRelation> readRelations(String json) {
-        List<GoodsSkuRelation> relations = readArray(json, new TypeReference<List<GoodsSkuRelation>>() {});
-        for (GoodsSkuRelation relation : relations) {
-            if (relation == null || StringUtils.isBlank(relation.getSku())) {
-                throw new BusinessException(ResultCode.DATABASE_ERROR, "货品关联数据缺少子 SKU");
-            }
-        }
-        return relations;
     }
 
     private <T> List<T> readArray(String json, TypeReference<List<T>> type) {

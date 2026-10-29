@@ -12,9 +12,7 @@ import com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 /** 导入写库前加载本批次需要的字典，名称是否存在仍由消费者校验。 */
 @Service
@@ -34,9 +32,7 @@ public class CompanyGoodsDictionaryService {
         List<String> productIds = new ArrayList<>();
         for (CompanyGoodsPO goods : importedGoods) productIds.add(goods.getProductId());
         List<CompanyGoodsPO> storedGoods = goodsMapper.findByProductIds(productIds);
-        boolean needsTemplates = false;
-        boolean needsRoutings = false;
-        Set<String> warehouseNames = new LinkedHashSet<>();
+        List<CompanyGoodsPO> effectiveGoods = new ArrayList<>();
         for (CompanyGoodsPO goods : importedGoods) {
             CompanyGoodsPO stored = null;
             for (CompanyGoodsPO candidate : storedGoods) {
@@ -49,17 +45,36 @@ public class CompanyGoodsDictionaryService {
             // Excel空白会保留本地值，字典加载必须包含这些保留字段。
             String template = goods.getQualityTemplate();
             if (template == null && stored != null) template = stored.getQualityTemplate();
-            if (template != null) needsTemplates = true;
             Integer scope = goods.getSyncScope();
             if (scope == null && stored != null) scope = stored.getSyncScope();
-            if (!Integer.valueOf(1).equals(scope)) continue;
             String route = goods.getProcessRoute();
             if (route == null && stored != null) route = stored.getProcessRoute();
-            if (route != null) needsRoutings = true;
             String warehouse = goods.getDefaultWarehouse();
             if (warehouse == null && stored != null) warehouse = stored.getDefaultWarehouse();
-            if (warehouse != null) warehouseNames.add(warehouse);
+            CompanyGoodsPO effective = new CompanyGoodsPO();
+            effective.setQualityTemplate(template);
+            effective.setSyncScope(scope);
+            effective.setProcessRoute(route);
+            effective.setDefaultWarehouse(warehouse);
+            effectiveGoods.add(effective);
         }
+        return loadForSync(effectiveGoods);
+    }
+
+    /** 一次导入或编辑共享字典，空列表表示没有待同步货品。 */
+    public GoodsSyncDictionarySnapshot loadForSync(List<CompanyGoodsPO> goodsToSync) {
+        GoodsSyncDictionarySnapshot snapshot = new GoodsSyncDictionarySnapshot();
+        if (CollectionUtil.isEmpty(goodsToSync)) return snapshot;
+        boolean needsTemplates = false;
+        boolean needsRoutings = false;
+        boolean needsWarehouses = false;
+        for (CompanyGoodsPO goods : goodsToSync) {
+            if (goods.getQualityTemplate() != null) needsTemplates = true;
+            if (!Integer.valueOf(1).equals(goods.getSyncScope())) continue;
+            if (goods.getProcessRoute() != null) needsRoutings = true;
+            if (goods.getDefaultWarehouse() != null) needsWarehouses = true;
+        }
+        snapshot.setAccounts(lingxingClient.queryAccounts());
         snapshot.setSuppliers(lingxingClient.findAllSuppliers());
         if (needsTemplates) {
             JsonNode response = qcTemplateClient.getAllQcTemplateList();
@@ -70,9 +85,7 @@ public class CompanyGoodsDictionaryService {
             snapshot.setQcTemplates(response.path("data").path("list"));
         }
         if (needsRoutings) snapshot.setProcessRoutings(blacklakeClient.queryProcessRoutings());
-        for (String warehouseName : warehouseNames) {
-            snapshot.getWarehouseCodes().putAll(blacklakeClient.queryWarehouseCodes(warehouseName));
-        }
+        if (needsWarehouses) snapshot.setWarehouseCodes(blacklakeClient.queryAllWarehouseCodes());
         return snapshot;
     }
 }

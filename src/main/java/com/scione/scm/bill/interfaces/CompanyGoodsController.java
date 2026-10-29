@@ -3,6 +3,8 @@ package com.scione.scm.bill.interfaces;
 import com.scione.common.model.PageResult;
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.CompanyGoodsService;
+import com.scione.scm.bill.common.BusinessException;
+import lombok.extern.slf4j.Slf4j;
 import com.scione.scm.bill.infrastructure.blacklake.BlacklakeOpenApiClient;
 import com.scione.scm.bill.application.CompanyGoodsLocalSaveService;
 import com.scione.scm.bill.application.dto.CompanyGoodsCreateDTO;
@@ -44,6 +46,7 @@ import java.util.List;
 
 /** 企业货品查询与编辑入口，沿用项目响应与分页结构。 */
 @RestController
+@Slf4j
 @Validated
 @RequestMapping("/company-goods")
 public class CompanyGoodsController {
@@ -62,14 +65,24 @@ public class CompanyGoodsController {
     @PostMapping("/create")
     @Operation(summary = "创建货品", description = "企业商品库创建主货品及完整子货品，同一事务仅保存本地；主货品group_list维护子SKU、数量及名称")
     public ApiResponse<Long> create(@Valid @RequestBody CompanyGoodsCreateDTO request) {
-        return ApiResponse.success("货品已创建", companyGoodsLocalSaveService.create(request));
+        try {
+            return ApiResponse.success("货品已创建", companyGoodsLocalSaveService.create(request));
+        } catch (BusinessException exception) {
+            log.error("创建企业货品失败", exception);
+            throw exception;
+        }
     }
 
     @PostMapping("/modify")
-    @Operation(summary = "修改货品", description = "企业商品库整体修改主、子货品，子项无id则新增，移除只解除关联；空值保留原值，仅保存本地")
+    @Operation(summary = "修改货品", description = "按productId和goodsName修改主、子货品，子项未匹配则新增，移除只解除关联；空值保留原值，修改前已创货品在事务提交后按同步范围异步同步外部系统")
     public ApiResponse<Void> modify(@Valid @RequestBody CompanyGoodsModifyDTO request) {
-        companyGoodsLocalSaveService.modify(request);
-        return ApiResponse.success("货品已修改", null);
+        try {
+            companyGoodsLocalSaveService.modify(request);
+            return ApiResponse.success("货品已修改", null);
+        } catch (BusinessException exception) {
+            log.error("修改企业货品失败", exception);
+            throw exception;
+        }
     }
 
     @PostMapping("/export")
@@ -84,7 +97,7 @@ public class CompanyGoodsController {
     }
 
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @Operation(summary = "批量导入企业货品", description = "Excel按SKU修改已有记录，按企业商品ID分组事务保存，按原状态异步新增或修改外部产品")
+    @Operation(summary = "批量导入企业货品", description = "Excel按企业商品ID及品名修改已有记录，支持SKU改码，按企业商品ID分组事务保存，按原状态异步新增或修改外部产品")
     public ApiResponse<CompanyGoodsImportVO> importFile(@RequestPart("file") MultipartFile file) {
         return ApiResponse.success("导入处理完成", companyGoodsImportService.importFile(file));
     }

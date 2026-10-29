@@ -63,6 +63,15 @@
     <update id="markGoodsException">
         UPDATE company_goods SET exception_status = 1, updated_time = NOW() WHERE id = #{goodsId}
     </update>
+    <update id="clearGoodsException">
+        UPDATE company_goods SET exception_status = 0, updated_time = NOW()
+        WHERE id = #{goodsId} AND version = #{goodsVersion} AND exception_status = 1
+    </update>
+    <select id="lockVersionMessages" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.GoodsLocalMessagePO">
+        SELECT <include refid="columns"/> FROM goods_local_message
+        WHERE goods_id = #{goodsId} AND goods_version = #{goodsVersion} AND trigger_type IN (0, 1)
+        ORDER BY id DESC FOR UPDATE
+    </select>
     <select id="findChildMessages" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.GoodsLocalMessagePO">
         SELECT <include refid="columns"/> FROM goods_local_message
         WHERE trigger_type IN (0, 1) AND target_system = 0 AND sku IN

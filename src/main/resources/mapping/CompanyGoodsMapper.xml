@@ -61,17 +61,19 @@
         g.updated_time AS updatedTime
     </sql>
     <sql id="filters">
-        <!-- 被其他货品引用的 SKU 作为子项展示，不重复进入主 SKU 分页。 -->
+        <!-- 同产品ID下普通货品归属组合主货品；空产品ID不建立关联。 -->
         WHERE NOT EXISTS (
             SELECT 1 FROM company_goods parent
-            WHERE parent.id != g.id AND JSON_CONTAINS(parent.group_list, JSON_OBJECT('sku', g.sku))
+            WHERE parent.id != g.id AND parent.product_type = 1 AND g.product_type = 0
+              AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND parent.product_id = g.product_id
         )
         <if test="query.productType != null">AND g.product_type = #{query.productType}</if>
         <if test="query.sku != null">
             AND (LOWER(g.sku) LIKE LOWER(#{query.sku}) ESCAPE '!'
                 OR EXISTS (
                     SELECT 1 FROM company_goods child
-                    WHERE JSON_CONTAINS(g.group_list, JSON_OBJECT('sku', child.sku))
+                    WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
                       AND LOWER(child.sku) LIKE LOWER(#{query.sku}) ESCAPE '!'
                 ))
         </if>
@@ -79,7 +81,8 @@
             AND (g.goods_name LIKE #{query.goodsName} ESCAPE '!'
                 OR EXISTS (
                     SELECT 1 FROM company_goods child
-                    WHERE JSON_CONTAINS(g.group_list, JSON_OBJECT('sku', child.sku))
+                    WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
                       AND child.goods_name LIKE #{query.goodsName} ESCAPE '!'
                 ))
         </if>
@@ -87,7 +90,8 @@
             AND (g.product_attribute = #{query.productAttribute}
                 OR EXISTS (
                     SELECT 1 FROM company_goods child
-                    WHERE JSON_CONTAINS(g.group_list, JSON_OBJECT('sku', child.sku))
+                    WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
                       AND child.product_attribute = #{query.productAttribute}
                 ))
         </if>
@@ -95,7 +99,8 @@
             AND (g.product_category = #{query.productCategory}
                 OR EXISTS (
                     SELECT 1 FROM company_goods child
-                    WHERE JSON_CONTAINS(g.group_list, JSON_OBJECT('sku', child.sku))
+                    WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
                       AND child.product_category = #{query.productCategory}
                 ))
         </if>
@@ -105,7 +110,8 @@
                 OR g.product_owner_names LIKE #{query.personnelName} ESCAPE '!'
                 OR EXISTS (
                     SELECT 1 FROM company_goods child
-                    WHERE JSON_CONTAINS(g.group_list, JSON_OBJECT('sku', child.sku))
+                    WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
                       AND (child.developer LIKE #{query.personnelName} ESCAPE '!'
                           OR child.purchaser_name LIKE #{query.personnelName} ESCAPE '!'
                           OR child.product_owner_names LIKE #{query.personnelName} ESCAPE '!')
@@ -117,7 +123,8 @@
                     AND (g.conflict_status = 1 OR g.exception_status = 1
                         OR EXISTS (
                             SELECT 1 FROM company_goods child
-                            WHERE JSON_CONTAINS(g.group_list, JSON_OBJECT('sku', child.sku))
+                            WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
                               AND (child.conflict_status = 1 OR child.exception_status = 1)
                         ))
                 </when>
@@ -126,7 +133,8 @@
                     AND COALESCE(g.conflict_status, 0) != 1 AND COALESCE(g.exception_status, 0) != 1
                     AND NOT EXISTS (
                         SELECT 1 FROM company_goods child
-                        WHERE JSON_CONTAINS(g.group_list, JSON_OBJECT('sku', child.sku))
+                        WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
                           AND (child.conflict_status = 1 OR child.exception_status = 1)
                     )
                 </otherwise>
@@ -145,9 +153,19 @@
         WHERE g.product_id = #{productId} AND g.goods_name = #{goodsName}
         ORDER BY g.id FOR UPDATE
     </select>
+    <select id="findProductParentIds" resultType="long">
+        SELECT id FROM company_goods
+        WHERE product_id = #{productId} AND product_id IS NOT NULL AND TRIM(product_id) != ''
+          AND product_type = 1 AND id != #{id}
+    </select>
+    <select id="lockProductFamily" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
+        SELECT <include refid="columns"/> FROM company_goods g WHERE g.product_id = #{productId}
+        ORDER BY g.id FOR UPDATE
+    </select>
     <select id="findByProductIds" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
         SELECT <include refid="columns"/> FROM company_goods g WHERE g.product_id IN
         <foreach collection="productIds" item="productId" open="(" separator="," close=")">#{productId}</foreach>
+        ORDER BY g.id
     </select>
     <select id="findById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
         SELECT <include refid="columns"/> FROM company_goods g WHERE g.id = #{id}
@@ -177,9 +195,18 @@
         <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
         ORDER BY id FOR UPDATE
     </select>
+    <select id="lockById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
+        SELECT <include refid="columns"/> FROM company_goods g WHERE g.id = #{id} FOR UPDATE
+    </select>
+    <update id="updateSkuRelations">
+        UPDATE company_goods SET group_list = #{goods.groupList}, version = version + 1, updated_time = NOW()
+        WHERE id = #{goods.id} AND version = #{expectedVersion}
+    </update>
     <update id="update">
         UPDATE company_goods SET
             goods_status = 1,
+            sku = #{goods.sku},
+            group_list = #{goods.groupList},
             goods_name = #{goods.goodsName},
             sync_scope = #{goods.syncScope},
             unit = #{goods.unit},
@@ -309,6 +336,8 @@
     </update>
     <update id="updateImport">
         UPDATE company_goods SET
+            sku = #{goods.sku},
+            group_list = #{goods.groupList},
             goods_status = #{goods.goodsStatus},
         <include refid="goodsDetailAssignments"/>
         WHERE id = #{goods.id} AND version = #{expectedVersion}

@@ -1,5 +1,6 @@
 package com.scione.scm.bill.infrastructure.blacklake;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scione.scm.bill.common.BusinessException;
@@ -33,7 +34,7 @@ import java.util.Map;
 
 /**
  * 黑湖小工单客户端。优先使用 Redis 中的 Token，未命中时读取配置登录并缓存 24 小时。
- * 密码执行 SHA3-224，登录 Cookie 与 Token 随会话传递；请求失败直接抛出异常，不自动重试。
+ * 密码执行 SHA3-224，登录 Cookie 与 Token 随会话传递；仅明确的 Token 解析失败会刷新认证并重试一次，其他失败直接抛出异常。
  */
 @Component
 @Slf4j
@@ -42,17 +43,13 @@ public class BlacklakeOpenApiClient {
     private static final String LOGIN_PATH = "/api/user/v1/users/_login";
     // 查询仓库列表
     private static final String WAREHOUSE_LIST_PATH = "/api/dytin/external/warehouse/queryList";
-    // 查询自定义数据
-    private static final String CUSTOM_FIELD_METADATA_PATH = "/api/dytin/external/customField/queryCustomFieldMetadata";
     // 查询工艺路线
     private static final String PROCESS_ROUTING_LIST_PATH = "/api/dytin/external/processRouting/queryList2";
-    /** 当前组织产品分类对应的自定义字段。 */
-    private static final long PRODUCT_CATEGORY_FIELD_ID = 735732L;
-    /** 黑湖表单类型：产品。 */
-    private static final int PRODUCT_TARGET_TYPE = 1;
+    private static final String PRODUCT_LIST_PATH = "/api/dytin/external/product/queryList2";
     private static final String SUCCESS_CODE = "01000000";
     private static final String TOKEN_KEY = "scione:scm:blacklake:token";
     private static final Duration TOKEN_TTL = Duration.ofHours(24);
+    private final Object tokenRefreshMonitor = new Object();
 
     @Resource
     private BlacklakeProperties properties;
@@ -60,6 +57,8 @@ public class BlacklakeOpenApiClient {
     private ObjectMapper objectMapper;
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+    @Resource
+    private BlacklakeRequestLimiter requestLimiter;
 
     /**
      * 使用 yml 中 blacklake 节点绑定的配置登录，手机号优先，否则使用工厂代码和用户名。
@@ -132,25 +131,6 @@ public class BlacklakeOpenApiClient {
         return response;
     }
 
-    /**
-     * 查询黑湖产品分类列表，固定查询产品表单的分类字段 735732。
-     * 文档规定 fieldIds 优先于 targetType；同时发送两个指定参数，不额外查询其他字段。
-     * @return 黑湖完整元数据响应，保留字段定义和分页信息，不推断分类选项
-     * @throws BusinessException 认证失效、Redis、HTTP 或远端业务处理失败
-     */
-    public JsonNode queryProductCategories() {
-        BlacklakeSession session = getSession();
-        JsonNode response = post(session.restClient(), CUSTOM_FIELD_METADATA_PATH, session.token(),
-                Map.of("fieldIds", List.of(PRODUCT_CATEGORY_FIELD_ID), "targetType", PRODUCT_TARGET_TYPE));
-        if ("401".equals(response.path("code").asText()) || response.path("statusCode").asInt() == 401) {
-            throw responseError("Token 已失效，请重新登录", response);
-        }
-        if (!SUCCESS_CODE.equals(response.path("code").asText())) {
-            throw responseError("产品分类列表查询失败", response);
-        }
-        return response;
-    }
-
     /** 每次调用只查询第一页100条工艺路线，不继续翻页或缓存列表。 */
     public List<ProcessRoutingVO> queryProcessRoutings() {
         BlacklakeSession session = getSession();
@@ -205,7 +185,7 @@ public class BlacklakeOpenApiClient {
 
     /** 仓库名称精确匹配，同名取第一条。 */
     public String findWarehouseCode(String name) {
-        String code = queryWarehouseCodes(name).get(name);
+        String code = queryAllWarehouseCodes().get(name);
         if (code == null) throw remoteError("未找到名称对应的编码：" + name);
         return code;
     }
@@ -214,7 +194,8 @@ public class BlacklakeOpenApiClient {
     public Map<String, String> queryWarehouseCodes(String name) {
         BlacklakeSession session = getSession();
         Map<String, String> codes = new LinkedHashMap<>();
-        Map<String, Object> payload = new LinkedHashMap<>(Map.of("likeName", name));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        if (name != null) payload.put("likeName", name);
         long readCount = 0;
         for (int pageNum = 1; ; pageNum++) {
             payload.put("page", Map.of("pageNum", pageNum, "pageSize", 100));
@@ -228,10 +209,12 @@ public class BlacklakeOpenApiClient {
             }
             for (JsonNode entry : entries) {
                 JsonNode warehouse = entry.path("simpleVO");
-                if (name.equals(warehouse.path("name").asText())) {
+                String warehouseName = warehouse.path("name").asText();
+                if (name == null || name.equals(warehouseName)) {
                     JsonNode code = warehouse.path("code");
                     if (!code.isTextual() || code.asText().isBlank()) throw responseError("匹配字典记录缺少有效code：" + name, response);
-                    codes.putIfAbsent(name, code.asText());
+                    if (warehouseName.isBlank()) throw responseError("仓库记录缺少有效name", response);
+                    codes.putIfAbsent(warehouseName, code.asText());
                 }
             }
             readCount += entries.size();
@@ -241,7 +224,35 @@ public class BlacklakeOpenApiClient {
         return codes;
     }
 
-    /** 黑湖新增产品以产品编号判重，已存在时由远端拒绝；不自动重试新增。 */
+    /** 不按名称过滤，统一分页读取全部仓库供本次操作共享。 */
+    public Map<String, String> queryAllWarehouseCodes() {
+        return queryWarehouseCodes(null);
+    }
+
+    /** 按SKU精确查询产品；查询失败不能视为不存在，避免误发新增请求。 */
+    public boolean productExists(String sku) {
+        if (StringUtils.isBlank(sku)) throw remoteError("查询产品时SKU不能为空");
+        BlacklakeSession session = getSession();
+        JsonNode response = post(session.restClient(), PRODUCT_LIST_PATH, session.token(),
+                Map.of("productCodeExact", sku, "page", Map.of("pageNum", 1, "pageSize", 100)));
+        log.info("黑湖产品查询返回，path={}，response={}", PRODUCT_LIST_PATH,
+                ExternalApiResponseSanitizer.sanitize(PRODUCT_LIST_PATH, response.toString(), objectMapper));
+        if (!SUCCESS_CODE.equals(response.path("code").asText())) throw responseError("查询产品失败", response);
+        JsonNode products = response.path("data").path("data");
+        if (!products.isArray()) throw responseError("产品查询响应缺少有效data.data数组", response);
+        for (JsonNode product : products) {
+            JsonNode productCode = product.path("productCode");
+            if (!productCode.isTextual() || productCode.asText().isBlank()) {
+                throw responseError("产品查询记录缺少有效productCode", response);
+            }
+            if (!sku.equals(productCode.asText())) {
+                throw responseError("产品精确查询返回了不匹配的productCode", response);
+            }
+        }
+        return !products.isEmpty();
+    }
+
+    /** 黑湖新增产品以产品编号判重，已存在时由远端拒绝；仅明确的认证失效允许刷新后重试一次。 */
     public void createProduct(Map<String, Object> payload) {
         BlacklakeSession session = getSession();
         JsonNode response = post(session.restClient(), "/api/dytin/external/product/create", session.token(), payload);
@@ -285,6 +296,61 @@ public class BlacklakeOpenApiClient {
     }
 
     private JsonNode post(RestClient restClient, String path, String token, Object payload) {
+        try {
+            return postOnce(restClient, path, token, payload);
+        } catch (RestClientResponseException exception) {
+            if (LOGIN_PATH.equals(path) || token == null || !isTokenExpired(exception)) {
+                throw httpFailure(path, exception);
+            }
+            log.info("黑湖认证失效，刷新 Token 后重试一次，path={}", path);
+            BlacklakeSession refreshedSession = refreshSession(token);
+            try {
+                return postOnce(refreshedSession.restClient(), path, refreshedSession.token(), payload);
+            } catch (RestClientResponseException retryException) {
+                throw httpFailure(path, retryException);
+            }
+        }
+    }
+
+    private boolean isTokenExpired(RestClientResponseException exception) {
+        if (exception.getStatusCode().value() != 401) {
+            return false;
+        }
+        try {
+            JsonNode response = objectMapper.readTree(exception.getResponseBodyAsString());
+            return response != null && "401".equals(response.path("code").asText())
+                    && "USER_VERIFICATION_ERROR".equals(response.path("subCode").asText());
+        } catch (JsonProcessingException exceptionParsingResponse) {
+            return false;
+        }
+    }
+
+    /** 同一实例内串行刷新，等待期间已更新缓存时直接复用新 Token。 */
+    private BlacklakeSession refreshSession(String expiredToken) {
+        synchronized (tokenRefreshMonitor) {
+            String cachedToken;
+            try {
+                cachedToken = stringRedisTemplate.opsForValue().get(TOKEN_KEY);
+            } catch (DataAccessException exception) {
+                throw remoteError("Token 读取 Redis 失败");
+            }
+            if (StringUtils.isNotBlank(cachedToken) && !expiredToken.equals(cachedToken)) {
+                return new BlacklakeSession(cachedToken, createRestClient());
+            }
+            return login();
+        }
+    }
+
+    private BusinessException httpFailure(String path, RestClientResponseException exception) {
+        String responseBody = exception.getResponseBodyAsString();
+        if (StringUtils.isNotBlank(responseBody)) {
+            return new ExternalApiResponseException(ResultCode.SYSTEM_ERROR,
+                    "黑湖HTTP请求失败，接口=" + path, responseBody);
+        }
+        return remoteError("HTTP请求失败且响应为空，接口=" + path);
+    }
+
+    private JsonNode postOnce(RestClient restClient, String path, String token, Object payload) {
         String body = null;
         try {
             RestClient.RequestBodySpec request = restClient.post().uri(path)
@@ -292,7 +358,9 @@ public class BlacklakeOpenApiClient {
             if (token != null) {
                 request.header("X-AUTH", token);
             }
-            body = request.body(objectMapper.writeValueAsString(payload)).retrieve().body(String.class);
+            String requestBody = objectMapper.writeValueAsString(payload);
+            requestLimiter.acquire(path);
+            body = request.body(requestBody).retrieve().body(String.class);
             // log.info("黑湖 API response，path={}，response={}", path, ExternalApiResponseSanitizer.sanitize(path, body, objectMapper));
             if (StringUtils.isBlank(body)) {
                 throw remoteError("响应为空");
@@ -303,11 +371,7 @@ public class BlacklakeOpenApiClient {
             }
             return response;
         } catch (RestClientResponseException exception) {
-            String responseBody = exception.getResponseBodyAsString();
-            // log.info("黑湖 API response，path={}，response={}", path, ExternalApiResponseSanitizer.sanitize(path, responseBody, objectMapper));
-            if (!responseBody.isBlank()) throw new ExternalApiResponseException(ResultCode.SYSTEM_ERROR,
-                    "黑湖HTTP请求失败，接口=" + path, responseBody);
-            throw remoteError("HTTP请求失败且响应为空，接口=" + path);
+            throw exception;
         } catch (RestClientException exception) {
             // 不拼接远端响应或底层异常文本，避免暴露凭证与敏感业务数据。
             throw remoteError("HTTP 请求失败，接口=" + path);
