@@ -35,6 +35,7 @@ public class SopReminderSchedule {
     // 等待同步可能很久，催办使用独立线程池，不占用合同等模块的默认调度线程。
     private final ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
 
+    //启动时注册所有定时任务
     @PostConstruct
     public void registerTasks() {
         scheduler.setPoolSize(Math.max(2, properties.getNodes().size() + 1));//线程数=节点数+1，给重试留一个线程
@@ -79,6 +80,7 @@ public class SopReminderSchedule {
         if (!crons.isEmpty()) registerLane(crons);//剩下的普通节点不为空的话再注册一组
     }
 
+    //把一组节点(普通或装箱)按它们的 cron 注册成一个调度任务,用trigger决定下次几点醒。
     private void registerLane(java.util.Map<String, String> crons) {//crons就是节点代码->cron表达式的映射
         // 普通节点仍按同一时点汇总；装箱单独计算下次执行时间。
         java.util.concurrent.atomic.AtomicReference<java.time.Instant> nextSlot = new java.util.concurrent.atomic.AtomicReference<>();
@@ -97,7 +99,7 @@ public class SopReminderSchedule {
         scheduler.shutdown();
     }
 
-    //触发器唤醒，回答：这一刻到底该发哪几个节点
+    //到时间点后决定这一刻到底该发哪几个节点，把符合要求的节点筛出来交给execute
     private void runSlot(java.time.Instant instant, java.util.Map<String, String> crons) {
         if (instant == null) return;
         java.time.LocalDateTime slot = java.time.LocalDateTime.ofInstant(instant, ZoneId.of("Asia/Shanghai"));//这里不能用now()，线程池刚好忙，9:00的任务9:00:03才轮到的话，会直接计算到下一个时间节点发
