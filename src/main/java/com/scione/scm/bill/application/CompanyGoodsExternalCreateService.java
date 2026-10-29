@@ -1,0 +1,394 @@
+package com.scione.scm.bill.application;
+
+import cn.hutool.core.collection.CollectionUtil;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.scione.scm.bill.application.port.LingxingSupplierClient;
+import com.scione.scm.bill.common.BusinessException;
+import com.scione.scm.bill.common.ExternalApiResponseException;
+import com.scione.scm.bill.common.ResultCode;
+import com.scione.scm.bill.domain.goods.GoodsSkuRelation;
+import com.scione.scm.bill.domain.goods.enums.GoodsInspectionTypeEnum;
+import com.scione.scm.bill.infrastructure.blacklake.BlacklakeOpenApiClient;
+import com.scione.scm.bill.infrastructure.lingxing.LingxingOpenApiClient;
+import com.scione.scm.bill.infrastructure.lingxing.LingxingQcTemplateClient;
+import com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO;
+import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.CompanyGoodsMapper;
+import jakarta.annotation.Resource;
+import org.springframework.stereotype.Service;
+import java.util.*;
+
+/** 名称只在消费时转换为外部编码；本地快照保留用户填写的名称。 */
+@Service
+public class CompanyGoodsExternalCreateService {
+    private static final int COMBINATION_PRODUCT_TYPE = 1;
+    private static final String DEFAULT_CLEARANCE_COUNTRY = "US";
+    private static final Map<String, String> COUNTRY_CODES = Map.ofEntries(
+            Map.entry("美国", "US"), Map.entry("加拿大", "CA"), Map.entry("墨西哥", "MX"), Map.entry("日本", "JP"),
+            Map.entry("英国", "UK"), Map.entry("德国", "DE"), Map.entry("法国", "FR"), Map.entry("西班牙", "ES"),
+            Map.entry("意大利", "IT"), Map.entry("荷兰", "NL"), Map.entry("澳洲", "AU"), Map.entry("澳大利亚", "AU"),
+            Map.entry("新加坡", "SG"), Map.entry("印度", "IN"), Map.entry("阿联酋", "AE"), Map.entry("沙特阿拉伯", "SA"),
+            Map.entry("巴西", "BR"), Map.entry("瑞典", "SE"), Map.entry("波兰", "PL"), Map.entry("比利时", "BE"),
+            Map.entry("土耳其", "TR"), Map.entry("乌克兰", "UA"), Map.entry("匈牙利", "HU"), Map.entry("巴基斯坦", "PK"),
+            Map.entry("黎巴嫩", "LB"), Map.entry("奥地利", "AT"), Map.entry("瑞士", "CH"), Map.entry("捷克", "CZ"),
+            Map.entry("丹麦", "DK"), Map.entry("爱尔兰", "IE"), Map.entry("卢森堡", "LU"), Map.entry("挪威", "NO"),
+            Map.entry("葡萄牙", "PT"), Map.entry("斯洛伐克", "SK"), Map.entry("俄罗斯", "RU"), Map.entry("哈萨克斯坦", "KZ"),
+            Map.entry("白俄罗斯", "BY"), Map.entry("智利", "CL"), Map.entry("韩国", "KR"));
+    @Resource
+    private LingxingOpenApiClient lingxingClient;
+    @Resource
+    private LingxingQcTemplateClient qcTemplateClient;
+    @Resource
+    private BlacklakeOpenApiClient blacklakeClient;
+    @Resource
+    private ObjectMapper objectMapper;
+    @Resource
+    private CompanyGoodsMapper goodsMapper;
+
+    /**
+     * 转换货品字段并调用领星产品set接口执行新增同步。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     */
+    public void createInLingxing(CompanyGoodsPO goods) {
+        createInLingxing(goods, null);
+    }
+
+    /**
+     * 转换货品字段并调用领星产品set接口执行新增同步。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
+    public void createInLingxing(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
+        lingxingClient.createProduct(lingxingPayload(goods, dictionaries));
+    }
+
+    /**
+     * 转换货品字段并调用领星产品set接口执行修改同步。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     */
+    public void updateInLingxing(CompanyGoodsPO goods) {
+        updateInLingxing(goods, null);
+    }
+
+    /**
+     * 转换货品字段并调用领星产品set接口执行修改同步。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
+    public void updateInLingxing(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
+        lingxingClient.updateProduct(lingxingPayload(goods, dictionaries));
+    }
+
+    /**
+     * 转换人员、供应商及模板等外部编码，组装领星请求并使用快照数量和本地图片。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     * @return 领星产品新增或修改接口的请求参数
+     */
+    private Map<String, Object> lingxingPayload(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("sku", goods.getSku());
+        payload.put("product_name", goods.getGoodsName());
+        payload.put("unit", goods.getUnit());
+        List<Map<String, Object>> groups = new ArrayList<>();
+        if (Objects.equals(goods.getProductType(), COMBINATION_PRODUCT_TYPE)) {
+            List<GoodsSkuRelation> relations = childRelations(goods);
+            if (CollectionUtil.isEmpty(relations)) throw invalid("组合货品缺少子SKU关联：" + goods.getSku());
+            for (GoodsSkuRelation child : relations) {
+                if (child == null || child.getSku() == null || child.getSku().isBlank()) {
+                    continue;
+                }
+                if (child.getQuantity() == null || child.getQuantity().signum() <= 0) {
+                    throw invalid("组合货品子SKU比例数量必须大于0：" + child.getSku());
+                }
+                groups.add(Map.of("sku", child.getSku(), "quantity", child.getQuantity()));
+            }
+        }
+        payload.put("group_list", groups);
+        List<Long> ownerIds = new ArrayList<>();
+        // 历史消息没有人员快照时仍实时查询，新消息使用本次操作的共享快照。
+        List<LingxingOpenApiClient.AccountVO> accounts = dictionaries == null ? null : dictionaries.getAccounts();
+        if (accounts == null) accounts = lingxingClient.queryAccounts();
+        for (String owner : goods.getProductOwnerNames().split(",")) {
+            Long ownerId = null;
+            for (LingxingOpenApiClient.AccountVO account : accounts) {
+                if (owner.trim().equals(account.realname())) { ownerId = account.uid(); break; }
+            }
+            if (ownerId == null) throw invalid("领星产品负责人不存在：" + owner.trim());
+            ownerIds.add(ownerId);
+        }
+        payload.put("product_duty_uids", ownerIds);
+        payload.put("is_append_product_duty", 0);
+        putLingxing(payload, "cg_opt_username", goods.getPurchaserName());
+        putLingxing(payload, "cg_price", goods.getPurchaseCost());
+        putLingxing(payload, "cg_product_length", goods.getCgProductLength());
+        putLingxing(payload, "cg_product_width", goods.getCgProductWidth());
+        putLingxing(payload, "cg_product_height", goods.getCgProductHeight());
+        putLingxing(payload, "cg_product_net_weight", goods.getNetWeight());
+        putLingxing(payload, "cg_product_gross_weight", goods.getGrossWeight());
+        putLingxing(payload, "cg_package_length", goods.getCgPackageLength());
+        putLingxing(payload, "cg_package_width", goods.getCgPackageWidth());
+        putLingxing(payload, "cg_package_height", goods.getCgPackageHeight());
+        putLingxing(payload, "cg_box_length", goods.getCgBoxLength());
+        putLingxing(payload, "cg_box_width", goods.getCgBoxWidth());
+        putLingxing(payload, "cg_box_height", goods.getCgBoxHeight());
+        putLingxing(payload, "cg_box_weight", goods.getCartonWeight());
+        putLingxing(payload, "cg_box_pcs", goods.getCartonQuantity());
+        Long supplierId = null;
+        List<LingxingSupplierClient.SupplierSummary> allSuppliers;
+        if (dictionaries == null) allSuppliers = lingxingClient.findAllSuppliers();
+        else allSuppliers = dictionaries.getSuppliers();
+        for (var supplier : allSuppliers) {
+            if (Objects.equals(goods.getSupplierName(), supplier.supplierName())) {
+                supplierId = supplier.supplierId();
+                break;
+            }
+        }
+        if (supplierId == null) throw invalid("领星供应商不存在：" + goods.getSupplierName());
+        java.math.BigDecimal supplierQuote = goods.getSupplierQuote() == null ? java.math.BigDecimal.ZERO : goods.getSupplierQuote();
+        payload.put("supplier_quote", List.of(Map.of("erp_supplier_id", supplierId, "is_primary", 1,
+                "supplier_product_url", List.of(), "quotes", List.of(Map.of("currency", "CNY", "is_tax", 0,
+                        "tax_rate", "0", "step_prices", List.of(Map.of("moq", 1, "price_with_tax", supplierQuote.toPlainString())))))));
+        Map<String, Object> inspection = new LinkedHashMap<>();
+        inspection.put("qc_method", goods.getQualityInspectionMethod());
+        inspection.put("custom_qc_template", Map.of("template_item", List.of()));
+        if (goods.getQualityTemplate() != null) {
+            JsonNode templates;
+            if (dictionaries == null) {
+                JsonNode response = qcTemplateClient.getAllQcTemplateList();
+                if (!"1".equals(response.path("code").asText()) || !response.path("data").path("list").isArray()) {
+                    throw new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR, "领星质检模板查询失败或响应格式错误", response.toString());
+                }
+                templates = response.path("data").path("list");
+            } else {
+                templates = dictionaries.getQcTemplates();
+                if (templates == null || !templates.isArray()) throw invalid("导入字典快照缺少质检模板列表");
+            }
+            String templateId = null;
+            for (JsonNode template : templates) {
+                if (goods.getQualityTemplate().equals(template.path("name").asText())) {
+                    templateId = template.path("pqt_id").asText();
+                    break;
+                }
+            }
+            if (templateId == null || templateId.isBlank()) throw invalid("领星质检模板不存在或缺少ID：" + goods.getQualityTemplate());
+            inspection.put("pqt_id", templateId);
+        }
+        payload.put("new_qc_standard", inspection);
+        Map<String, Object> declaration = new LinkedHashMap<>();
+        putLingxing(declaration, "customs_export_name", goods.getCustomsNameCn());
+        putLingxing(declaration, "customs_import_name", goods.getCustomsNameEn());
+        putLingxing(declaration, "customs_declaration_hs_code", goods.getCustomsDeclarationHsCode());
+        // 顶层申报金额字段为string，保留两位小数，避免嵌套字段文档int类型造成精度丢失。
+        putLingxing(payload, "bg_customs_import_price", goods.getCustomsImportPrice());
+        if (goods.getCustomsImportPrice() != null) payload.put("currency", "USD");
+        if (!declaration.isEmpty()) payload.put("declaration", declaration);
+        Map<String, Object> clearance = new LinkedHashMap<>();
+        putLingxing(clearance, "customs_clearance_material", goods.getMaterialCn());
+        putLingxing(clearance, "customs_clearance_en_material", goods.getMaterialEn());
+        putLingxing(clearance, "customs_clearance_usage", goods.getUsageCn());
+        putLingxing(clearance, "customs_clearance_en_usage", goods.getUsageEn());
+        if (!clearance.isEmpty()) payload.put("clearance", clearance);
+        if (goods.getClearancePrice() != null || goods.getBgImportHsCode() != null) {
+            // 历史数据及消息快照可能未填写清关国家，统一按美国组装清关参数。
+            String countryCode = goods.getClearanceCountryCode();
+            if (countryCode == null || countryCode.isBlank()) countryCode = DEFAULT_CLEARANCE_COUNTRY;
+            else countryCode = countryCode.trim();
+            String country = COUNTRY_CODES.get(countryCode);
+            if (country == null && COUNTRY_CODES.containsValue(countryCode)) country = countryCode;
+            if (country == null) throw invalid("领星清关国家不支持：" + countryCode);
+            Map<String, Object> logistics = new LinkedHashMap<>();
+            putLingxing(logistics, country + "_clearance_price", goods.getClearancePrice());
+            if (goods.getClearancePrice() != null) logistics.put(country + "_clearance_price_currency", "USD");
+            putLingxing(logistics, country + "_bg_import_hs_code", goods.getBgImportHsCode());
+            payload.put("product_logistics_list", logistics);
+        }
+        // 图片使用本地最新记录；组合比例仍沿用消息中的数量快照。
+        CompanyGoodsPO stored = goodsMapper.findById(goods.getId());
+        if (stored == null) throw invalid("本地货品不存在，无法读取图片：" + goods.getSku());
+        List<Map<String, Object>> pictures = new ArrayList<>();
+        if (stored.getPictureList() != null && !stored.getPictureList().isBlank()) {
+            try {
+                JsonNode pictureList = objectMapper.readTree(stored.getPictureList());
+                if (pictureList == null || !pictureList.isArray()) throw invalid("本地货品图片必须为JSON数组：" + goods.getSku());
+                for (JsonNode picture : pictureList) {
+                    JsonNode url = picture.get("pic_url");
+                    JsonNode primary = picture.get("is_primary");
+                    if (url == null || !url.isTextual() || url.asText().isBlank()
+                            || primary == null || !primary.isIntegralNumber()
+                            || !(primary.asText().equals("0") || primary.asText().equals("1"))) {
+                        throw invalid("本地货品图片pic_url或is_primary无效：" + goods.getSku());
+                    }
+                    pictures.add(Map.of("pic_url", url.asText(), "is_primary", primary.intValue()));
+                }
+            } catch (JsonProcessingException exception) {
+                throw invalid("本地货品图片JSON格式错误：" + goods.getSku());
+            }
+        }
+        payload.put("picture_list", pictures);
+        return payload;
+    }
+
+    /**
+     * 同步货品到黑湖，通过SKU存在性查询选择创建或更新。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     */
+    public void createInBlacklake(CompanyGoodsPO goods) {
+        createInBlacklake(goods, null);
+    }
+
+    /**
+     * 同步货品到黑湖，通过SKU存在性查询选择创建或更新。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
+    public void createInBlacklake(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
+        blacklakeClient.createProduct(blacklakePayload(goods, dictionaries));
+    }
+
+    /**
+     * 同步货品到黑湖，通过SKU存在性查询选择创建或更新。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     */
+    public void updateInBlacklake(CompanyGoodsPO goods) {
+        updateInBlacklake(goods, null);
+    }
+
+    /**
+     * 同步货品到黑湖，通过SKU存在性查询选择创建或更新。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
+    public void updateInBlacklake(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
+        blacklakeClient.updateProduct(blacklakePayload(goods, dictionaries));
+    }
+
+    /**
+     *  每次同步先按SKU精确查询，按黑湖实际存在情况选择新增或修改。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     */
+    public void syncInBlacklake(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
+        boolean exists = blacklakeClient.productExists(goods.getSku());
+        if (exists) {
+            updateInBlacklake(goods, dictionaries);
+        } else {
+            createInBlacklake(goods, dictionaries);
+        }
+    }
+
+    /**
+     * 转换工艺路线、检验类型、规范及仓库编码并组装黑湖产品请求。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @param dictionaries 本次操作共享字典快照；为null时由同步适配层按需实时查询
+     * @return 黑湖产品创建或更新接口的请求参数
+     */
+    private Map<String, Object> blacklakePayload(CompanyGoodsPO goods, GoodsSyncDictionarySnapshot dictionaries) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("productCode", goods.getSku());
+        payload.put("productName", goods.getGoodsName());
+        payload.put("unit", goods.getUnit());
+        put(payload, "originType", goods.getProductAttribute());
+        put(payload, "criticalFlag", goods.getIsKeyPart());
+        put(payload, "costPrice", goods.getPurchaseCost());
+        if (goods.getProcessRoute() != null) {
+            String routeCode = null;
+            List<BlacklakeOpenApiClient.ProcessRoutingVO> routings;
+            if (dictionaries == null) routings = blacklakeClient.queryProcessRoutings();
+            else routings = dictionaries.getProcessRoutings();
+            for (var route : routings) {
+                if (goods.getProcessRoute().equals(route.processRoutingName())) { routeCode = route.processRoutingCode(); break; }
+            }
+            if (routeCode == null) throw invalid("工艺路线不在黑湖第一页100条中：" + goods.getProcessRoute());
+            payload.put("model", routeCode);
+        }
+        List<Integer> inspectionCodes = new ArrayList<>();
+        if (goods.getInspectionType() != null) {
+            List<String> names;
+            try { names = objectMapper.readValue(goods.getInspectionType(), new TypeReference<List<String>>() { }); }
+            catch (JsonProcessingException exception) { throw invalid("检验类型快照格式错误"); }
+            for (String name : names) {
+                Integer code = null;
+                for (GoodsInspectionTypeEnum type : GoodsInspectionTypeEnum.values()) {
+                    if (type.getName().equals(name)) { code = type.getCode(); break; }
+                }
+                if (code == null) throw invalid("未知检验类型：" + name);
+                inspectionCodes.add(code);
+            }
+        }
+        if (CollectionUtil.isNotEmpty(inspectionCodes)) payload.put("inspectionSpecificationsTypes", inspectionCodes);
+        if (goods.getIncomingInspectionStandard() != null) {
+            String inspectionStandard = goods.getIncomingInspectionStandard();
+            int separatorIndex = inspectionStandard.indexOf('-');
+            if (separatorIndex <= 0 || inspectionStandard.substring(separatorIndex + 1).isBlank()) {
+                throw invalid("来料检验规范格式应为编号-名称：" + inspectionStandard);
+            }
+            // 本地保留完整的编号和名称，黑湖只接收第一个分隔符前的编号。
+            payload.put("materialIncomingInspectionSpecificationsCode", inspectionStandard.substring(0, separatorIndex).trim());
+        }
+        if (goods.getDefaultWarehouse() != null) {
+            String warehouseCode;
+            if (dictionaries == null) warehouseCode = blacklakeClient.findWarehouseCode(goods.getDefaultWarehouse());
+            else warehouseCode = dictionaries.getWarehouseCodes().get(goods.getDefaultWarehouse());
+            if (warehouseCode == null) throw invalid("黑湖仓库不存在：" + goods.getDefaultWarehouse());
+            payload.put("warehouseCode", warehouseCode);
+        }
+        payload.put("customFieldValues", List.of(Map.of("name", "产品分类", "value", goods.getProductCategory())));
+        return payload;
+    }
+
+    /**
+     * 解析消息快照中的主货品关联数组，保留保存消息时固定的数量。
+     *
+     * @param goods 待处理货品记录或同步消息中的货品快照
+     * @return JSON解析得到的子货品关联列表
+     */
+    private List<GoodsSkuRelation> childRelations(CompanyGoodsPO goods) {
+        try { return objectMapper.readValue(goods.getGroupList(), new TypeReference<List<GoodsSkuRelation>>() { }); }
+        catch (JsonProcessingException exception) { throw invalid("子SKU快照格式错误"); }
+    }
+
+    /**
+     * 将BigDecimal转为不含科学计数法的文本，其他非null字段保持原类型加入领星请求。
+     *
+     * @param payload 发往第三方接口的请求参数
+     * @param key 第三方请求字段名
+     * @param value 待处理字段值
+     */
+    private void putLingxing(Map<String, Object> payload, String key, Object value) {
+        if (value instanceof java.math.BigDecimal decimal) payload.put(key, decimal.toPlainString());
+        else put(payload, key, value);
+    }
+
+    /**
+     * 将非null字段加入请求，保留原始字段类型及空字符串。
+     *
+     * @param payload 发往第三方接口的请求参数
+     * @param key 第三方请求字段名
+     * @param value 待处理字段值
+     */
+    private void put(Map<String, Object> payload, String key, Object value) {
+        if (value != null) payload.put(key, value);
+    }
+
+    /**
+     * 创建货品参数校验失败的业务异常。
+     *
+     * @param message 向调用方说明的业务失败原因
+     * @return 参数错误业务异常
+     */
+    private BusinessException invalid(String message) { return new BusinessException(ResultCode.PARAM_ERROR, message); }
+}

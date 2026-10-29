@@ -1,0 +1,345 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.CompanyGoodsMapper">
+    <sql id="columns">
+        g.id AS id,
+        g.sku AS sku,
+        g.asin AS asin,
+        g.product_id AS productId,
+        g.goods_name AS goodsName,
+        g.product_type AS productType,
+        g.sync_scope AS syncScope,
+        g.source_list AS sourceList,
+        g.group_list AS groupList,
+        g.unit AS unit,
+        g.developer AS developer,
+        g.product_attribute AS productAttribute,
+        g.goods_status AS goodsStatus,
+        g.conflict_status AS conflictStatus,
+        g.exception_status AS exceptionStatus,
+        g.create_method AS createMethod,
+        g.version AS version,
+        g.cg_product_length AS cgProductLength,
+        g.cg_product_width AS cgProductWidth,
+        g.cg_product_height AS cgProductHeight,
+        g.net_weight AS netWeight,
+        g.gross_weight AS grossWeight,
+        g.purchase_cost AS purchaseCost,
+        g.supplier_name AS supplierName,
+        g.supplier_quote AS supplierQuote,
+        g.purchaser_name AS purchaserName,
+        g.product_owner_names AS productOwnerNames,
+        g.cg_box_length AS cgBoxLength,
+        g.cg_box_width AS cgBoxWidth,
+        g.cg_box_height AS cgBoxHeight,
+        g.cg_package_length AS cgPackageLength,
+        g.cg_package_width AS cgPackageWidth,
+        g.cg_package_height AS cgPackageHeight,
+        g.carton_quantity AS cartonQuantity,
+        g.carton_weight AS cartonWeight,
+        g.process_route AS processRoute,
+        g.product_category AS productCategory,
+        g.inspection_type AS inspectionType,
+        g.incoming_inspection_standard AS incomingInspectionStandard,
+        g.default_warehouse AS defaultWarehouse,
+        g.is_key_part AS isKeyPart,
+        g.quality_inspection_method AS qualityInspectionMethod,
+        g.quality_template AS qualityTemplate,
+        g.customs_name_cn AS customsNameCn,
+        g.customs_name_en AS customsNameEn,
+        g.material_cn AS materialCn,
+        g.material_en AS materialEn,
+        g.usage_cn AS usageCn,
+        g.usage_en AS usageEn,
+        g.customs_declaration_hs_code AS customsDeclarationHsCode,
+        g.customs_import_price AS customsImportPrice,
+        g.clearance_country_code AS clearanceCountryCode,
+        g.bg_import_hs_code AS bgImportHsCode,
+        g.clearance_price AS clearancePrice,
+        g.picture_list AS pictureList,
+        g.created_time AS createdTime,
+        g.updated_time AS updatedTime
+    </sql>
+    <sql id="filters">
+        <!-- 同产品ID下普通货品归属组合主货品；空产品ID不建立关联。 -->
+        WHERE NOT EXISTS (
+            SELECT 1 FROM company_goods parent
+            WHERE parent.id != g.id AND parent.product_type = 1 AND g.product_type = 0
+              AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND parent.product_id = g.product_id
+        )
+        <if test="query.productType != null">AND g.product_type = #{query.productType}</if>
+        <if test="query.sku != null">
+            AND (LOWER(g.sku) LIKE LOWER(#{query.sku}) ESCAPE '!'
+                OR EXISTS (
+                    SELECT 1 FROM company_goods child
+                    WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                      AND LOWER(child.sku) LIKE LOWER(#{query.sku}) ESCAPE '!'
+                ))
+        </if>
+        <if test="query.goodsName != null">
+            AND (g.goods_name LIKE #{query.goodsName} ESCAPE '!'
+                OR EXISTS (
+                    SELECT 1 FROM company_goods child
+                    WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                      AND child.goods_name LIKE #{query.goodsName} ESCAPE '!'
+                ))
+        </if>
+        <if test="query.productAttribute != null">
+            AND (g.product_attribute = #{query.productAttribute}
+                OR EXISTS (
+                    SELECT 1 FROM company_goods child
+                    WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                      AND child.product_attribute = #{query.productAttribute}
+                ))
+        </if>
+        <if test="query.productCategory != null">
+            AND (g.product_category = #{query.productCategory}
+                OR EXISTS (
+                    SELECT 1 FROM company_goods child
+                    WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                      AND child.product_category = #{query.productCategory}
+                ))
+        </if>
+        <if test="query.personnelName != null">
+            AND (g.developer LIKE #{query.personnelName} ESCAPE '!'
+                OR g.purchaser_name LIKE #{query.personnelName} ESCAPE '!'
+                OR g.product_owner_names LIKE #{query.personnelName} ESCAPE '!'
+                OR EXISTS (
+                    SELECT 1 FROM company_goods child
+                    WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                      AND (child.developer LIKE #{query.personnelName} ESCAPE '!'
+                          OR child.purchaser_name LIKE #{query.personnelName} ESCAPE '!'
+                          OR child.product_owner_names LIKE #{query.personnelName} ESCAPE '!')
+                ))
+        </if>
+        <if test="query.goodsStatus != null">
+            <choose>
+                <when test="query.goodsStatus == 2">
+                    AND (g.conflict_status = 1 OR g.exception_status = 1
+                        OR EXISTS (
+                            SELECT 1 FROM company_goods child
+                            WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                              AND (child.conflict_status = 1 OR child.exception_status = 1)
+                        ))
+                </when>
+                <otherwise>
+                    AND g.goods_status = #{query.goodsStatus}
+                    AND COALESCE(g.conflict_status, 0) != 1 AND COALESCE(g.exception_status, 0) != 1
+                    AND NOT EXISTS (
+                        SELECT 1 FROM company_goods child
+                        WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
+                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                          AND (child.conflict_status = 1 OR child.exception_status = 1)
+                    )
+                </otherwise>
+            </choose>
+        </if>
+    </sql>
+    <select id="count" resultType="long">
+        SELECT COUNT(*) FROM company_goods g <include refid="filters"/>
+    </select>
+    <select id="findPage" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
+        SELECT <include refid="columns"/> FROM company_goods g <include refid="filters"/>
+        ORDER BY g.updated_time DESC, g.id DESC LIMIT #{query.pageSize} OFFSET #{offset}
+    </select>
+    <select id="lockByProductIdAndGoodsName" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
+        SELECT <include refid="columns"/> FROM company_goods g
+        WHERE g.product_id = #{productId} AND g.goods_name = #{goodsName}
+        ORDER BY g.id FOR UPDATE
+    </select>
+    <select id="findProductParentIds" resultType="long">
+        SELECT id FROM company_goods
+        WHERE product_id = #{productId} AND product_id IS NOT NULL AND TRIM(product_id) != ''
+          AND product_type = 1 AND id != #{id}
+    </select>
+    <select id="lockProductFamily" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
+        SELECT <include refid="columns"/> FROM company_goods g WHERE g.product_id = #{productId}
+        ORDER BY g.id FOR UPDATE
+    </select>
+    <select id="findByProductIds" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
+        SELECT <include refid="columns"/> FROM company_goods g WHERE g.product_id IN
+        <foreach collection="productIds" item="productId" open="(" separator="," close=")">#{productId}</foreach>
+        ORDER BY g.id
+    </select>
+    <select id="findById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
+        SELECT <include refid="columns"/> FROM company_goods g WHERE g.id = #{id}
+    </select>
+    <select id="findBySkus" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
+        SELECT <include refid="columns"/> FROM company_goods g WHERE g.sku IN
+        <foreach collection="skus" item="sku" open="(" separator="," close=")">#{sku}</foreach>
+    </select>
+    <select id="findParentIds" resultType="long">
+        SELECT id FROM company_goods
+        WHERE id != #{id} AND JSON_CONTAINS(group_list, JSON_OBJECT('sku', #{sku}))
+    </select>
+    <select id="findExportParents" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
+        SELECT <include refid="columns"/> FROM company_goods g WHERE g.id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        AND NOT EXISTS (
+            SELECT 1 FROM company_goods parent
+            WHERE parent.id != g.id AND JSON_CONTAINS(parent.group_list, JSON_OBJECT('sku', g.sku))
+        )
+        ORDER BY g.updated_time DESC, g.id DESC
+    </select>
+    <!-- 编辑使用 REPEATABLE_READ，锁住重名记录及扫描间隙，防止并发保存相同名称。 -->
+    <select id="lockNameConflicts" resultType="long">
+        SELECT id FROM company_goods WHERE goods_name IN
+        <foreach collection="names" item="name" open="(" separator="," close=")">#{name}</foreach>
+        AND id NOT IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY id FOR UPDATE
+    </select>
+    <select id="lockById" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
+        SELECT <include refid="columns"/> FROM company_goods g WHERE g.id = #{id} FOR UPDATE
+    </select>
+    <update id="updateSkuRelations">
+        UPDATE company_goods SET group_list = #{goods.groupList}, version = version + 1, updated_time = NOW()
+        WHERE id = #{goods.id} AND version = #{expectedVersion}
+    </update>
+    <update id="update">
+        UPDATE company_goods SET
+            goods_status = 1,
+            sku = #{goods.sku},
+            group_list = #{goods.groupList},
+            goods_name = #{goods.goodsName},
+            sync_scope = #{goods.syncScope},
+            unit = #{goods.unit},
+            developer = #{goods.developer},
+            product_attribute = #{goods.productAttribute},
+            cg_product_length = #{goods.cgProductLength},
+            cg_product_width = #{goods.cgProductWidth},
+            cg_product_height = #{goods.cgProductHeight},
+            net_weight = #{goods.netWeight},
+            gross_weight = #{goods.grossWeight},
+            purchase_cost = #{goods.purchaseCost},
+            supplier_name = #{goods.supplierName},
+            supplier_quote = #{goods.supplierQuote},
+            purchaser_name = #{goods.purchaserName},
+            product_owner_names = #{goods.productOwnerNames},
+            cg_box_length = #{goods.cgBoxLength},
+            cg_box_width = #{goods.cgBoxWidth},
+            cg_box_height = #{goods.cgBoxHeight},
+            cg_package_length = #{goods.cgPackageLength},
+            cg_package_width = #{goods.cgPackageWidth},
+            cg_package_height = #{goods.cgPackageHeight},
+            carton_quantity = #{goods.cartonQuantity},
+            carton_weight = #{goods.cartonWeight},
+            process_route = #{goods.processRoute},
+            product_category = #{goods.productCategory},
+            incoming_inspection_standard = #{goods.incomingInspectionStandard},
+            default_warehouse = #{goods.defaultWarehouse},
+            is_key_part = #{goods.isKeyPart},
+            quality_inspection_method = #{goods.qualityInspectionMethod},
+            quality_template = #{goods.qualityTemplate},
+            customs_name_cn = #{goods.customsNameCn},
+            customs_name_en = #{goods.customsNameEn},
+            material_cn = #{goods.materialCn},
+            material_en = #{goods.materialEn},
+            usage_cn = #{goods.usageCn},
+            usage_en = #{goods.usageEn},
+            customs_declaration_hs_code = #{goods.customsDeclarationHsCode},
+            customs_import_price = #{goods.customsImportPrice},
+            bg_import_hs_code = #{goods.bgImportHsCode},
+            clearance_price = #{goods.clearancePrice},
+            inspection_type = #{goods.inspectionType},
+            picture_list = #{goods.pictureList},
+            version = version + 1,
+            updated_time = NOW()
+        WHERE id = #{goods.id} AND version = #{expectedVersion}
+    </update>
+    <!-- SKU/名称冲突使用当前读及间隙锁；无唯一索引时不能用普通查询后直接写入。 -->
+    <select id="lockImportConflicts" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
+        SELECT <include refid="columns"/> FROM company_goods g
+        WHERE g.sku = #{sku} OR g.goods_name = #{name} ORDER BY g.id FOR UPDATE
+    </select>
+    <insert id="insertImport" useGeneratedKeys="true" keyProperty="goods.id">
+        INSERT INTO company_goods (
+        sku, product_type, group_list, product_id, goods_name, sync_scope, unit, product_attribute, cg_product_length, cg_product_width, cg_product_height, net_weight, gross_weight, purchase_cost, supplier_name, supplier_quote, purchaser_name, product_owner_names, cg_box_length, cg_box_width, cg_box_height, cg_package_length, cg_package_width, cg_package_height, carton_quantity, carton_weight, process_route, product_category, inspection_type, incoming_inspection_standard, default_warehouse, is_key_part, quality_inspection_method, quality_template, customs_name_cn, customs_name_en, material_cn, material_en, usage_cn, usage_en, customs_declaration_hs_code, customs_import_price, clearance_country_code, bg_import_hs_code, clearance_price,
+        source_list, create_method, goods_status, conflict_status, exception_status, version, created_time, updated_time
+        ) VALUES (
+        #{goods.sku}, #{goods.productType}, #{goods.groupList}, #{goods.productId}, #{goods.goodsName}, #{goods.syncScope}, #{goods.unit}, #{goods.productAttribute}, #{goods.cgProductLength}, #{goods.cgProductWidth}, #{goods.cgProductHeight}, #{goods.netWeight}, #{goods.grossWeight}, #{goods.purchaseCost}, #{goods.supplierName}, #{goods.supplierQuote}, #{goods.purchaserName}, #{goods.productOwnerNames}, #{goods.cgBoxLength}, #{goods.cgBoxWidth}, #{goods.cgBoxHeight}, #{goods.cgPackageLength}, #{goods.cgPackageWidth}, #{goods.cgPackageHeight}, #{goods.cartonQuantity}, #{goods.cartonWeight}, #{goods.processRoute}, #{goods.productCategory}, #{goods.inspectionType}, #{goods.incomingInspectionStandard}, #{goods.defaultWarehouse}, #{goods.isKeyPart}, #{goods.qualityInspectionMethod}, #{goods.qualityTemplate}, #{goods.customsNameCn}, #{goods.customsNameEn}, #{goods.materialCn}, #{goods.materialEn}, #{goods.usageCn}, #{goods.usageEn}, #{goods.customsDeclarationHsCode}, #{goods.customsImportPrice}, #{goods.clearanceCountryCode}, #{goods.bgImportHsCode}, #{goods.clearancePrice},
+        JSON_ARRAY('企业商品库'), 0, 1, 0, 0, 0, NOW(), NOW()
+        )
+    </insert>
+
+    <insert id="insertLocal" useGeneratedKeys="true" keyProperty="goods.id">
+        INSERT INTO company_goods (
+        asin, developer, picture_list, sku, product_type, group_list, product_id, goods_name, sync_scope, unit, product_attribute, cg_product_length, cg_product_width, cg_product_height, net_weight, gross_weight, purchase_cost, supplier_name, supplier_quote, purchaser_name, product_owner_names, cg_box_length, cg_box_width, cg_box_height, cg_package_length, cg_package_width, cg_package_height, carton_quantity, carton_weight, process_route, product_category, inspection_type, incoming_inspection_standard, default_warehouse, is_key_part, quality_inspection_method, quality_template, customs_name_cn, customs_name_en, material_cn, material_en, usage_cn, usage_en, customs_declaration_hs_code, customs_import_price, clearance_country_code, bg_import_hs_code, clearance_price,
+        source_list, create_method, goods_status, conflict_status, exception_status, version, created_time, updated_time
+        ) VALUES (
+        #{goods.asin}, #{goods.developer}, #{goods.pictureList}, #{goods.sku}, #{goods.productType}, #{goods.groupList}, #{goods.productId}, #{goods.goodsName}, #{goods.syncScope}, #{goods.unit}, #{goods.productAttribute}, #{goods.cgProductLength}, #{goods.cgProductWidth}, #{goods.cgProductHeight}, #{goods.netWeight}, #{goods.grossWeight}, #{goods.purchaseCost}, #{goods.supplierName}, #{goods.supplierQuote}, #{goods.purchaserName}, #{goods.productOwnerNames}, #{goods.cgBoxLength}, #{goods.cgBoxWidth}, #{goods.cgBoxHeight}, #{goods.cgPackageLength}, #{goods.cgPackageWidth}, #{goods.cgPackageHeight}, #{goods.cartonQuantity}, #{goods.cartonWeight}, #{goods.processRoute}, #{goods.productCategory}, #{goods.inspectionType}, #{goods.incomingInspectionStandard}, #{goods.defaultWarehouse}, #{goods.isKeyPart}, #{goods.qualityInspectionMethod}, #{goods.qualityTemplate}, #{goods.customsNameCn}, #{goods.customsNameEn}, #{goods.materialCn}, #{goods.materialEn}, #{goods.usageCn}, #{goods.usageEn}, #{goods.customsDeclarationHsCode}, #{goods.customsImportPrice}, #{goods.clearanceCountryCode}, #{goods.bgImportHsCode}, #{goods.clearancePrice},
+        JSON_ARRAY('企业商品库'), 1, 0, 0, 0, 0, NOW(), NOW()
+        )
+    </insert>
+    <sql id="goodsDetailAssignments">
+            product_id = #{goods.productId},
+            asin = #{goods.asin},
+            clearance_country_code = #{goods.clearanceCountryCode},
+            goods_name = #{goods.goodsName},
+            sync_scope = #{goods.syncScope},
+            unit = #{goods.unit},
+            developer = #{goods.developer},
+            product_attribute = #{goods.productAttribute},
+            cg_product_length = #{goods.cgProductLength},
+            cg_product_width = #{goods.cgProductWidth},
+            cg_product_height = #{goods.cgProductHeight},
+            net_weight = #{goods.netWeight},
+            gross_weight = #{goods.grossWeight},
+            purchase_cost = #{goods.purchaseCost},
+            supplier_name = #{goods.supplierName},
+            supplier_quote = #{goods.supplierQuote},
+            purchaser_name = #{goods.purchaserName},
+            product_owner_names = #{goods.productOwnerNames},
+            cg_box_length = #{goods.cgBoxLength},
+            cg_box_width = #{goods.cgBoxWidth},
+            cg_box_height = #{goods.cgBoxHeight},
+            cg_package_length = #{goods.cgPackageLength},
+            cg_package_width = #{goods.cgPackageWidth},
+            cg_package_height = #{goods.cgPackageHeight},
+            carton_quantity = #{goods.cartonQuantity},
+            carton_weight = #{goods.cartonWeight},
+            process_route = #{goods.processRoute},
+            product_category = #{goods.productCategory},
+            incoming_inspection_standard = #{goods.incomingInspectionStandard},
+            default_warehouse = #{goods.defaultWarehouse},
+            is_key_part = #{goods.isKeyPart},
+            quality_inspection_method = #{goods.qualityInspectionMethod},
+            quality_template = #{goods.qualityTemplate},
+            customs_name_cn = #{goods.customsNameCn},
+            customs_name_en = #{goods.customsNameEn},
+            material_cn = #{goods.materialCn},
+            material_en = #{goods.materialEn},
+            usage_cn = #{goods.usageCn},
+            usage_en = #{goods.usageEn},
+            customs_declaration_hs_code = #{goods.customsDeclarationHsCode},
+            customs_import_price = #{goods.customsImportPrice},
+            bg_import_hs_code = #{goods.bgImportHsCode},
+            clearance_price = #{goods.clearancePrice},
+            inspection_type = #{goods.inspectionType},
+            picture_list = #{goods.pictureList},
+            version = version + 1,
+            updated_time = NOW()
+    </sql>
+    <update id="modifyLocal">
+        UPDATE company_goods SET
+            goods_status = #{goods.goodsStatus},
+            group_list = #{goods.groupList},
+            product_type = #{goods.productType},
+        <include refid="goodsDetailAssignments"/>
+        WHERE id = #{goods.id} AND version = #{expectedVersion}
+    </update>
+    <update id="updateImport">
+        UPDATE company_goods SET
+            sku = #{goods.sku},
+            group_list = #{goods.groupList},
+            goods_status = #{goods.goodsStatus},
+        <include refid="goodsDetailAssignments"/>
+        WHERE id = #{goods.id} AND version = #{expectedVersion}
+    </update>
+</mapper>
