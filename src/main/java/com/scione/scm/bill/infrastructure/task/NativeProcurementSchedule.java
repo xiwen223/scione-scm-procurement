@@ -5,12 +5,13 @@ import com.scione.scm.bill.application.PoSyncAppService;
 import com.scione.scm.bill.config.ContractAutoCreateScheduleProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
  * 原生调度：先同步领星 PO，再扫描待建合同 PO。
- * 自动创建与完成状态同步直接执行，不使用命名锁；同 PO 重复插入由数据库唯一约束拦截。
+ * 自动创建同步使用持久化进度与任务锁；完成同步按PO查询，两条链路共用接口请求锁。
  */
 @Slf4j
 @Component
@@ -21,10 +22,13 @@ public class NativeProcurementSchedule {
     private final ContractCompletionSyncService contractCompletionSyncService;
     private final ContractAutoCreateScheduleProperties properties;
 
+    @Value("${contract.completion-sync.enabled:true}")
+    private boolean completionSyncEnabled = true;
+
     @Scheduled(cron = "${contract.auto-create.cron:0 0/5 * * * ?}")
     public void execute() {
         if (!properties.isEnabled()) {
-            log.debug("原生采购合同自动创建任务已关闭");
+            log.info("原生采购合同自动创建任务已关闭");
             return;
         }
         try {
@@ -46,6 +50,10 @@ public class NativeProcurementSchedule {
      */
     @Scheduled(cron = "${contract.completion-sync.cron:0 0/5 * * * ?}")
     public void syncExecutingContractsCompletion() {
+        if (!completionSyncEnabled) {
+            log.info("合同完成状态同步任务已关闭");
+            return;
+        }
         try {
             log.info("合同完成状态同步任务开始");
             ContractCompletionSyncService.SyncResult result = contractCompletionSyncService.sync();

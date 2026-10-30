@@ -11,6 +11,9 @@ import lombok.RequiredArgsConstructor;
 public enum ResultCode {
 
     SUCCESS(0, "Success"),
+    SOP_PREVIEW_UNAVAILABLE(1016001, "催办预览条件未满足"),
+    REMINDER_LINK_NOT_FOUND(1016002, "催办链接不存在或已作废"),
+    REMINDER_LINK_INVALID(1016003, "催办链接参数非法"),
     SYSTEM_ERROR(1099001, "系统异常"),
     PARAM_ERROR(1099002, "请求参数错误"),
     REQUEST_METHOD_ERROR(1099003, "请求方式错误"),

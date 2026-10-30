@@ -9,6 +9,8 @@ import org.springframework.stereotype.Component;
 @Component
 @ConfigurationProperties(prefix = "contract.auto-create")
 public class ContractAutoCreateScheduleProperties {
+    /** 无进度时的回补起点；不配则兼容原来的最近6分钟。已有进度后不再使用。 */
+    private java.time.LocalDateTime initialStartTime;
     /** 默认开启，本地、测试和生产环境均执行采购单同步与合同自动创建。 */
     private boolean enabled = true;
     /** Spring cron，默认每 5 分钟执行一次。 */

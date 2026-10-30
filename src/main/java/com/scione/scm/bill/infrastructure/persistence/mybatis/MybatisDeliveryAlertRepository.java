@@ -10,6 +10,7 @@ import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertPage;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertQuery;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertRepository;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertSummary;
+import com.scione.scm.bill.domain.deliveryalert.DeliveryFollowUp;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.DeliveryAlertMapper;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertComponentPO;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertDetailPO;
@@ -20,11 +21,12 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
 
 /**
- * 基于 MyBatis 的采购交付预警看板只读仓储适配器。
+ * 基于 MyBatis 的采购交付预警看板仓储适配器。
  */
 @Repository
 @RequiredArgsConstructor
@@ -33,12 +35,32 @@ public class MybatisDeliveryAlertRepository implements DeliveryAlertRepository {
     private final DeliveryAlertMapper deliveryAlertMapper;
 
     @Override
+    public List<DeliveryFollowUp.Key> findFollowUpKeys(List<DeliveryFollowUp.Key> keys, LocalDate startDate) {
+        return keys.isEmpty() ? List.of() : deliveryAlertMapper.findFollowUpKeys(keys, startDate);
+    }
+
+    @Override
+    public DeliveryFollowUp lockFollowUp(DeliveryFollowUp.Key key) {
+        return deliveryAlertMapper.lockFollowUp(key);
+    }
+
+    @Override
+    public void saveFollowUp(DeliveryFollowUp row, String operator) {
+        deliveryAlertMapper.saveFollowUp(row, operator);
+    }
+
+    @Override
+    public List<DeliveryFollowUp> findFollowUps(List<String> groupKeys) {
+        return groupKeys.isEmpty() ? List.of() : deliveryAlertMapper.findFollowUps(groupKeys);
+    }
+
+    @Override
     public DeliveryAlertPage findPage(DeliveryAlertQuery query) {
         long total = deliveryAlertMapper.count(query.startDate(), query.keyword(), query.types(),
-                query.suppliers(), query.buyers(), query.warehouses(), query.riskLevels(), query.view(),
+                query.suppliers(), query.buyers(), query.warehouses(), query.followers(), query.riskLevels(), query.view(),
                 query.createDateFrom(), query.createDateTo());
         List<DeliveryAlert> records = deliveryAlertMapper.findPage(query.startDate(), query.keyword(), query.types(),
-                        query.suppliers(), query.buyers(), query.warehouses(), query.riskLevels(), query.view(),
+                        query.suppliers(), query.buyers(), query.warehouses(), query.followers(), query.riskLevels(), query.view(),
                         query.createDateFrom(), query.createDateTo(), query.offset(), query.pageSize())
                 .stream()
                 .map(this::toDomain)
@@ -49,7 +71,7 @@ public class MybatisDeliveryAlertRepository implements DeliveryAlertRepository {
     @Override
     public DeliveryAlertSummary summary(DeliveryAlertQuery query) {
         DeliveryAlertSummaryPO po = deliveryAlertMapper.summary(query.startDate(), query.keyword(),
-                query.types(), query.suppliers(), query.buyers(), query.warehouses(), query.riskLevels(),
+                query.types(), query.suppliers(), query.buyers(), query.warehouses(), query.followers(), query.riskLevels(),
                 query.createDateFrom(), query.createDateTo());
         return new DeliveryAlertSummary(po.getTotalCount(), po.getDoneCount(), po.getNormalCount(),
                 po.getDueSoonCount(), po.getOverdueCount(), po.getManualCount(), po.getKitCount());
@@ -68,6 +90,11 @@ public class MybatisDeliveryAlertRepository implements DeliveryAlertRepository {
     @Override
     public List<String> findDistinctBuyers(DeliveryAlertQuery query) {
         return deliveryAlertMapper.findDistinctBuyers(query.startDate());
+    }
+
+    @Override
+    public List<String> findDistinctFollowers(DeliveryAlertQuery query) {
+        return deliveryAlertMapper.findDistinctFollowers(query.startDate());
     }
 
     @Override

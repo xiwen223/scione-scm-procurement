@@ -5,6 +5,7 @@ import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertDe
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertPO;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertSummaryPO;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryBusinessLogPO;
+import com.scione.scm.bill.domain.deliveryalert.DeliveryFollowUp;
 import org.apache.ibatis.annotations.Param;
 
 import java.time.LocalDate;
@@ -16,12 +17,25 @@ import java.util.List;
  */
 public interface DeliveryAlertMapper {
 
+    List<DeliveryFollowUp.Key> findFollowUpKeys(
+            @Param("keys") List<DeliveryFollowUp.Key> keys,
+            @Param("startDate") LocalDate startDate);
+
+    DeliveryFollowUp lockFollowUp(@Param("key") DeliveryFollowUp.Key key);
+
+    int saveFollowUp(@Param("row") DeliveryFollowUp row,
+                     @Param("operator") String operator);
+
+    List<DeliveryFollowUp> findFollowUps(
+            @Param("groupKeys") List<String> groupKeys);
+
     long count(@Param("startDate") LocalDate startDate,
                @Param("keyword") String keyword,
                @Param("types") List<String> types,
                @Param("suppliers") List<String> suppliers,
                @Param("buyers") List<String> buyers,
                @Param("warehouses") List<String> warehouses,
+               @Param("followers") List<String> followers,
                @Param("riskLevels") List<String> riskLevels,
                @Param("view") String view,
                @Param("createDateFrom") LocalDate createDateFrom,
@@ -33,6 +47,7 @@ public interface DeliveryAlertMapper {
                                    @Param("suppliers") List<String> suppliers,
                                    @Param("buyers") List<String> buyers,
                                    @Param("warehouses") List<String> warehouses,
+               @Param("followers") List<String> followers,
                                    @Param("riskLevels") List<String> riskLevels,
                                    @Param("view") String view,
                                    @Param("createDateFrom") LocalDate createDateFrom,
@@ -46,6 +61,7 @@ public interface DeliveryAlertMapper {
                                    @Param("suppliers") List<String> suppliers,
                                    @Param("buyers") List<String> buyers,
                                    @Param("warehouses") List<String> warehouses,
+               @Param("followers") List<String> followers,
                                    @Param("riskLevels") List<String> riskLevels,
                                    @Param("createDateFrom") LocalDate createDateFrom,
                                    @Param("createDateTo") LocalDate createDateTo);
@@ -57,6 +73,8 @@ public interface DeliveryAlertMapper {
     List<String> findDistinctBuyers(@Param("startDate") LocalDate startDate);
 
     List<String> findDistinctWarehouses(@Param("startDate") LocalDate startDate);
+
+    List<String> findDistinctFollowers(@Param("startDate") LocalDate startDate);
 
     List<DeliveryAlertComponentPO> findComponents(@Param("groupKey") String groupKey);
 

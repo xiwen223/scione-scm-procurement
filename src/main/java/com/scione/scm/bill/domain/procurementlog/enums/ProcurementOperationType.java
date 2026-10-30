@@ -13,6 +13,8 @@ public enum ProcurementOperationType {
     DELETE("DELETE", "删除", false),
     UPLOAD_SEAL("UPLOAD_SEAL", "上传印章", false),
     REMOVE_SEAL("REMOVE_SEAL", "移除印章", false),
+    IMPORT("IMPORT", "导入", true),
+    IMPORT_FAILED("IMPORT_FAILED", "导入失败", true),
 
     // 以下类型由合同模块写入 procurement_operation_log（business_type=1），本模块不产出，
     // 只在此登记，供日志页把 operation_type 显示成中文并可筛选（对应 ContractOperationLog 里的常量）。
@@ -28,8 +30,8 @@ public enum ProcurementOperationType {
 
     /**
      * 是否记录操作详情（procurement_operation_log.operation_details）。
-     * 只有「修改」记录逐字段的「字段名 / 修改前 / 修改后」，其余操作类型一律不写详情，
-     * 避免日志里堆积没有检索价值的字段快照。
+     * 修改记录字段变更；导入记录统计、错误文件引用及失败原因。
+     * 其他类型是否保存详情由各枚举项明确声明。
      */
     private final boolean detailSupported;
 }

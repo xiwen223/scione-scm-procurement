@@ -11,10 +11,12 @@ import com.scione.scm.bill.config.DeliveryAlertProperties;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertPage;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertQuery;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertRepository;
+import com.scione.scm.bill.domain.deliveryalert.DeliveryFollowUp;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * 采购交付预警看板查询应用服务。
@@ -29,8 +31,14 @@ public class DeliveryAlertAppService {
     public PageResult<DeliveryAlertListItemVO> findPage(DeliveryAlertQuery query) {
         query = withConfiguredStartDate(query);
         DeliveryAlertPage page = repository.findPage(query);
+        var followUps = repository.findFollowUps(page.records().stream().map(r -> r.groupKey()).toList())
+                .stream().collect(Collectors.groupingBy(DeliveryFollowUp::groupKey));
         return PageResult.of(query.pageNum(), query.pageSize(), page.total(),
-                page.records().stream().map(DeliveryAlertListItemVO::from).toList());
+                page.records().stream().map(record -> {
+                    DeliveryAlertListItemVO dto = DeliveryAlertListItemVO.from(record);
+                    dto.setFollowUps(followUps.getOrDefault(record.groupKey(), List.of()));
+                    return dto;
+                }).toList());
     }
 
     public DeliveryAlertSummaryVO summary(DeliveryAlertQuery query) {
@@ -47,12 +55,20 @@ public class DeliveryAlertAppService {
         dto.setSuppliers(repository.findDistinctSuppliers(query));
         dto.setBuyers(repository.findDistinctBuyers(query));
         dto.setWarehouses(repository.findDistinctWarehouses(query));
+        dto.setFollowers(repository.findDistinctFollowers(query));
         return dto;
     }
 
     public List<DeliveryAlertComponentVO> findComponents(String groupKey) {
+        var followUps = repository.findFollowUps(List.of(groupKey));
         return repository.findComponents(groupKey).stream()
-                .map(DeliveryAlertComponentVO::from)
+                .map(record -> {
+                    DeliveryAlertComponentVO dto = DeliveryAlertComponentVO.from(record);
+                    dto.setFollowUps(followUps.stream()
+                        .filter(row -> row.orderSn().equals(dto.getOrderSn()) && row.sku().equals(dto.getSku()))
+                        .toList());
+                    return dto;
+                })
                 .toList();
     }
 

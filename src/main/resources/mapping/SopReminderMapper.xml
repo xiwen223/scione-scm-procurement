@@ -1,0 +1,327 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderMapper">
+
+    <!-- ========== 未发送异常（record_type=3） ========== -->
+
+    <insert id="insertSkippedRows">
+        INSERT INTO reminder_push_record
+            (record_type,send_status,scheduled_at,node_code,business_sn,receiver_key,error_code,error_message,skip_key)
+        VALUES
+        <foreach collection="rows" item="row" separator=",">
+            (3,0,#{row.scheduledAt},#{row.nodeCode},#{row.businessSn},#{row.receiverKey},
+             #{row.errorCode},#{row.errorMessage},#{row.skipKey})
+        </foreach>
+        ON DUPLICATE KEY UPDATE error_message=VALUES(error_message),updated_at=CURRENT_TIMESTAMP
+    </insert>
+
+    <!-- ========== 历史清理 ========== -->
+
+    <!--
+      已关闭待办的推送明细。
+      待办 status 非 0 表示已完成或已取消，不会再被催办，这段历史对发送去重和节点9额度判断已无作用。
+      updated_at 是关闭时的最后修改时间，用「关闭满保留期」衡量而不是创建时间，避免把刚关闭的记录提前删掉。
+      只删 record_type=2：消息批次(1)承载发送状态和补发上下文，待办本身(reminder_todo)承载原因历史，都不动。
+    -->
+    <delete id="deleteClosedTodoDetails">
+        DELETE FROM reminder_push_record
+        WHERE record_type=2
+          AND todo_id IN (
+              SELECT id FROM reminder_todo
+              WHERE status&lt;&gt;0 AND updated_at&lt;=#{closedBefore}
+          )
+        LIMIT #{limit}
+    </delete>
+
+    <select id="countClosedTodoDetails" resultType="int">
+        SELECT COUNT(*) FROM reminder_push_record
+        WHERE record_type=2
+          AND todo_id IN (
+              SELECT id FROM reminder_todo
+              WHERE status&lt;&gt;0 AND updated_at&lt;=#{closedBefore}
+          )
+    </select>
+
+    <!--
+      未发送异常记录只用于回答「这个人为什么没收到」，不参与去重、额度与自动重试。
+      同一异常重跑靠 skip_key 唯一键落回同一行，删除历史不会让未来的记录重复堆积。
+    -->
+    <delete id="deleteSkippedRecords">
+        DELETE FROM reminder_push_record
+        WHERE record_type=3 AND scheduled_at&lt;=#{scheduledBefore}
+        LIMIT #{limit}
+    </delete>
+
+    <select id="countSkippedRecords" resultType="int">
+        SELECT COUNT(*) FROM reminder_push_record
+        WHERE record_type=3 AND scheduled_at&lt;=#{scheduledBefore}
+    </select>
+
+    <!-- ========== 待办 ========== -->
+
+    <!-- 旧版本共用的token保留给普通节点，关联货件首次发送时分配独立token。 -->
+    <select id="findStableTokens" resultType="string">
+        SELECT t.view_token
+        FROM reminder_todo t
+        WHERE t.assignee_userid=#{userid} AND t.status=0 AND t.view_token IS NOT NULL
+          AND t.view_token&lt;&gt;''
+          AND t.node_code
+          <choose>
+              <when test="packing">=</when>
+              <otherwise>&lt;&gt;</otherwise>
+          </choose>
+          'PACKING_RELATE'
+          <if test="packing">
+              AND NOT EXISTS (SELECT 1 FROM reminder_todo other
+                              WHERE other.view_token=t.view_token AND other.node_code&lt;&gt;'PACKING_RELATE')
+          </if>
+        ORDER BY t.id LIMIT 1
+    </select>
+
+    <insert id="upsertTodos">
+        INSERT INTO reminder_todo
+            (node_code,business_type,business_sn,item_key,round_key,entered_at,assignee_userid,status,view_token)
+        VALUES
+        <foreach collection="rows" item="row" separator=",">
+            (#{row.nodeCode},#{row.businessType},#{row.businessSn},#{row.itemKey},#{row.roundKey},
+             #{row.enteredAt},#{row.assigneeUserid},0,#{row.viewToken})
+        </foreach>
+        ON DUPLICATE KEY UPDATE
+            entered_at=VALUES(entered_at),status=0,view_token=VALUES(view_token)
+    </insert>
+
+    <select id="findTodoKeys" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderMapper$TodoKey">
+        SELECT id,business_type,business_sn,item_key
+        FROM reminder_todo
+        WHERE node_code=#{nodeCode} AND round_key=#{roundKey}
+    </select>
+
+    <update id="refreshTodoTokens">
+        UPDATE reminder_todo SET view_token=#{token}
+        WHERE assignee_userid=#{userid} AND status=0
+          AND node_code
+          <choose>
+              <when test="packing">=</when>
+              <otherwise>&lt;&gt;</otherwise>
+          </choose>
+          'PACKING_RELATE'
+    </update>
+
+    <update id="suppressGoodsReadyTodos">
+        UPDATE reminder_todo SET status=2
+        WHERE node_code='GOODS_READY' AND assignee_userid=#{userid} AND status=0
+          AND id IN <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </update>
+
+    <update id="cancelMissingRfStartTodos">
+        UPDATE reminder_todo SET status=2
+        WHERE node_code='RF_CREATE' AND status=0
+          AND business_sn IN <foreach collection="sns" item="sn" open="(" separator="," close=")">#{sn}</foreach>
+    </update>
+
+    <update id="closeVerifiedTodos">
+        UPDATE reminder_todo SET status=1
+        WHERE node_code=#{nodeCode} AND assignee_userid=#{userid} AND status=0
+          AND id IN <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </update>
+
+    <!-- 最新完整候选中已退出的待办标记结束，历史保留；数据有疑问的单号暂不关闭。 -->
+    <update id="closeAbsentTodos">
+        UPDATE reminder_todo SET status=1 WHERE node_code=#{nodeCode} AND status=0
+        <if test="activeIds != null and activeIds.size() > 0">
+            AND id NOT IN <foreach collection="activeIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        </if>
+        <if test="uncertainSns != null and uncertainSns.size() > 0">
+            AND business_sn NOT IN
+            <foreach collection="uncertainSns" item="sn" open="(" separator="," close=")">#{sn}</foreach>
+        </if>
+    </update>
+
+    <!-- ========== 发送历史与去重 ========== -->
+
+    <!-- 成功次数只统计状态2的批次；发送中/未知结果不算成功，也不占用阶段额度。 -->
+    <select id="findDispatchHistory"
+            resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderMapper$DispatchHistoryRow">
+        SELECT d.todo_id AS todo_id,
+               COUNT(DISTINCT CASE WHEN b.send_status=2 THEN b.id END) AS successes,
+               COALESCE(MAX(CASE WHEN b.send_status=2 THEN d.reminder_stage END),0) AS highest_stage,
+               <!-- 同一时点已成功(2)或仍在发送(1)才挡；UNKNOWN(4)不挡，留给 unknown_count 按次数判断。 -->
+               MAX(CASE WHEN b.scheduled_at=#{scheduledAt} AND b.send_status IN (1,2) THEN 1 ELSE 0 END) AS slot_blocked,
+               MAX(CASE WHEN b.send_status=1 THEN 1 ELSE 0 END) AS sending,
+               COALESCE(SUM(CASE WHEN b.send_status=4 THEN 1 ELSE 0 END),0) AS unknown_count,
+               MAX(CASE WHEN b.send_status IN (1,4) THEN 1 ELSE 0 END) AS unresolved,
+               MAX(CASE WHEN b.send_status IN (0,3) AND b.next_retry_at IS NOT NULL
+                        AND JSON_UNQUOTE(JSON_EXTRACT(b.send_result,'$.expiresAt'))&gt;#{now} THEN 1 ELSE 0 END) AS retry_pending
+        FROM reminder_push_record d
+        JOIN reminder_push_record b ON b.id=d.parent_id
+        WHERE d.record_type=2 AND b.record_type=1
+          AND d.todo_id IN <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        GROUP BY d.todo_id
+    </select>
+
+    <!-- 补偿也核对成功额度：已成功两次，或已有更高阶段成功，则不再补发。 -->
+    <select id="countGoodsReadyQuotaBlocked" resultType="int">
+        SELECT COUNT(*)
+        FROM reminder_push_record original
+        JOIN reminder_todo t ON t.id=original.todo_id
+        WHERE original.parent_id=#{batchId} AND original.record_type=2
+          AND t.node_code='GOODS_READY'
+          AND (
+            (SELECT COUNT(DISTINCT b.id)
+             FROM reminder_push_record d
+             JOIN reminder_push_record b ON b.id=d.parent_id
+             WHERE d.record_type=2 AND b.record_type=1 AND b.send_status=2 AND d.todo_id=t.id) &gt;= 2
+            OR EXISTS (SELECT 1
+                       FROM reminder_push_record d
+                       JOIN reminder_push_record b ON b.id=d.parent_id
+                       WHERE d.record_type=2 AND b.record_type=1 AND b.send_status=2
+                         AND d.todo_id=t.id AND d.reminder_stage &gt;= original.reminder_stage)
+          )
+    </select>
+
+    <!-- ========== 推送批次 ========== -->
+
+    <insert id="insertPushBatch" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO reminder_push_record (record_type,scheduled_at,recipient_userid,send_status,sent_at,send_result)
+        VALUES (1,#{scheduledAt},#{recipientUserid},1,#{sentAt},#{sendResult})
+    </insert>
+
+    <insert id="insertPushDetails">
+        INSERT INTO reminder_push_record (record_type,parent_id,todo_id,reminder_stage,scheduled_at) VALUES
+        <foreach collection="rows" item="row" separator=",">
+            (2,#{batchId},#{row.todoId},#{row.reminderStage},#{row.scheduledAt})
+        </foreach>
+    </insert>
+
+    <!-- 幂等：只有仍处于发送中的批次才能落结果，重复确认会更新0行。 -->
+    <update id="finishPush">
+        UPDATE reminder_push_record
+        SET send_status=#{sendStatus},send_result=#{resultJson},next_retry_at=#{nextRetryAt}
+        WHERE id=#{batchId} AND record_type=1 AND send_status=1
+    </update>
+
+    <update id="stopRetry">
+        UPDATE reminder_push_record SET next_retry_at=NULL
+        WHERE id=#{id} AND record_type=1 AND send_status IN (0,3)
+    </update>
+
+    <!-- 同时兼容旧的多节点上下文；新装箱上下文仅包含PACKING_RELATE。 -->
+    <sql id="dispatchScope">
+        COALESCE(FIND_IN_SET('PACKING_RELATE',JSON_UNQUOTE(JSON_EXTRACT(send_result,'$.nodeCode'))),0)
+        <choose>
+            <when test="packing">&gt;0</when>
+            <otherwise>=0</otherwise>
+        </choose>
+    </sql>
+
+    <select id="findStaleSending" resultType="long">
+        SELECT id FROM reminder_push_record
+        WHERE record_type=1 AND send_status=1
+          AND COALESCE(sent_at,updated_at,created_at)&lt;=#{before}
+          AND <include refid="dispatchScope"/>
+        ORDER BY id LIMIT 100
+    </select>
+
+    <update id="markSendingUnknown">
+        UPDATE reminder_push_record
+        SET send_status=4,next_retry_at=NULL,
+            send_result=JSON_SET(CASE WHEN JSON_TYPE(send_result)='OBJECT' THEN send_result
+                                      ELSE JSON_OBJECT('originalContext',send_result) END,
+                                 '$.outcome',CAST(#{outcomeJson} AS JSON))
+        WHERE id=#{id} AND record_type=1 AND send_status=1
+          AND COALESCE(sent_at,updated_at,created_at)&lt;=#{before}
+          AND <include refid="dispatchScope"/>
+    </update>
+
+    <!-- 分区筛选后再LIMIT，避免另一类失败批次占满前20条而阻塞本类补偿。 -->
+    <select id="findDueRetries" resultType="com.scione.scm.bill.domain.sop.SopReminderRepository$RetryBatch">
+        SELECT id,send_result AS context_json FROM reminder_push_record
+        WHERE record_type=1 AND send_status IN (0,3) AND next_retry_at&lt;=#{now}
+          AND <include refid="dispatchScope"/>
+        ORDER BY next_retry_at,id LIMIT 20
+    </select>
+
+    <!-- 更新成功才可以请求渠道；次数在请求前持久化，进程退出也不会重置。 -->
+    <update id="claimRetry">
+        UPDATE reminder_push_record
+        SET send_status=1,send_result=#{contextJson},sent_at=#{now},next_retry_at=NULL
+        WHERE id=#{id} AND record_type=1 AND send_status IN (0,3) AND next_retry_at&lt;=#{now}
+    </update>
+
+    <select id="findRetryTodos" resultType="com.scione.scm.bill.domain.sop.SopReminderRepository$RetryTodo">
+        SELECT t.business_sn,t.item_key,t.round_key,d.reminder_stage AS stage,t.node_code
+        FROM reminder_push_record d
+        JOIN reminder_todo t ON t.id=d.todo_id
+        WHERE d.parent_id=#{id} AND d.record_type=2 AND t.status=0 AND t.assignee_userid=#{userid}
+    </select>
+
+    <select id="countRetryTodos" resultType="int">
+        SELECT COUNT(*) FROM reminder_push_record WHERE parent_id=#{id} AND record_type=2
+    </select>
+
+    <!-- ========== 免登录外链 ========== -->
+
+    <select id="findAssigneeByToken" resultType="string">
+        SELECT assignee_userid FROM reminder_todo WHERE view_token=#{token} LIMIT 1
+    </select>
+
+    <!-- 外链token解析成消息批次：链接里的token是每条消息独立的viewToken。 -->
+    <select id="findLinkBatch" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderMapper$LinkBatch">
+        SELECT id,recipient_userid AS recipientUserid,sent_at
+        FROM reminder_push_record
+        WHERE record_type=1 AND JSON_UNQUOTE(JSON_EXTRACT(send_result,'$.viewToken'))=#{token}
+        LIMIT 1
+    </select>
+
+    <!-- 老token兜底：按待办实时状态读，只服务稳定view_token的旧链接。 -->
+    <select id="findActiveTodos" resultType="com.scione.scm.bill.domain.sop.SopReminderRepository$TodoRow">
+        SELECT t.id,t.node_code,t.business_type,t.business_sn,t.entered_at,
+               COALESCE(p.cnt,0) AS reminder_count,p.first_at AS first_reminded_at
+        FROM reminder_todo t
+        LEFT JOIN (SELECT d.todo_id,COUNT(*) AS cnt,MIN(b.sent_at) AS first_at
+                   FROM reminder_push_record d
+                   JOIN reminder_push_record b ON b.id=d.parent_id AND b.record_type=1
+                   WHERE d.record_type=2 AND b.send_status=2
+                   GROUP BY d.todo_id) p ON p.todo_id=t.id
+        WHERE t.view_token=#{token} AND t.status=0
+        ORDER BY t.node_code,t.entered_at,t.id
+    </select>
+
+    <!-- 消息快照读：待办清单以这条消息发出时为准（后来被关闭也照常显示）；
+         催办次数/首次催办时间只统计这条消息发出之前的成功推送，保证再次打开内容不变。 -->
+    <select id="findSnapshotTodos" resultType="com.scione.scm.bill.domain.sop.SopReminderRepository$TodoRow">
+        SELECT t.id,t.node_code,t.business_type,t.business_sn,t.entered_at,
+               COALESCE(p.cnt,0) AS reminder_count,p.first_at AS first_reminded_at
+        FROM reminder_push_record d
+        JOIN reminder_todo t ON t.id=d.todo_id
+        LEFT JOIN (SELECT d2.todo_id,COUNT(*) AS cnt,MIN(b.sent_at) AS first_at
+                   FROM reminder_push_record d2
+                   JOIN reminder_push_record b ON b.id=d2.parent_id AND b.record_type=1
+                   WHERE d2.record_type=2 AND b.send_status=2 AND b.sent_at&lt;=#{sentAt}
+                   GROUP BY d2.todo_id) p ON p.todo_id=t.id
+        WHERE d.parent_id=#{batchId} AND d.record_type=2
+        ORDER BY t.node_code,t.entered_at,t.id
+    </select>
+
+    <select id="findReasons"
+            resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderMapper$ReasonRow">
+        SELECT todo_id,reason,created_at FROM reminder_reason_history
+        WHERE todo_id IN <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY created_at DESC,id DESC
+    </select>
+
+    <!-- 插入同时校验token归属：消息快照里的待办即使后来被关闭，也允许在老链接上补填原因；
+         稳定view_token兜底路径仍要求待办未关闭。 -->
+    <insert id="insertReason">
+        INSERT INTO reminder_reason_history (todo_id,reason,author_userid)
+        SELECT t.id,#{reason},t.assignee_userid
+        FROM reminder_todo t
+        WHERE t.id=#{todoId} AND (EXISTS (
+            SELECT 1 FROM reminder_push_record b
+            JOIN reminder_push_record d ON d.parent_id=b.id AND d.record_type=2
+            WHERE b.record_type=1
+              AND JSON_UNQUOTE(JSON_EXTRACT(b.send_result,'$.viewToken'))=#{token}
+              AND d.todo_id=t.id AND b.recipient_userid=t.assignee_userid
+        ) OR (t.view_token=#{token} AND t.status=0))
+    </insert>
+</mapper>

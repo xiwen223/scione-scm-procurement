@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderSourceMapper">
+
+    <!-- 取得锁后检查最新一轮，不能跳过失败记录去找更早的成功记录；仍在running也必须停止。 -->
+    <select id="selectLatestIncrementalTask"
+            resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderSourceMapper$SyncTaskRow">
+        SELECT id,task_type,status,error_msg,start_time,end_time
+        FROM lx_sync_task_h
+        WHERE task_type='incremental'
+        ORDER BY id DESC LIMIT 1
+    </select>
+
+    <!-- 小时同步把业务数据、五个来源进度和任务success放在同一事务提交，进度必须一致。 -->
+    <select id="selectSyncStateSummary"
+            resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderSourceMapper$SyncStateRow">
+        SELECT COUNT(*) AS source_count,
+               MIN(updated_until) AS min_updated_until,
+               MAX(updated_until) AS max_updated_until
+        FROM lx_sync_state_h
+        WHERE source_code IN ('plan','order','receipt','request_funds','funds_pool')
+    </select>
+
+    <select id="selectLatestSuccessCollectedAt" resultType="java.time.LocalDateTime">
+        SELECT start_time FROM lx_sync_task_h
+        WHERE task_type='incremental' AND status='success'
+        ORDER BY id DESC LIMIT 1
+    </select>
+
+    <!--
+      节点1：待采购(2)/部分采购(3)的PP、杭州店铺及全部SKU。
+      p=完整快照展开的SKU行，h=PP主表，l=按business_id汇总的“创建”日志。
+      COALESCE优先使用主表明确的创建时间，缺失时才取创建日志的ol_time。
+      创建时间都缺失的记录仍读出来，由Service放进excluded说明原因，而非伪造日期。
+    -->
+    <select id="selectPoCreatePlans" resultType="com.scione.scm.bill.domain.sop.SopReminderPreview$PlanRow">
+        SELECT DISTINCT p.plan_sn,p.sid,
+               p.cg_uid AS purchaser_uid,
+               p.cg_opt_username AS purchaser_name,
+               COALESCE(h.create_time,l.created_at) AS created_at
+        FROM lx_sync_document_h d
+        JOIN JSON_TABLE(d.raw_payload,'$[*]' COLUMNS (
+                plan_sn VARCHAR(32) PATH '$.plan_sn',
+                sid BIGINT PATH '$.sid',
+                cg_uid BIGINT PATH '$.cg_uid',
+                cg_opt_username VARCHAR(128) PATH '$.cg_opt_username',
+                status INT PATH '$.status')) p ON TRUE
+        JOIN lx_purchase_plan_h h ON h.plan_sn=p.plan_sn
+        LEFT JOIN (SELECT business_id,MIN(ol_time) AS created_at
+                   FROM lx_business_log_h
+                   WHERE ol_type_text='创建' AND business_id LIKE '1_PP%'
+                   GROUP BY business_id) l
+               ON l.business_id=CONCAT('1_',p.plan_sn)
+        WHERE d.business_id=CONCAT('1_',p.plan_sn)
+          AND p.status IN (2,3)
+          AND p.sid IN
+          <foreach collection="shopIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
+          AND (COALESCE(h.create_time,l.created_at)&gt;=#{createdFrom} OR COALESCE(h.create_time,l.created_at) IS NULL)
+        ORDER BY created_at,p.plan_sn,p.sid
+    </select>
+
+    <select id="selectDocuments"
+            resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderSourceMapper$DocumentRow">
+        SELECT business_id,raw_payload FROM lx_sync_document_h
+    </select>
+
+    <select id="selectBusinessLogs"
+            resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderSourceMapper$BusinessLogRow">
+        SELECT business_id,ol_time,ol_type_text,ol_detail,ol_uid,realname
+        FROM lx_business_log_h
+        ORDER BY ol_time,business_id
+    </select>
+
+    <!-- 有效合同口径：未删除且状态为已签署/履行中；同PO多份时按创建时间取最早。 -->
+    <select id="selectContracts" resultType="com.scione.scm.bill.domain.sop.SopReminderSourceRepository$ActiveContract">
+        SELECT id,purchase_order_no AS po_sn,create_time AS created_at
+        FROM contract
+        WHERE is_deleted=0 AND status IN (1,2)
+        <if test="poSns != null">
+            AND purchase_order_no IN
+            <foreach collection="poSns" item="poSn" open="(" separator="," close=")">#{poSn}</foreach>
+        </if>
+        ORDER BY create_time,id
+    </select>
+
+    <!-- 跟单看板、导入与催办统一复用DeliveryFollowUp，不再维护第二份Excel信息模型。 -->
+    <select id="selectFollowUps" resultType="com.scione.scm.bill.domain.deliveryalert.DeliveryFollowUp">
+        SELECT order_sn,sku,follower_name,expected_delivery_date,reason,remark,NULL AS group_key
+        FROM reminder_excel_import
+        <where>
+            <if test="poSns != null">
+                order_sn IN
+                <foreach collection="poSns" item="poSn" open="(" separator="," close=")">#{poSn}</foreach>
+            </if>
+        </where>
+    </select>
+
+    <select id="selectReceipts"
+            resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderSourceMapper$ReceiptRow">
+        SELECT order_sn,business_order_sn AS po_sn,status
+        FROM lx_receipt_order_h
+        <where>
+            <if test="poSns != null">
+                business_order_sn IN
+                <foreach collection="poSns" item="poSn" open="(" separator="," close=")">#{poSn}</foreach>
+            </if>
+        </where>
+    </select>
+
+    <select id="selectLatestSellerCookies" resultType="string">
+        SELECT cookies FROM lx_cookies_cache ORDER BY cookie_date DESC LIMIT 1
+    </select>
+</mapper>

@@ -3,6 +3,8 @@ spring:
     import:
       - optional:nacos:${spring.application.name}.yaml?refreshEnabled=true
       - optional:nacos:${spring.application.name}-database.yaml?refreshEnabled=true
+      # 催办读取独立的Nacos配置。
+      - optional:nacos:${spring.application.name}-sop.yaml?refreshEnabled=true
 
   cloud:
     nacos:

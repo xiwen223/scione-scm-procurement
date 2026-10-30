@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderDispatchAttemptMapper">
+
+    <!-- 开轮：同一时点重复触发靠唯一键落到同一行，attempts 累加，状态复位为 RUNNING。 -->
+    <insert id="upsertRunning">
+        INSERT INTO reminder_dispatch_attempt
+            (node_codes,scheduled_at,status,attempts,started_at)
+        VALUES
+            (#{nodeCodes},#{scheduledAt},'RUNNING',1,#{startedAt})
+        ON DUPLICATE KEY UPDATE
+            status='RUNNING',
+            attempts=attempts+1,
+            started_at=VALUES(started_at),
+            finished_at=NULL,
+            error_msg=NULL,
+            next_retry_at=NULL,
+            updated_at=CURRENT_TIMESTAMP
+    </insert>
+
+    <!--
+      正常跑完。unresolved_count 大于0 时保留 next_retry_at，
+      补偿任务据此再跑一轮；下一轮把 UNKNOWN 重新发出去，成功后该值归零。
+    -->
+    <update id="markSucceeded">
+        UPDATE reminder_dispatch_attempt
+        SET status='SUCCESS',
+            todos=#{todos},
+            pushes=#{pushes},
+            unresolved_count=#{unresolvedCount},
+            error_msg=NULL,
+            next_retry_at=#{nextRetryAt,jdbcType=TIMESTAMP},
+            finished_at=#{finishedAt,jdbcType=TIMESTAMP},
+            updated_at=CURRENT_TIMESTAMP
+        WHERE scheduled_at=#{scheduledAt} AND node_codes=#{nodeCodes}
+    </update>
+
+    <!-- 失败统一走这里：status 传 FAILED 表示还会补发，GIVE_UP 表示转人工。 -->
+    <update id="markFailed">
+        UPDATE reminder_dispatch_attempt
+        SET status=#{status},
+            error_msg=#{errorMessage,jdbcType=VARCHAR},
+            next_retry_at=#{nextRetryAt,jdbcType=TIMESTAMP},
+            finished_at=#{finishedAt,jdbcType=TIMESTAMP},
+            updated_at=CURRENT_TIMESTAMP
+        WHERE scheduled_at=#{scheduledAt} AND node_codes=#{nodeCodes}
+    </update>
+
+    <!--
+      三种情况会整轮重试
+      1.整轮炸了（抛异常），attempt表状态为FAILED，execute 的 catch 分支挂 now+15分钟，靠每分钟扫描扫
+      2.跑完但是有结果未知的消息：企微和邮箱没有给明确回执，attempt表状态为SUCCESS，execute 的 else 分支挂 now+15分钟
+      3.进程跑到一半被杀/重启，attempt 行永远停在 RUNNING(超30分钟)
+    -->
+    <select id="selectDueRetries"
+            resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderDispatchAttemptMapper$AttemptRow">
+        SELECT id,node_codes,scheduled_at,attempts
+        FROM reminder_dispatch_attempt
+        WHERE attempts &lt; #{maxAttempts}
+          AND scheduled_at &gt;= #{todayStart}
+          AND (
+                (next_retry_at IS NOT NULL AND next_retry_at &lt;= #{now}
+                 AND (status='FAILED' OR unresolved_count &gt; 0))
+             OR (status='RUNNING' AND started_at &lt;= #{staleBefore})
+          )
+        ORDER BY scheduled_at,id
+        LIMIT 20
+    </select>
+
+    <!--
+      该时点之后同一组节点是否已有新轮次。
+      装箱每5分钟一轮，失败行等15分钟再补必然撞车，有新轮次就交给它，旧的不再补。
+    -->
+    <select id="countLaterAttempts" resultType="int">
+        SELECT COUNT(1)
+        FROM reminder_dispatch_attempt
+        WHERE node_codes=#{nodeCodes}
+          AND scheduled_at &gt; #{scheduledAt}
+          AND scheduled_at &gt;= #{todayStart}
+    </select>
+
+    <!--
+      历史轮次清理。
+      补发扫描只认当天（scheduled_at >= todayStart），超过保留期的行不再参与任何判断，
+      留着的唯一价值是事后查「那天几点为什么没发」，保留期按排查需要定。
+    -->
+    <delete id="deleteBefore">
+        DELETE FROM reminder_dispatch_attempt
+        WHERE scheduled_at &lt;= #{scheduledBefore}
+        LIMIT #{limit}
+    </delete>
+
+    <select id="countBefore" resultType="int">
+        SELECT COUNT(1)
+        FROM reminder_dispatch_attempt
+        WHERE scheduled_at &lt;= #{scheduledBefore}
+    </select>
+
+</mapper>

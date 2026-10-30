@@ -12,6 +12,8 @@ public interface ProcurementOperationLogMapper {
     /** 写入一条操作日志；由 {@code ProcurementOperationLogRecorder} 统一调用。 */
     int insert(ProcurementOperationLogPO log);
 
+    ProcurementOperationLogPO findById(@Param("id") Long id);
+
     long count(
             @Param("dataName") String dataName,
             @Param("businessType") Integer businessType,

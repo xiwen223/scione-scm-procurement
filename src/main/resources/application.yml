@@ -7,8 +7,8 @@ spring:
     active: ${SPRING_PROFILES_ACTIVE:dev}
   servlet:
     multipart:
-      # 印章图片允许 2MB（框架默认 1MB 偏小），与前端 2MB 校验保持一致
-      max-file-size: 2MB
+      # 跟单Excel允许5MB；印章图片仍由原业务校验限制为2MB。
+      max-file-size: 5MB
       max-request-size: 10MB
 
 shipping-mark:
@@ -19,12 +19,18 @@ shipping-mark:
 
 delivery-alert:
   start-date: ${DELIVERY_ALERT_START_DATE:2026-08-01}
+  import-template-object-key: ${DELIVERY_ALERT_IMPORT_TEMPLATE_OBJECT_KEY:}
 
 contract:
   auto-create:
     enabled: ${CONTRACT_AUTO_CREATE_ENABLED:true}
-    # Spring cron：默认每 5 分钟同步领星 PO 后自动创建合同。
-    cron: ${CONTRACT_AUTO_CREATE_CRON:0 0/5 * * * ?}
+    # Spring cron：每 5 分钟同步领星 PO 后自动创建合同。
+    # 与装箱催办错峰，在每小时第2、7、12等分钟执行。
+    cron: ${CONTRACT_AUTO_CREATE_CRON:0 2/5 * * * ?}
+  completion-sync:
+    enabled: ${CONTRACT_COMPLETION_SYNC_ENABLED:true}
+    # 在每小时第4、9、14等分钟执行；长请求仍可能与其他任务重叠。
+    cron: ${CONTRACT_COMPLETION_SYNC_CRON:0 4/5 * * * ?}
 
 purchase-delivery-analysis:
   start-date: ${PURCHASE_DELIVERY_ANALYSIS_START_DATE:2026-01-01}
@@ -35,7 +41,8 @@ lingxing:
     app-id: ${LINGXING_APP_ID:}
     app-secret: ${LINGXING_APP_SECRET:}
     connect-timeout: ${LINGXING_CONNECT_TIMEOUT:10s}
-    read-timeout: ${LINGXING_READ_TIMEOUT:30s}
+    # 实时催办的发货计划接口单页（391条）实测30-35秒，30秒余量为负，一被限流必超时。
+    read-timeout: ${LINGXING_READ_TIMEOUT:90s}
     token-ttl: ${LINGXING_TOKEN_TTL:90m}
 
 fadada:
