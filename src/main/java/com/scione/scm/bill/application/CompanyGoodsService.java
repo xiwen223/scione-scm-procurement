@@ -124,9 +124,6 @@ public class CompanyGoodsService {
                 }
             }
         }
-        if (CollectionUtil.isNotEmpty(goodsMapper.lockNameConflicts(new ArrayList<>(names), new ArrayList<>(editedIds)))) {
-            throw new BusinessException(ResultCode.DATABASE_DUPLICATE_KEY, "相同名称不允许重复");
-        }
         List<String> uploadedImageKeys = new ArrayList<>();
         Set<String> removedImageKeys = new LinkedHashSet<>();
         if (imagesChanged) registerImageCleanup(uploadedImageKeys, removedImageKeys);
