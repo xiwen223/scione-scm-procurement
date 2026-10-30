@@ -1,5 +1,6 @@
 package com.scione.scm.bill.domain.sop;
 
+import com.scione.scm.bill.domain.sop.enums.NodeCode;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -19,7 +20,7 @@ import java.util.List;
  * @param excluded 本次排除的单据及原因，方便人工核查
  */
 public record SopReminderPreview(
-        String nodeCode, String nodeName, LocalDateTime calculatedAt,
+        NodeCode nodeCode, String nodeName, LocalDateTime calculatedAt,
         long syncTaskId, LocalDateTime sourceSyncedAt, List<Long> shopIds,
         int candidateCount, List<RecipientGroup> groups, List<Excluded> excluded) {
 

@@ -1,5 +1,6 @@
 package com.scione.scm.bill.domain.sop;
 
+import com.scione.scm.bill.domain.sop.enums.NodeCode;
 import com.scione.scm.bill.domain.sop.SopReminderPreview.Candidate;
 import com.scione.scm.bill.domain.sop.SopReminderLinkView.ReasonItem;
 
@@ -21,7 +22,7 @@ public interface SopReminderRepository {
     record Link(String token, Long batchId, String assigneeUserid, LocalDateTime sentAt) { }
 
     /** 外链里的一条待办：id待办ID、nodeCode节点、businessType业务类型、businessSn业务单号、enteredAt进入时间、reminderCount催办次数、firstRemindedAt首次催办时间。 */
-    record TodoRow(long id, String nodeCode, String businessType, String businessSn,
+    record TodoRow(long id, NodeCode nodeCode, String businessType, String businessSn,
                    LocalDateTime enteredAt, int reminderCount, LocalDateTime firstRemindedAt) { }
 
     /** 建待办的返回：token稳定外链令牌、todoIds待办ID列表、stages对应阶段列表。 */
@@ -39,16 +40,16 @@ public interface SopReminderRepository {
     record RetryBatch(long id, String contextJson) { }
 
     /** 补发时需要核对的待办快照：businessSn业务单号、itemKey明细键、roundKey轮次键、stage阶段、nodeCode节点。 */
-    record RetryTodo(String businessSn, String itemKey, String roundKey, int stage, String nodeCode) { }
+    record RetryTodo(String businessSn, String itemKey, String roundKey, int stage, NodeCode nodeCode) { }
 
     /** 类型3为未发送异常，不关联推送明细，因此不会占用发送去重或成功次数。 */
-    void recordSkippedRecipients(String nodeCode, LocalDateTime scheduledAt, List<SkippedRecipient> rows);
+    void recordSkippedRecipients(NodeCode nodeCode, LocalDateTime scheduledAt, List<SkippedRecipient> rows);
 
     /** 装箱与普通催办各自串行；锁在独立连接上，不随业务事务提交。 */
     <T> T withDispatchLock(boolean packing, Supplier<T> action);
 
     /** 调用方先取得发送锁。整组待办一次提交，再调用发送渠道。 */
-    PreparedGroup prepareGroup(String nodeCode, String userid, List<Candidate> candidates);
+    PreparedGroup prepareGroup(NodeCode nodeCode, String userid, List<Candidate> candidates);
 
     /** 普通节点按计划时点去重；节点9只按成功记录占用阶段和两次总额度。 */
     List<DispatchDecision> dispatchDecisions(List<Long> ids, List<Integer> stages,
@@ -67,10 +68,10 @@ public interface SopReminderRepository {
     void cancelMissingRfStartTodos(List<String> businessSns);
 
     /** 只关闭发送前已明确退出该节点的本批待办；无法确认的记录保持原状。 */
-    void closeVerifiedTodos(String nodeCode, String userid, List<Long> ids);
+    void closeVerifiedTodos(NodeCode nodeCode, String userid, List<Long> ids);
 
     /** 最新完整候选中已退出的待办标记结束，历史保留。数据有疑问的单号暂不关闭。 */
-    void closeAbsentTodos(String nodeCode, List<Long> activeIds, List<String> uncertainSns);
+    void closeAbsentTodos(NodeCode nodeCode, List<Long> activeIds, List<String> uncertainSns);
 
     /** 发送前保存消息批次和完整清单；保存失败不调用渠道。成功计数以消息批次状态2为准。 */
     long startPush(String userid, List<Long> todoIds, List<Integer> stages,

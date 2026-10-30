@@ -1,7 +1,10 @@
 package com.scione.scm.bill.application;
 
+import com.scione.scm.bill.domain.sop.enums.NodeCode;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.config.SopReminderProperties;
@@ -43,6 +46,12 @@ public class SopReminderSendService {
     private final SopReminderStatusVerifier statusVerifier;//发送前实时状态复核
     private final ObjectMapper objectMapper;//上下文->JSON
 
+    /** 仅用于日志去重，不参与待办、发送或重试判断；每个节点只保留最近一轮的问题人员。 */
+    private final Map<NodeCode, Set<RecipientProblem>> lastRecipientProblems = new java.util.EnumMap<>(NodeCode.class);
+
+    private record RecipientProblem(String receiverKey, String reason) { }
+    private record RecipientProblemSummary(String name, Set<String> businessSns) { }
+
     /**
      * 免登录外链路径，与前端 app/reminder、app/packing 两个路由一一对应。
      * 前端是静态导出（out/ + nginx），不能有动态路由；token 以查询参数传递。
@@ -83,41 +92,46 @@ public class SopReminderSendService {
      * @param unresolvedCount 发送结果未知（UNKNOWN）的批次数，用于轮次级补发判断
      * @param details         每个责任人的发送结果
      */
-    public record SendResult(String nodeCode,
+    public record SendResult(@JsonSerialize(converter = NodeCode.CodesToText.class)
+                              @JsonDeserialize(converter = NodeCode.TextToCodes.class)
+                              List<NodeCode> nodeCode,
                              int candidateGroups, int todos, int pushes, List<String> skipped,
                              int unresolvedCount, List<GroupResult> details) {
     }
 
     /** 定时任务多节点正式入口，正式发送的通用入口,一个时点可能多个节点同时到期,一次发多个,直接转 dispatch */
-    public SendResult sendNodes(List<String> nodeCodes, LocalDateTime scheduledAt, String onlyBusinessSn) {
+    public SendResult sendNodes(List<NodeCode> nodeCodes, LocalDateTime scheduledAt, String onlyBusinessSn) {
         return dispatch(nodeCodes,scheduledAt,onlyBusinessSn);
     }
 
     /** 发送主流程：取锁 → 算候选 → 按收件人汇总 → 发送前复核 → 组消息落库 → 发渠道，返回一轮发送结果。 */
-    private SendResult dispatch(List<String> nodeCodes,LocalDateTime scheduledAt,String onlyBusinessSn) {
+    private SendResult dispatch(List<NodeCode> nodeCodes,LocalDateTime scheduledAt,String onlyBusinessSn) {
         if (scheduledAt == null) throw new BusinessException(ResultCode.PARAM_ERROR, "计划催办时间不能为空");//计划时点必填
-        List<String> codes = nodeCodes.stream().distinct().toList();//节点列表去重，防重复传同一个节点
-        if (codes.contains("PACKING_RELATE") && codes.size() > 1) {
+        if (nodeCodes == null || nodeCodes.isEmpty() || nodeCodes.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "催办节点不能为空");
+        }
+        List<NodeCode> codes = nodeCodes.stream().distinct().toList();//节点列表去重，防重复传同一个节点
+        if (codes.contains(NodeCode.PACKING_RELATE) && codes.size() > 1) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "普通催办与装箱催办必须分别调用");//装箱不能和普通节点混在一轮
         }
-        if (codes.contains("PACKING_RELATE") && !packingMailClient.configured()) {
+        if (codes.contains(NodeCode.PACKING_RELATE) && !packingMailClient.configured()) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "关联货件SMTP邮件配置未完成，请配置发件邮箱、授权码和TLS服务器参数");//装箱要发邮件，先确认SMTP配好了
         }
-        return repository.withDispatchLock(codes.contains("PACKING_RELATE"), () -> {//装箱走装箱锁，普通走普通锁，两把锁互不干扰
-            reconcileInterruptedSends(codes.contains("PACKING_RELATE"));//先把上次"发送中"但没结果的记录处理掉
+        return repository.withDispatchLock(codes.contains(NodeCode.PACKING_RELATE), () -> {//装箱走装箱锁，普通走普通锁，两把锁互不干扰
+            reconcileInterruptedSends(codes.contains(NodeCode.PACKING_RELATE));//先把上次"发送中"但没结果的记录处理掉
             // 取得对应锁后才查询候选；装箱每次直接查询领星，不等待Python同步，也不复用旧候选。
-            for (String code : codes) requireEnabled(code);//逐个节点确认开关是开着的
+            for (NodeCode code : codes) requireEnabled(code);//逐个节点确认开关是开着的
             long started = System.nanoTime();//计时起点，后面算候选查询耗时
             log.info("催办已取得发送锁，开始查询候选：nodes={}", codes);
             // 第1步：算候选。previewNodes 对普通节点共享一次快照，装箱/PO创建走独立入口。
-            Map<String, SopReminderPreview> previews = ruleService.previewNodes(codes);//key=节点码，value=该节点的候选清单
+            Map<NodeCode, SopReminderPreview> previews = ruleService.previewNodes(codes);//key=节点码，value=该节点的候选清单
             log.info("催办候选查询完成：nodes={}, elapsedMs={}", codes,
                     java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
             // 第2步：把候选按实际收件人汇总成 pending（同人多节点合并成一封）。
             Map<String, PendingMessage> pending = new LinkedHashMap<>();//key=收件人标识，value=该收件人的待发消息
             List<String> skipped = new ArrayList<>();//本轮跳过的原因列表
             int groups = 0;//预览分组数（含因缺账号跳过的）
-            for (String code : codes) {
+            for (NodeCode code : codes) {
                 PreparedNode prepared = prepare(code, scheduledAt, onlyBusinessSn, previews.get(code), pending);//每个节点分别准备
                 groups += prepared.candidateGroups();
                 skipped.addAll(prepared.skipped());
@@ -128,7 +142,7 @@ public class SopReminderSendService {
             for (PendingMessage message : pending.values()) {
                 // 等待其他节点期间可能被关停，发送前再次检查整条消息。
                 message.nodes.forEach(this::requireEnabled);
-                boolean packing=message.nodes.contains("PACKING_RELATE");//这条消息是不是装箱邮件
+                boolean packing=message.nodes.contains(NodeCode.PACKING_RELATE);//这条消息是不是装箱邮件
                 if(packing && message.packingTriggerIds.isEmpty()) {
                     skipped.add(message.person.getName()+"：当前有"+message.stages.size()+"条关联货件待办，无可触发发送的新增单据（或新增单据结果待确认/已有重试计划）");
                     log.info("关联货件本轮不发送：userid={}, currentTodos={}, newTodos=0",message.person.getUserid(),message.stages.size());
@@ -148,7 +162,7 @@ public class SopReminderSendService {
                 String viewToken = java.util.UUID.randomUUID().toString().replace("-", "");//生成32位随机token作为外链访问凭据
                 String body = packing ? properties.getSend().getFrontBaseUrl() + PACKING_LINK_PATH + viewToken
                         : compose(viewToken, properties.getSend().getFrontBaseUrl(), attemptNo);//装箱直接拼链接，普通拼"提示+链接"正文
-                PushContext context = new PushContext(String.join(",", message.nodes), message.person.getUserid(), body,
+                PushContext context = new PushContext(List.copyOf(message.nodes), message.person.getUserid(), body,
                         packing ? List.of() : List.of(message.person.getMobile()), 1,
                         now().plus(properties.getSend().getRetryMaxAge()).toString(), null,
                         packing ? "EMAIL" : "WEBHOOK", packing ? message.person.getEmail() : null,
@@ -166,7 +180,7 @@ public class SopReminderSendService {
                 details.add(new GroupResult(0, message.person.getName(), message.person.getUserid(),
                         message.stages.size(), outcome.success(), body, error));//记录这个收件人的发送结果
             }
-            return new SendResult(String.join(",", codes), groups, details.stream().mapToInt(GroupResult::todos).sum(),
+            return new SendResult(codes, groups, details.stream().mapToInt(GroupResult::todos).sum(),
                     details.size(), skipped, unresolved, details);//汇总本轮发送结果返回
         });
     }
@@ -175,12 +189,12 @@ public class SopReminderSendService {
     private static final class PendingMessage {
         final SopReminderProperties.Person person;//实际收件人（已解析出的企微账号/姓名/手机号/邮箱）
         final String token;//该收件人的稳定外链token
-        final Set<String> nodes = new java.util.LinkedHashSet<>();//这条消息包含哪些节点（同人多节点汇总）
+        final Set<NodeCode> nodes = new java.util.LinkedHashSet<>();//这条消息包含哪些节点（同人多节点汇总）
         final Map<Long, Integer> stages = new LinkedHashMap<>();//待办id → 提醒阶段(1或2)
         /** 新单只负责触发；stages保留该收件人的完整关联货件清单。 */
         final Set<Long> packingTriggerIds=new java.util.LinkedHashSet<>();//装箱：哪些待办是"触发发送的新单"
         final Map<Long, Candidate> candidates = new LinkedHashMap<>();//待办id → 候选
-        final Map<Long, String> todoNodes = new LinkedHashMap<>();//待办id → 节点码
+        final Map<Long, NodeCode> todoNodes = new LinkedHashMap<>();//待办id → 节点码
         /** 该收件人本轮待发单据里历史上 UNKNOWN 的最大次数；0 表示首次发送。 */
         int unknownCount = 0;
         PendingMessage(SopReminderProperties.Person person, String token) { this.person = person; this.token = token; }//构造时先定下收件人和token
@@ -191,15 +205,15 @@ public class SopReminderSendService {
 
     /** 发送前最后一道状态校验：对整条消息的候选做实时复核，把已完成/退出节点的待办摘掉并关闭。如果不复核就会催已经办完的事 */
     private void verifyPending(PendingMessage message, List<String> skipped) {
-        Map<String,List<Candidate>> expected=new LinkedHashMap<>();
+        Map<NodeCode,List<Candidate>> expected=new LinkedHashMap<>();
         // 按节点把候选重新归类，交给 Verifier 逐个判定。
         message.candidates.forEach((id,c)->expected.computeIfAbsent(message.todoNodes.get(id),ignored->new ArrayList<>()).add(c));
         long started=System.nanoTime();
         log.info("发送前开始实时状态复核：nodes={}, todos={}",message.nodes,message.stages.size());
         var states=statusVerifier.verify(message.person.getUserid(),expected);
-        Map<String,List<Long>> completed=new LinkedHashMap<>();
+        Map<NodeCode,List<Long>> completed=new LinkedHashMap<>();
         for(Long id:new ArrayList<>(message.stages.keySet())) {
-            String code=message.todoNodes.get(id);Candidate candidate=message.candidates.get(id);
+            NodeCode code=message.todoNodes.get(id);Candidate candidate=message.candidates.get(id);
             var decision=states.getOrDefault(SopReminderStatusVerifier.Key.of(code,candidate),Decision.UNKNOWN);
             // 仍该发（ELIGIBLE）的保留；其余从消息里摘掉。
             if(decision==Decision.ELIGIBLE)continue;
@@ -247,12 +261,12 @@ public class SopReminderSendService {
         return new ArrayList<>(merged.values());
     }
     //对一个节点:校验开关/渠道/重试参数 → 处理「缺收件人」的排除项 → 把候选建成待办(prepareGroup)→ 查历史做去重判断(dispatchDecisions)→ 把该发的候选按收件人汇总进 pending。
-    private PreparedNode prepare(String nodeCode, LocalDateTime scheduledAt, String onlyBusinessSn,
+    private PreparedNode prepare(NodeCode nodeCode, LocalDateTime scheduledAt, String onlyBusinessSn,
                                SopReminderPreview preview, Map<String, PendingMessage> pending) {
         // 定时候选可能在等锁期间被关闭，真正查询和发送前校验开关；两条链路同一规则。
         requireEnabled(nodeCode);
         SopReminderProperties.Send send = properties.getSend();
-        boolean packing = "PACKING_RELATE".equals(nodeCode);
+        boolean packing = nodeCode == NodeCode.PACKING_RELATE;
         if (!channelConfigured(packing) || !hasText(send.getFrontBaseUrl())) {
             throw new BusinessException(ResultCode.PARAM_ERROR,
                     "缺少当前节点发送渠道及frontBaseUrl配置");
@@ -262,7 +276,7 @@ public class SopReminderSendService {
         List<String> skipped = new ArrayList<>();//记录本轮跳过的原因（供返回和日志）
         List<Long> activeIds = new ArrayList<>();//本轮建出来的待办id，用于最后关闭不在候选里的旧待办
         List<String> uncertainSns=new ArrayList<>(preview.excluded().stream().map(SopReminderPreview.Excluded::businessSn).toList());//不确定的单号，暂不关闭其旧待办
-        if ("RF_CREATE".equals(nodeCode)) {
+        if (nodeCode == NodeCode.RF_CREATE) {
             // RF_CREATE：起算时间缺失的单，取消它的旧待办（不再显示旧创建时间兜底值）。
             List<String> missingStarts = preview.excluded().stream()
                     .filter(row -> row.reason().equals("节点起算时间缺失：没有明确进入待到货的日志"))
@@ -272,6 +286,7 @@ public class SopReminderSendService {
             missingStarts.forEach(sn -> log.info("RF_CREATE本期不催办：businessSn={}, reason=尚未进入待到货，起算时间未到", sn));
         }
         List<SopReminderRepository.SkippedRecipient> missingRecipients = new ArrayList<>();//因收件人缺失而跳过的记录，最后统一写skip表
+        int missingFollowerRows = 0;
         for (SopReminderPreview.Excluded excluded : preview.excluded()) {
             // 只挑"缺采购员/创建人/跟单员/审批责任人"这类收件人问题的排除项，记成跳过记录。
             if ((onlyBusinessSn == null || onlyBusinessSn.equals(excluded.businessSn()))
@@ -280,7 +295,11 @@ public class SopReminderSendService {
                 missingRecipients.add(new SopReminderRepository.SkippedRecipient(excluded.businessSn(), null,
                         "SOURCE_RECIPIENT_UNKNOWN", excluded.reason(), "", 0));
                 skipped.add(excluded.businessSn() + "：" + excluded.reason());
-                log.error("催办未发送：node={}, businessSn={}, reason={}", nodeCode, excluded.businessSn(), excluded.reason());
+                if (excluded.reason().contains("缺少跟单员")) {
+                    missingFollowerRows++;
+                } else {
+                    log.error("催办未发送：node={}, businessSn={}, reason={}", nodeCode, excluded.businessSn(), excluded.reason());
+                }
             }
         }
 
@@ -289,6 +308,7 @@ public class SopReminderSendService {
         long prepareStarted = System.nanoTime();
         log.info("催办待办处理开始：node={}, businessGroups={}, actualGroups={}, candidates={}",
                 nodeCode, preview.groups().size(), actualGroups.size(), preview.candidateCount());
+        Map<RecipientProblem, RecipientProblemSummary> recipientProblems = new LinkedHashMap<>();
         for (RecipientGroup group : actualGroups) {
             List<Candidate> groupCandidates = group.candidates();
             if (groupCandidates.isEmpty()) continue;//空分组跳过
@@ -304,8 +324,10 @@ public class SopReminderSendService {
                                 "RECIPIENT_MAPPING_INVALID", problem, candidate.itemKey(), candidate.stage()));
                     }
                 }
-                log.error("催办未发送：node={}, receiverKey={}, candidates={}, reason={}",
-                        nodeCode, group.recipientKey(), groupCandidates.size(), problem);
+                RecipientProblem key = new RecipientProblem(group.recipientKey(), problem);
+                RecipientProblemSummary summary = recipientProblems.computeIfAbsent(key,
+                        ignored -> new RecipientProblemSummary(recipientName(group, person), new java.util.LinkedHashSet<>()));
+                groupCandidates.stream().map(Candidate::businessSn).forEach(summary.businessSns()::add);
                 continue;
             }
             // 全量候选都建待办：关单要按本轮完整候选判断，只发指定单号时也不能少建。
@@ -313,7 +335,7 @@ public class SopReminderSendService {
             activeIds.addAll(prepared.todoIds());
             List<SopReminderPreview.Candidate> candidates=new ArrayList<>();//最终要发的候选
             List<Long> deliverIds=new ArrayList<>();List<Integer> stages=new ArrayList<>();//对应候选的待办id和阶段
-            boolean capped="GOODS_READY".equals(nodeCode);//货物备齐节点有"最多两次"额度
+            boolean capped=nodeCode == NodeCode.GOODS_READY;//货物备齐节点有"最多两次"额度
             // 查历史推送决定每条该不该发（去重）；装箱不查历史，只发新单。
             List<SopReminderRepository.DispatchDecision> decisions=packing?List.of():repository.dispatchDecisions(
                     prepared.todoIds(),prepared.stages(),scheduledAt,capped);//查历史推送决定每条该不该发
@@ -339,7 +361,7 @@ public class SopReminderSendService {
             }
             if (candidates.isEmpty()) continue;//这个收件人本轮没有可发的，跳过
             // 装箱关联货件独立发送，其他节点仍按实际收件人汇总。
-            String messageKey = person.getUserid() + ("PACKING_RELATE".equals(nodeCode) ? "|packing" : "|standard");//装箱和普通分开组消息
+            String messageKey = person.getUserid() + (nodeCode == NodeCode.PACKING_RELATE ? "|packing" : "|standard");//装箱和普通分开组消息
             PendingMessage message = pending.computeIfAbsent(messageKey,
                     ignored -> new PendingMessage(person, prepared.token()));
             if (!java.util.Objects.equals(packing ? message.person.getEmail() : message.person.getMobile(),
@@ -357,10 +379,44 @@ public class SopReminderSendService {
         }
         // 与定时任务保持一致：本轮不在候选里的待办关闭；测试链路也关，才能验证定时任务效果。
         repository.recordSkippedRecipients(nodeCode, scheduledAt, missingRecipients);//把因缺收件人跳过的记录写进skip表（record_type=3）
+        if (missingFollowerRows > 0) {
+            log.info("催办跳过未导入跟单员的数据：node={}, excludedRows={}，明细已记录未发送原因", nodeCode, missingFollowerRows);
+        }
         repository.closeAbsentTodos(nodeCode,activeIds,uncertainSns.stream().distinct().toList());//关闭"本轮候选里已经没了"的旧待办，不确定的单号不关
+        reportRecipientProblems(nodeCode, recipientProblems);
         log.info("催办待办处理完成：node={}, activeTodos={}, elapsedMs={}", nodeCode, activeIds.size(),
                 java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - prepareStarted));
         return new PreparedNode(preview.groups().size(), skipped);//返回预览分组数 + 跳过原因列表
+    }
+
+    /** 首次/原因变化才打ERROR；持续问题只汇总INFO。完整扫描不再发现旧问题后，清除其日志去重状态。 */
+    private synchronized void reportRecipientProblems(NodeCode nodeCode,
+            Map<RecipientProblem, RecipientProblemSummary> current) {
+        Set<RecipientProblem> previous = lastRecipientProblems.getOrDefault(nodeCode, Set.of());
+        int repeatedPeople = 0;
+        int repeatedDocuments = 0;
+        for (var entry : current.entrySet()) {
+            RecipientProblem problem = entry.getKey();
+            RecipientProblemSummary summary = entry.getValue();
+            if (previous.contains(problem)) {
+                repeatedPeople++;
+                repeatedDocuments += summary.businessSns().size();
+            } else {
+                log.error("催办人员配置异常：node={}, receiverKey={}, recipientName={}, affectedDocuments={}, reason={}；相同问题后续仅汇总INFO",
+                        nodeCode, problem.receiverKey(), summary.name(), summary.businessSns().size(), problem.reason());
+            }
+        }
+        if (repeatedPeople > 0) {
+            log.info("催办人员配置异常持续，本轮省略重复ERROR：node={}, recipients={}, affectedDocuments={}",
+                    nodeCode, repeatedPeople, repeatedDocuments);
+        }
+        for (RecipientProblem problem : previous) {
+            if (!current.containsKey(problem)) {
+                log.info("催办人员原配置问题本轮不再出现：node={}, receiverKey={}, previousReason={}（可能配置已修复或已无对应候选）",
+                        nodeCode, problem.receiverKey(), problem.reason());
+            }
+        }
+        lastRecipientProblems.put(nodeCode, Set.copyOf(current.keySet()));
     }
 
     /** 展示名：优先配置里的人名，其次预览分组名，最后退回分组键。 */
@@ -376,7 +432,7 @@ public class SopReminderSendService {
     }
 
     /** 发送前校验节点开关：Nacos里没配或enabled=false都直接报错停止。 */
-    private void requireEnabled(String nodeCode) {
+    private void requireEnabled(NodeCode nodeCode) {
         SopReminderProperties.Node node = properties.getNodes().get(nodeCode);//取该节点的Nacos配置
         if (node == null || !Boolean.TRUE.equals(node.getEnabled())) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "该催办节点未开启");//没配或开关关闭，报错
@@ -421,17 +477,19 @@ public class SopReminderSendService {
      * @param subject        装箱邮件主题，普通为null
      * @param viewToken      外链访问token（32位）
      */
-    public record PushContext(String nodeCode, String userid, String message, List<String> mobiles,
+    public record PushContext(@JsonSerialize(converter = NodeCode.CodesToText.class)
+                              @JsonDeserialize(converter = NodeCode.TextToCodes.class)
+                              List<NodeCode> nodeCode, String userid, String message, List<String> mobiles,
                               int attempts, String expiresAt, WeComWebhookClient.SendOutcome outcome,
                               String channel, String recipientEmail, String subject, String viewToken) {
         /** 兼容构造器：无viewToken（老数据/非外链场景），其余字段完整。 */
-        public PushContext(String nodeCode, String userid, String message, List<String> mobiles,
+        public PushContext(List<NodeCode> nodeCode, String userid, String message, List<String> mobiles,
                            int attempts, String expiresAt, WeComWebhookClient.SendOutcome outcome,
                            String channel, String recipientEmail, String subject) {
             this(nodeCode, userid, message, mobiles, attempts, expiresAt, outcome, channel, recipientEmail, subject, null);
         }
         /** 兼容构造器：无渠道/邮箱/主题/viewToken（最老的推送记录），只保留基础字段。 */
-        public PushContext(String nodeCode, String userid, String message, List<String> mobiles,
+        public PushContext(List<NodeCode> nodeCode, String userid, String message, List<String> mobiles,
                            int attempts, String expiresAt, WeComWebhookClient.SendOutcome outcome) {
             this(nodeCode, userid, message, mobiles, attempts, expiresAt, outcome, null, null, null);
         }
@@ -440,7 +498,7 @@ public class SopReminderSendService {
     /** 真正调用渠道发消息：装箱走邮件，普通走企微webhook；发完按结果写回批次状态和重试时间。 */
     private WeComWebhookClient.SendOutcome deliver(long batchId, PushContext context) {
         SopReminderProperties.Send send=properties.getSend();//发送配置
-        boolean packing = "PACKING_RELATE".equals(context.nodeCode());//是不是装箱消息
+        boolean packing = context.nodeCode().contains(NodeCode.PACKING_RELATE);//是不是装箱消息
         WeComWebhookClient.SendOutcome outcome;//发送结果
         log.info("催办渠道发送开始：batchId={}, nodes={}, userid={}, channel={}, attempt={}",
                 batchId,context.nodeCode(),context.userid(),context.channel(),context.attempts());
@@ -488,7 +546,7 @@ public class SopReminderSendService {
                     if (!packing) repository.stopRetry(batch.id());//上下文解析失败，普通节点停止重试
                     continue;
                 }
-                boolean packingContext = "PACKING_RELATE".equals(context.nodeCode());//这条消息是不是装箱消息
+                boolean packingContext = context.nodeCode().contains(NodeCode.PACKING_RELATE);//这条消息是不是装箱消息
                 if (packingContext != packing) continue;//消息类型和当前补偿通道不一致，跳过
                 if (!retryable(context) || !channelConfigured(packing) || !stillEligible(batch.id(), context)) {
                     repository.stopRetry(batch.id());//不可重试、渠道没配、或资格复核不通过，都停止
@@ -528,13 +586,13 @@ public class SopReminderSendService {
 
     /** 判断一条消息是否还具备重发资格：上下文完整、结果可重试、次数未超上限、未过期、渠道信息齐全。 */
     private boolean retryable(PushContext context) {
-        if (context == null || !hasText(context.nodeCode()) || !hasText(context.userid())
+        if (context == null || context.nodeCode() == null || context.nodeCode().isEmpty() || !hasText(context.userid())
                 || !hasText(context.message()) || context.mobiles() == null
                 || context.outcome() == null || !context.outcome().retryable()
                 || (context.outcome().state() != SendState.UNSENT
                     && context.outcome().state() != SendState.FAILED)
                 || context.attempts() < 1 || context.attempts() >= properties.getSend().getMaxAttempts()) return false;//上下文缺字段、结果明确不可重试、或次数已到上限
-        if ("PACKING_RELATE".equals(context.nodeCode()) && (!"EMAIL".equals(context.channel())
+        if (context.nodeCode().contains(NodeCode.PACKING_RELATE) && (!"EMAIL".equals(context.channel())
                 || !PackingMailClient.validAddress(context.recipientEmail()) || !PackingMailClient.SUBJECT.equals(context.subject()))) return false;//装箱必须是EMAIL渠道且邮箱、主题都合法
         try { return now().isBefore(LocalDateTime.parse(context.expiresAt())); }//没过期才允许重发
         catch (RuntimeException exception) { return false; }
@@ -542,15 +600,15 @@ public class SopReminderSendService {
 
     /** 补发前复核：重新算一遍候选，确认原消息里的待办现在还在候选名单里、还归这个收件人。 */
     private boolean stillEligible(long batchId, PushContext context) {
-        Map<String, List<Candidate>> eligible = new LinkedHashMap<>();//当前仍该催的候选，按节点归类
-        for (String code : context.nodeCode().split(",")) {//原消息可能含多个节点，逐个复核
+        Map<NodeCode, List<Candidate>> eligible = new LinkedHashMap<>();//当前仍该催的候选，按节点归类
+        for (NodeCode code : context.nodeCode()) {//原消息可能含多个节点，逐个复核
             SopReminderProperties.Node node = properties.getNodes().get(code);
-            if (node == null || !Boolean.TRUE.equals(node.getEnabled()) || !ruleService.supportsNode(code)) return false;//节点已关停或不存在，不再补发
+            if (node == null || !Boolean.TRUE.equals(node.getEnabled())) return false;//节点已关停或不存在，不再补发
             List<Candidate> candidates = new ArrayList<>();
             for (RecipientGroup group : ruleService.preview(code).groups()) {//重算该节点的候选
                 SopReminderProperties.Person person = personFor(group);
                 if (person != null && context.userid().equals(person.getUserid())) {//只认发给原收件人的那部分
-                    if ("PACKING_RELATE".equals(code)) {
+                    if (code == NodeCode.PACKING_RELATE) {
                         if (!java.util.Objects.equals(person.getEmail(), context.recipientEmail())) return false;//装箱邮箱变了，不补发
                     } else if (!hasText(person.getMobile()) || !List.of(person.getMobile()).equals(context.mobiles())) return false;//普通手机号变了，不补发
                     candidates.addAll(group.candidates());
@@ -560,7 +618,7 @@ public class SopReminderSendService {
         }
         List<SopReminderRepository.RetryTodo> original = repository.retryTodos(batchId, context.userid());//原批次里的待办明细
         if (original.isEmpty() || original.size() != repository.retryTodoCount(batchId)) return false;//明细缺失或不完整，不补发
-        Map<String,List<Candidate>> expected = new LinkedHashMap<>();
+        Map<NodeCode,List<Candidate>> expected = new LinkedHashMap<>();
         for (var todo : original) {//逐条核对：原待办是否还能在"当前候选"里找到完全匹配的那条
             Candidate match = eligible.getOrDefault(todo.nodeCode(),List.of()).stream()
                     .filter(candidate -> repository.matchesRetry(candidate,todo,context.userid())).findFirst().orElse(null);

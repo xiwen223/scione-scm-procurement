@@ -39,7 +39,7 @@ public class SopReminderProperties {
     /** 发送配置：群机器人、外链地址、人员映射。 */
     private Send send = new Send();
     /** 必填：key使用业务节点编码；仅配置了的节点会被注册定时任务。 */
-    private Map<String, Node> nodes;
+    private Map<NodeCode, Node> nodes;
     /** 可选：历史记录清理。不配置时不注册清理任务，库里的记录永不自动删除。 */
     private Purge purge;
 
@@ -69,17 +69,17 @@ public class SopReminderProperties {
             require(node != null, "sop.reminder.nodes." + code);//每个节点配置对象不能为空
             require(node.getEnabled() != null, "sop.reminder.nodes." + code + ".enabled");//节点开关必填
             require(hasText(node.getCron()), "sop.reminder.nodes." + code + ".cron");//节点cron必填
-            if (NodeCode.PO_CREATE.name().equals(code)) {
+            if (code == NodeCode.PO_CREATE) {
                 require(hasText(node.getShopNamePrefix()), "sop.reminder.nodes." + code + ".shop-name-prefix");//PO_CREATE必须配店铺前缀
             }
-            if (Set.of("PO_APPROVAL", "RF_PAYMENT", "CR_RECEIPT").contains(code)) {
+            if (Set.of(NodeCode.PO_APPROVAL, NodeCode.RF_PAYMENT, NodeCode.CR_RECEIPT).contains(code)) {
                 require(hasText(node.getReceiverKey()), "sop.reminder.nodes." + code + ".receiver-key");//固定角色节点必须配receiver-key
             }
-            if (NodeCode.GOODS_READY.name().equals(code)) {
+            if (code == NodeCode.GOODS_READY) {
                 require(node.getFirstDueDays() != null, "sop.reminder.nodes." + code + ".first-due-days");//货物备齐第一阶段天数必填
                 require(node.getSecondDueDays() != null, "sop.reminder.nodes." + code + ".second-due-days");//货物备齐第二阶段天数必填
             }
-            if (NodeCode.DELIVERY_CONFIRM.name().equals(code)) {
+            if (code == NodeCode.DELIVERY_CONFIRM) {
                 require(node.getDeliveryDueDays() != null, "sop.reminder.nodes." + code + ".delivery-due-days");//交期确认天数必填
             }
         });

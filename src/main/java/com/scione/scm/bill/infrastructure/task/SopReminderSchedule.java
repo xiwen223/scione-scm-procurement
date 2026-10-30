@@ -1,9 +1,10 @@
 package com.scione.scm.bill.infrastructure.task;
 
-import com.scione.scm.bill.application.SopReminderService;
+import com.scione.scm.bill.domain.sop.enums.NodeCode;
 import com.scione.scm.bill.application.SopReminderSendService;
 import com.scione.scm.bill.config.SopReminderProperties;
 import com.scione.scm.bill.domain.sop.SopReminderDispatchAttemptRepository;
+import com.scione.scm.bill.domain.sop.SopReminderRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
@@ -13,7 +14,6 @@ import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Component;
 import java.time.ZoneId;
-import java.util.Arrays;
 
 /** 统一定时入口。 */
 @Slf4j
@@ -27,10 +27,9 @@ public class SopReminderSchedule {
     private static final java.time.Duration RETRY_DELAY = java.time.Duration.ofMinutes(15);
 
     private final SopReminderProperties properties;
-    private final SopReminderService ruleService;
     private final SopReminderSendService sendService;
     private final SopReminderDispatchAttemptRepository attempts;
-    private final com.scione.scm.bill.domain.sop.SopReminderRepository repository;
+    private final SopReminderRepository repository;
 
     // 等待同步可能很久，催办使用独立线程池，不占用合同等模块的默认调度线程。
     private final ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
@@ -66,22 +65,19 @@ public class SopReminderSchedule {
         }
 
         // 每个节点可有不同的执行时点，全部使用北京时间；修改cron/增加节点后重启SCM。
-        java.util.Map<String, String> crons = new java.util.LinkedHashMap<>();
+        java.util.Map<NodeCode, String> crons = new java.util.LinkedHashMap<>();
         properties.getNodes().forEach((nodeCode, node) -> {
-            if (!ruleService.supportsNode(nodeCode)) {//遍历nocas中配的所有节点，如果配置了没实现的节点就启动失败
-                throw new IllegalStateException("配置了尚未实现的催办节点：" + nodeCode);
-            }
             CronExpression.parse(node.getCron());//cron写错就启动失败
             crons.put(nodeCode, node.getCron());
         });
         // 装箱有独立调度入口：普通节点等待同步时，不阻塞下一轮装箱触发。
-        String packingCron = crons.remove("PACKING_RELATE");//把装箱那条从map中摘出来，摘到了则单独注册
-        if (packingCron != null) registerLane(java.util.Map.of("PACKING_RELATE", packingCron));
+        String packingCron = crons.remove(NodeCode.PACKING_RELATE);//把装箱那条从map中摘出来，摘到了则单独注册
+        if (packingCron != null) registerLane(java.util.Map.of(NodeCode.PACKING_RELATE, packingCron));
         if (!crons.isEmpty()) registerLane(crons);//剩下的普通节点不为空的话再注册一组
     }
 
     //把一组节点(普通或装箱)按它们的 cron 注册成一个调度任务,用trigger决定下次几点醒。
-    private void registerLane(java.util.Map<String, String> crons) {//crons就是节点代码->cron表达式的映射
+    private void registerLane(java.util.Map<NodeCode, String> crons) {//crons就是节点代码->cron表达式的映射
         // 普通节点仍按同一时点汇总；装箱单独计算下次执行时间。
         java.util.concurrent.atomic.AtomicReference<java.time.Instant> nextSlot = new java.util.concurrent.atomic.AtomicReference<>();
         scheduler.schedule(() -> runSlot(nextSlot.get(), crons), context -> {//scheduler.schedule(task, trigger)，task为到时间了要做的任务，trigger回答下次几点，task跑完之后去调用第二次trigger
@@ -100,10 +96,10 @@ public class SopReminderSchedule {
     }
 
     //到时间点后决定这一刻到底该发哪几个节点，把符合要求的节点筛出来交给execute
-    private void runSlot(java.time.Instant instant, java.util.Map<String, String> crons) {
+    private void runSlot(java.time.Instant instant, java.util.Map<NodeCode, String> crons) {
         if (instant == null) return;
         java.time.LocalDateTime slot = java.time.LocalDateTime.ofInstant(instant, ZoneId.of("Asia/Shanghai"));//这里不能用now()，线程池刚好忙，9:00的任务9:00:03才轮到的话，会直接计算到下一个时间节点发
-        java.util.List<String> codes = crons.entrySet().stream().filter(entry -> {
+        java.util.List<NodeCode> codes = crons.entrySet().stream().filter(entry -> {
             SopReminderProperties.Node node = properties.getNodes().get(entry.getKey());
             return node != null && Boolean.TRUE.equals(node.getEnabled())//要满足三个条件才发：1.这个节点还配在nacos中。2.节点开关是开着的。3.这个节点的cron正好指向此刻。
                     && slot.equals(CronExpression.parse(entry.getValue()).next(slot.minusSeconds(1)));
@@ -121,7 +117,7 @@ public class SopReminderSchedule {
         for (SopReminderDispatchAttemptRepository.RetryAttempt attempt : attempts.dueRetries(now, MAX_ATTEMPTS)) {//dueRetries去查表，查出next_retry_at已经到了、并且attempts还没到 3 次的行。、
             //循环里做三件事。1.知道要补哪些节点：node_codes 列里存的是 "GOODS_READY,RF_CREATE,..." 这种逗号拼起来的字符串，拆开变成列表，才知道要补这 10 个节点。
             //2.检查有没有更新的轮次已经干过了，如果已经干过了，补偿任务就标记abondon跳过。3.execute真正去跑
-            java.util.List<String> codes = Arrays.asList(attempt.nodeCodes().split(","));
+            java.util.List<NodeCode> codes = attempt.nodeCodes();
             if (attempts.superseded(attempt.nodeCodes(), attempt.scheduledAt())) {
                 log.info("定时催办补发跳过：nodes={}, scheduledAt={} 之后已有新轮次接手", codes, attempt.scheduledAt());
                 attempts.abandon(attempt.nodeCodes(), attempt.scheduledAt(), "后续轮次已接管，无需补发");
@@ -195,8 +191,8 @@ public class SopReminderSchedule {
      * slot：这一轮的业务时点。
      * attemptNo：这是第几次重试。
      * */
-    private void execute(String scene, java.util.List<String> codes, java.time.LocalDateTime slot, int attemptNo) {
-        String nodeCodes = String.join(",", codes); // 把 ["GOODS_READY","RF_CREATE"] 拼成 "GOODS_READY,RF_CREATE"，作为 attempt 表的主键一部分
+    private void execute(String scene, java.util.List<NodeCode> codes, java.time.LocalDateTime slot, int attemptNo) {
+        java.util.List<NodeCode> nodeCodes = codes; // 业务内保留枚举列表，仓储适配器写库时转换成历史逗号编码。
         java.time.LocalDateTime startedAt = java.time.LocalDateTime.now(ZoneId.of("Asia/Shanghai"));//真正开始跑的时刻
         attempts.begin(nodeCodes, slot, startedAt);// 往 attempt 表插一行，状态=running。这轮的身份是 (node_codes, scheduled_at)
         long started = System.nanoTime();
