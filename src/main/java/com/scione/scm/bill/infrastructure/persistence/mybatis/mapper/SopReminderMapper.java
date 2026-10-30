@@ -1,5 +1,6 @@
 package com.scione.scm.bill.infrastructure.persistence.mybatis.mapper;
 
+import com.scione.scm.bill.domain.sop.enums.NodeCode;
 import com.scione.scm.bill.domain.sop.SopReminderRepository.RetryBatch;
 import com.scione.scm.bill.domain.sop.SopReminderRepository.RetryTodo;
 import com.scione.scm.bill.domain.sop.SopReminderRepository.TodoRow;
@@ -16,11 +17,11 @@ import java.util.List;
 public interface SopReminderMapper {
 
     /** 未发送异常记录（record_type=3）；同一异常重跑按 skip_key 幂等。 */
-    record SkippedRow(LocalDateTime scheduledAt, String nodeCode, String businessSn, String receiverKey,
+    record SkippedRow(LocalDateTime scheduledAt, NodeCode nodeCode, String businessSn, String receiverKey,
                       String errorCode, String errorMessage, String skipKey) { }
 
     /** 建待办：同一单号同节点同责任人只保留一条，重复即重新激活。 */
-    record TodoInsert(String nodeCode, String businessType, String businessSn, String itemKey,
+    record TodoInsert(NodeCode nodeCode, String businessType, String businessSn, String itemKey,
                       String roundKey, LocalDateTime enteredAt, String assigneeUserid, String viewToken) { }
 
     record TodoKey(long id, String businessType, String businessSn, String itemKey) { }
@@ -56,7 +57,7 @@ public interface SopReminderMapper {
 
     int upsertTodos(@Param("rows") List<TodoInsert> rows);
 
-    List<TodoKey> findTodoKeys(@Param("nodeCode") String nodeCode, @Param("roundKey") String roundKey);
+    List<TodoKey> findTodoKeys(@Param("nodeCode") NodeCode nodeCode, @Param("roundKey") String roundKey);
 
     int refreshTodoTokens(@Param("token") String token, @Param("userid") String userid,
                           @Param("packing") boolean packing);
@@ -71,10 +72,10 @@ public interface SopReminderMapper {
 
     int cancelMissingRfStartTodos(@Param("sns") List<String> sns);
 
-    int closeVerifiedTodos(@Param("nodeCode") String nodeCode, @Param("userid") String userid,
+    int closeVerifiedTodos(@Param("nodeCode") NodeCode nodeCode, @Param("userid") String userid,
                            @Param("ids") List<Long> ids);
 
-    int closeAbsentTodos(@Param("nodeCode") String nodeCode, @Param("activeIds") List<Long> activeIds,
+    int closeAbsentTodos(@Param("nodeCode") NodeCode nodeCode, @Param("activeIds") List<Long> activeIds,
                          @Param("uncertainSns") List<String> uncertainSns);
 
     int insertPushBatch(ReminderPushBatchPO batch);

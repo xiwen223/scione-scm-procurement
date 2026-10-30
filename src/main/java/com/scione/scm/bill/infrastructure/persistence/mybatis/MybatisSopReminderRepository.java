@@ -1,5 +1,6 @@
 package com.scione.scm.bill.infrastructure.persistence.mybatis;
 
+import com.scione.scm.bill.domain.sop.enums.NodeCode;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scione.scm.bill.common.BusinessException;
@@ -63,7 +64,7 @@ public class MybatisSopReminderRepository implements SopReminderRepository {
 
     /** 写「因收件人缺失/无效而跳过」的记录（record_type=3），不关联推送明细，只用于事后排查。 */
     @Override
-    public void recordSkippedRecipients(String nodeCode, LocalDateTime scheduledAt, List<SkippedRecipient> rows) {
+    public void recordSkippedRecipients(NodeCode nodeCode, LocalDateTime scheduledAt, List<SkippedRecipient> rows) {
         if (rows.isEmpty()) return;//没有跳过记录，直接返回
         for (int offset = 0; offset < rows.size(); offset += WRITE_CHUNK) {//每200条一批写入
             List<SkippedRecipient> chunk = rows.subList(offset, Math.min(offset + WRITE_CHUNK, rows.size()));//当前这批
@@ -98,8 +99,8 @@ public class MybatisSopReminderRepository implements SopReminderRepository {
     /** 建待办：把候选按同一责任人批量 upsert 成待办，回查拿到 todoId，并刷新该责任人的稳定 token。 */
     @Override
     @Transactional
-    public PreparedGroup prepareGroup(String nodeCode, String userid, List<Candidate> candidates) {
-        boolean packing = "PACKING_RELATE".equals(nodeCode);//是不是装箱节点
+    public PreparedGroup prepareGroup(NodeCode nodeCode, String userid, List<Candidate> candidates) {
+        boolean packing = nodeCode == NodeCode.PACKING_RELATE;//是不是装箱节点
         String token = tokenFor(userid, packing);//取这个责任人的稳定token（没有就新建一个）
         String round = ROUND_KEY + "@" + recipientHash(userid);//本轮的唯一键=固定前缀+收件人哈希
         // 分批 upsert 待办，避免单次 SQL 参数过多。
@@ -186,7 +187,7 @@ public class MybatisSopReminderRepository implements SopReminderRepository {
     }
 
     @Override
-    public void closeVerifiedTodos(String nodeCode, String userid, List<Long> ids) {
+    public void closeVerifiedTodos(NodeCode nodeCode, String userid, List<Long> ids) {
         for (int offset = 0; offset < ids.size(); offset += LOOKUP_CHUNK) {
             mapper.closeVerifiedTodos(nodeCode, userid,
                     ids.subList(offset, Math.min(offset + LOOKUP_CHUNK, ids.size())));
@@ -194,7 +195,7 @@ public class MybatisSopReminderRepository implements SopReminderRepository {
     }
 
     @Override
-    public void closeAbsentTodos(String nodeCode, List<Long> activeIds, List<String> uncertainSns) {
+    public void closeAbsentTodos(NodeCode nodeCode, List<Long> activeIds, List<String> uncertainSns) {
         mapper.closeAbsentTodos(nodeCode, activeIds, uncertainSns);
     }
 

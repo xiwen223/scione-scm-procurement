@@ -51,38 +51,32 @@ public class SopReminderService {
     // 数据来源四：调用领星开放API实时拉装箱任务数据（装箱节点实时查询，不读同步快照）。
     private final LingxingOpenApiClient openApiClient;
 
-    /** 判断节点码是否合法：能转成NodeCode枚举就是已实现的节点，否则false。 */
-    public boolean supportsNode(String nodeCode) {//这个方法就是去校验一下nacos中配的nodes名和枚举名也没有对上
-        try { NodeCode.valueOf(nodeCode); return true; }//能转成枚举，说明是合法节点
-        catch (IllegalArgumentException | NullPointerException exception) { return false; }//转不了或为null，非法
-    }
-
     /** 两种场景：1.补发单条消息前复核旧消息还该不该发。2.po未创建和装箱这两个特例节点由preview计算候选节点。 */
-    public SopReminderPreview preview(String nodeCode) {
-        if (!supportsNode(nodeCode)) {//复核节点是否非法
+    public SopReminderPreview preview(NodeCode nodeCode) {
+        if (nodeCode == null) {//复核节点是否非法
             throw new BusinessException(ResultCode.PARAM_ERROR, "尚未实现的催办节点：" + nodeCode);
         }
         //其中11个节点要分成三类，1.po单创建未完成节点要查杭州店铺。2.装箱任务节点要实时查领星。3.其他普通节点。三类要分别处理
-        if ("PO_CREATE".equals(nodeCode)) return previewPoCreate();
-        if ("PACKING_RELATE".equals(nodeCode)) return previewPacking();
-        return previewStandard(NodeCode.valueOf(nodeCode));
+        if (nodeCode == NodeCode.PO_CREATE) return previewPoCreate();
+        if (nodeCode == NodeCode.PACKING_RELATE) return previewPacking();
+        return previewStandard(nodeCode);
     }
 
     /** 一次发送调用内复用来源快照；不跨请求缓存，装箱始终走独立实时入口。 */
-    public Map<String, SopReminderPreview> previewNodes(List<String> codes) {
-        Map<String, SopReminderPreview> previews = new LinkedHashMap<>();//为了组装消息时顺序和配置一致用LinkedHashMap
+    public Map<NodeCode, SopReminderPreview> previewNodes(List<NodeCode> codes) {
+        Map<NodeCode, SopReminderPreview> previews = new LinkedHashMap<>();//为了组装消息时顺序和配置一致用LinkedHashMap
         NodeData shared = null;//共享快照，读完之后有值，这个值普通节点共用
         LocalDateTime evaluatedAt = null;//统一时间基准
-        for (String code : codes) {
-            if (!supportsNode(code)) throw new BusinessException(ResultCode.PARAM_ERROR, "尚未实现的催办节点：" + code);//对逐个节点进行合法性校验
-            if ("PO_CREATE".equals(code) || "PACKING_RELATE".equals(code)) {//po未创建和装箱任务节点走preview(code) 分派到各自的专属方法
+        for (NodeCode code : codes) {
+            if (code == null) throw new BusinessException(ResultCode.PARAM_ERROR, "尚未实现的催办节点：" + code);//对逐个节点进行合法性校验
+            if (code == NodeCode.PO_CREATE || code == NodeCode.PACKING_RELATE) {//po未创建和装箱任务节点走preview(code) 分派到各自的专属方法
                 previews.put(code, preview(code));
             } else {
                 if (shared == null) {//只有第一个普通节点去读库并且定下evaluatedAt，后面其他节点就不读库，直接用现成的shared 和 evaluatedAt
                     shared = repository.readNodeData(LocalDateTime.now(ZoneId.of("Asia/Shanghai")));
                     evaluatedAt = LocalDateTime.now(ZoneId.of("Asia/Shanghai"));
                 }
-                previews.put(code, evaluateStandard(NodeCode.valueOf(code), shared, evaluatedAt));//把共享数据和时间作为参数传进去，算这个节点的候选。
+                previews.put(code, evaluateStandard(code, shared, evaluatedAt));//把共享数据和时间作为参数传进去，算这个节点的候选。
             }
         }
         return previews;//把算好的Map<节点, 候选> 交给调用方
@@ -91,7 +85,7 @@ public class SopReminderService {
     /** 节点1专用入口：实时查领星杭州店铺，读PP快照，算出"PO还没创建"的候选。 */
     private SopReminderPreview previewPoCreate() {
         //从 Nacos 拿po单未创建节点的配置，取 shop-name-prefix（即"杭州"）和 pp-start-date（2026-09-01）；
-        SopReminderProperties.Node node = properties.getNodes().get("PO_CREATE");
+        SopReminderProperties.Node node = properties.getNodes().get(NodeCode.PO_CREATE);
         String prefix = node == null ? null : node.getShopNamePrefix();
         if (prefix == null || prefix.isBlank() || properties.getPpStartDate() == null) {
             throw new BusinessException(ResultCode.SOP_PREVIEW_UNAVAILABLE, "节点1店铺前缀和PP范围日期不能为空");
@@ -146,7 +140,7 @@ public class SopReminderService {
                                 .thenComparing(Candidate::businessSn)).toList()))
                 .toList();//把每个采购员的一组候选，转成RecipientGroup(uid=采购员领星UID，name=展示名，candidates=该采购员的候选，key=uid:xxx)
         //返回计算结果，一次性拼出 SopReminderPreview：节点码、中文名、计算基准时间、同步任务 id/完成时间、杭州店铺列表、候选总数（各采购员候选之和，不含 excluded）、分组清单、排除清单；
-        return new SopReminderPreview("PO_CREATE", "PO创建未完成", now, snapshot.taskId(), snapshot.syncedAt(), shopIds,
+        return new SopReminderPreview(NodeCode.PO_CREATE, "PO创建未完成", now, snapshot.taskId(), snapshot.syncedAt(), shopIds,
                 groups.stream().mapToInt(group -> group.candidates().size()).sum(), groups, excluded.stream().distinct().toList());
     }
 
@@ -216,7 +210,7 @@ public class SopReminderService {
         List<RecipientGroup> groups=grouped.entrySet().stream().map(entry->new RecipientGroup(0,entry.getKey(),
                 List.copyOf(entry.getValue()),"name:"+entry.getKey())).toList();
         //拼成SopReminderPreview返回(节点编码，节点中文名，基准时间，同步任务id，同步任务成功结束的时间，杭州店铺sid，有效候选总数，按责任人汇总后的候选清单，排除的问题单据+原因)
-        return new SopReminderPreview("PACKING_RELATE",NodeCode.PACKING_RELATE.title(),source.checkedAt(),0,
+        return new SopReminderPreview(NodeCode.PACKING_RELATE,NodeCode.PACKING_RELATE.title(),source.checkedAt(),0,
                 source.checkedAt(),List.of(),groups.stream().mapToInt(group->group.candidates().size()).sum(),groups,excluded);
     }
 
@@ -363,7 +357,7 @@ public class SopReminderService {
             return new RecipientGroup(person.uid(),person.name(),List.copyOf(entry.getValue()),person.key());
         }).toList();
         //组装最终预览结果：候选总数=各分组候选数之和，excluded去重。
-        return new SopReminderPreview(node.name(),node.title(),now,data.published().taskId(),data.published().syncedAt(),
+        return new SopReminderPreview(node,node.title(),now,data.published().taskId(),data.published().syncedAt(),
                 List.of(),groups.stream().mapToInt(group->group.candidates().size()).sum(),groups,excluded.stream().distinct().toList());
     }
 
@@ -392,7 +386,7 @@ public class SopReminderService {
         Map<String,List<DeliveryFollowUp>> byFollower=new LinkedHashMap<>();
         for (DeliveryFollowUp row:rows) byFollower.computeIfAbsent(row.followerName(),key->new ArrayList<>()).add(row);
         // 天数门槛全部来自Nacos，节点未配置时直接报错。
-        SopReminderProperties.Node rule=properties.getNodes().get(node.name());
+        SopReminderProperties.Node rule=properties.getNodes().get(node);
         if (rule==null) throw new BusinessException(ResultCode.PARAM_ERROR,"节点未配置："+node.name());
         if (node==NodeCode.DELIVERY_CONFIRM) {
             int waitDays=rule.getDeliveryDueDays();
@@ -520,7 +514,7 @@ public class SopReminderService {
     }
     /** 固定责任人节点（PO审批/财务付款/CR收货）：取出节点在 Nacos 配的 receiver-key（比如 PO_APPROVER）；拼成 "role:" + receiverKey（比如 role:PO_APPROVER，这个方法查的就是这个）； 然后拿它查到对应的people*/
     private Recipient fixed(NodeCode node) {
-        SopReminderProperties.Node rule=properties.getNodes().get(node.name());
+        SopReminderProperties.Node rule=properties.getNodes().get(node);
         return rule==null || rule.getReceiverKey()==null?null:new Recipient(0,rule.getReceiverKey(),"role:"+rule.getReceiverKey());
     }
     /** 取单据创建时间：优先用明确的create_time字段，缺失时回退到「创建」日志时间。 */
@@ -534,7 +528,7 @@ public class SopReminderService {
     private Entry entered(NodeData data,String sn,String target,NodeCode node) {
         String current=null;//当前的状态
         Entry entered=null;//最终返回的"进入目标状态"时间点
-        SopReminderProperties.Node rule=properties.getNodes().get(node.name());
+        SopReminderProperties.Node rule=properties.getNodes().get(node);
         for (Event event:events(data,sn)) {
             if (event.time()==null) continue;//无时间的日志跳过
             String detail=plain(event.detail());Matcher matcher=STATE_CHANGE.matcher(detail);//把日志详情里的HTML标签去掉，转成纯文本，用"状态变更为【x】"这个正则去匹配
@@ -560,7 +554,7 @@ public class SopReminderService {
     /** 最近一次进入目标状态的时间：和entered方法的区别是lastentered方法的PO后续离开该状态也不清空，只用于计算卡滞起点。用于“按卡滞时长算起点”的节点，最后进入这个状态是什么时候，如创建请款单 */
     private Entry lastEntered(NodeData data,String sn,String target,NodeCode node) {
         Entry latest=null;//记录最近一次进入目标状态的时间，后续覆盖但不清空
-        SopReminderProperties.Node rule=properties.getNodes().get(node.name());
+        SopReminderProperties.Node rule=properties.getNodes().get(node);
         for (Event event:events(data,sn)) {
             if (event.time()==null) continue;
             String detail=plain(event.detail());Matcher matcher=STATE_CHANGE.matcher(detail);//同entered：先"状态变更为【x】"再"单据状态为【x】"

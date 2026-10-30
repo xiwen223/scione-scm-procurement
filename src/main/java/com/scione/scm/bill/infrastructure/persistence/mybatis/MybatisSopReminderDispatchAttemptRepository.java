@@ -1,5 +1,6 @@
 package com.scione.scm.bill.infrastructure.persistence.mybatis;
 
+import com.scione.scm.bill.domain.sop.enums.NodeCode;
 import com.scione.scm.bill.domain.sop.SopReminderDispatchAttemptRepository;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.SopReminderDispatchAttemptMapper;
 import lombok.RequiredArgsConstructor;
@@ -29,21 +30,21 @@ public class MybatisSopReminderDispatchAttemptRepository implements SopReminderD
     private final SopReminderDispatchAttemptMapper mapper;
 
     @Override
-    public void begin(String nodeCodes, LocalDateTime scheduledAt, LocalDateTime startedAt) {
-        mapper.upsertRunning(nodeCodes, scheduledAt, startedAt);
+    public void begin(List<NodeCode> nodeCodes, LocalDateTime scheduledAt, LocalDateTime startedAt) {
+        mapper.upsertRunning(NodeCode.join(nodeCodes), scheduledAt, startedAt);
     }
 
     @Override
-    public void succeed(String nodeCodes, LocalDateTime scheduledAt, int todos, int pushes,
+    public void succeed(List<NodeCode> nodeCodes, LocalDateTime scheduledAt, int todos, int pushes,
                         int unresolvedCount, LocalDateTime nextRetryAt) {
-        mapper.markSucceeded(nodeCodes, scheduledAt, todos, pushes, unresolvedCount,
+        mapper.markSucceeded(NodeCode.join(nodeCodes), scheduledAt, todos, pushes, unresolvedCount,
                 nextRetryAt, LocalDateTime.now());
     }
 
     @Override
-    public void fail(String nodeCodes, LocalDateTime scheduledAt, String errorMessage,
+    public void fail(List<NodeCode> nodeCodes, LocalDateTime scheduledAt, String errorMessage,
                      LocalDateTime nextRetryAt, boolean giveUp) {
-        mapper.markFailed(nodeCodes, scheduledAt,
+        mapper.markFailed(NodeCode.join(nodeCodes), scheduledAt,
                 giveUp ? STATUS_GIVE_UP : STATUS_FAILED,
                 truncate(errorMessage),
                 giveUp ? null : nextRetryAt,
@@ -54,18 +55,18 @@ public class MybatisSopReminderDispatchAttemptRepository implements SopReminderD
     public List<RetryAttempt> dueRetries(LocalDateTime now, int maxAttempts) {
         LocalDateTime staleBefore = now.minusMinutes(STALE_RUNNING_MINUTES);
         return mapper.selectDueRetries(now, maxAttempts, staleBefore, todayStart(now)).stream()
-                .map(row -> new RetryAttempt(row.id(), row.nodeCodes(), row.scheduledAt(), row.attempts()))
+                .map(row -> new RetryAttempt(row.id(), NodeCode.parseList(row.nodeCodes()), row.scheduledAt(), row.attempts()))
                 .toList();
     }
 
     @Override
-    public boolean superseded(String nodeCodes, LocalDateTime scheduledAt) {
-        return mapper.countLaterAttempts(nodeCodes, scheduledAt, todayStart(now())) > 0;
+    public boolean superseded(List<NodeCode> nodeCodes, LocalDateTime scheduledAt) {
+        return mapper.countLaterAttempts(NodeCode.join(nodeCodes), scheduledAt, todayStart(now())) > 0;
     }
 
     @Override
-    public void abandon(String nodeCodes, LocalDateTime scheduledAt, String reason) {
-        mapper.markFailed(nodeCodes, scheduledAt, STATUS_GIVE_UP, truncate(reason), null, now());
+    public void abandon(List<NodeCode> nodeCodes, LocalDateTime scheduledAt, String reason) {
+        mapper.markFailed(NodeCode.join(nodeCodes), scheduledAt, STATUS_GIVE_UP, truncate(reason), null, now());
     }
 
     @Override

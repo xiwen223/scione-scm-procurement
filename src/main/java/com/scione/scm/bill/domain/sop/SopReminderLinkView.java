@@ -1,5 +1,6 @@
 package com.scione.scm.bill.domain.sop;
 
+import com.scione.scm.bill.domain.sop.enums.NodeCode;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -16,7 +17,7 @@ public record SopReminderLinkView(
         List<NodeGroup> nodes) {
 
     /** 一个节点（如 PO创建未完成）下的全部待办。 */
-    public record NodeGroup(String nodeCode, String nodeName, List<TodoItem> todos) {
+    public record NodeGroup(NodeCode nodeCode, String nodeName, List<TodoItem> todos) {
     }
 
     /** 一条待办；todoId用于精确提交原因；reasons是该待办累计的历次原因，最新在前。 */

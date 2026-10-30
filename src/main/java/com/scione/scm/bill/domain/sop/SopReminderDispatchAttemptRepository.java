@@ -1,5 +1,6 @@
 package com.scione.scm.bill.domain.sop;
 
+import com.scione.scm.bill.domain.sop.enums.NodeCode;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -16,14 +17,14 @@ public interface SopReminderDispatchAttemptRepository {
      * 本轮开始：落一条 RUNNING。同一时点重复触发走唯一键 upsert，
      * 尝试次数加一，这样补发不会凭空产生新行，去重判断才能命中原来那一批。
      */
-    void begin(String nodeCodes, LocalDateTime scheduledAt, LocalDateTime startedAt);
+    void begin(List<NodeCode> nodeCodes, LocalDateTime scheduledAt, LocalDateTime startedAt);
 
     /**
      * 本轮流程正常跑完，不代表每条消息都成功。
      *
      * @param unresolvedCount 结束时仍处于 UNKNOWN 的待办数；大于0时即使状态是 SUCCESS 也要继续补发
      */
-    void succeed(String nodeCodes, LocalDateTime scheduledAt, int todos, int pushes,
+    void succeed(List<NodeCode> nodeCodes, LocalDateTime scheduledAt, int todos, int pushes,
                  int unresolvedCount, LocalDateTime nextRetryAt);
 
     /**
@@ -31,7 +32,7 @@ public interface SopReminderDispatchAttemptRepository {
      *
      * @param giveUp true 表示已达重试上限，转人工处理，不再自动补发
      */
-    void fail(String nodeCodes, LocalDateTime scheduledAt, String errorMessage,
+    void fail(List<NodeCode> nodeCodes, LocalDateTime scheduledAt, String errorMessage,
               LocalDateTime nextRetryAt, boolean giveUp);
 
     /**
@@ -44,10 +45,10 @@ public interface SopReminderDispatchAttemptRepository {
      * 该时点之后是否已有同一组节点的新轮次接手。
      * 装箱每5分钟一轮，失败行若等15分钟再补，必然和新轮次撞车；有新轮次就交给它，不重复打扰。
      */
-    boolean superseded(String nodeCodes, LocalDateTime scheduledAt);
+    boolean superseded(List<NodeCode> nodeCodes, LocalDateTime scheduledAt);
 
     /** 放弃补发：不做重试，仅把原因写进记录，便于事后核对这一轮为什么没补。 */
-    void abandon(String nodeCodes, LocalDateTime scheduledAt, String reason);
+    void abandon(List<NodeCode> nodeCodes, LocalDateTime scheduledAt, String reason);
 
     /** 清理指定时点之前的轮次记录；补发只扫描当天，历史仅用于事后巡检。返回删除行数。 */
     int purgeBefore(LocalDateTime scheduledBefore, int limit);
@@ -56,5 +57,5 @@ public interface SopReminderDispatchAttemptRepository {
     int countBefore(LocalDateTime scheduledBefore);
 
     /** 补发需要的原始时点与节点组合。 */
-    record RetryAttempt(long id, String nodeCodes, LocalDateTime scheduledAt, int attempts) { }
+    record RetryAttempt(long id, List<NodeCode> nodeCodes, LocalDateTime scheduledAt, int attempts) { }
 }

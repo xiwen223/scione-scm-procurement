@@ -1,5 +1,6 @@
 package com.scione.scm.bill.application;
 
+import com.scione.scm.bill.domain.sop.enums.NodeCode;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.domain.sop.SopReminderLinkView;
@@ -45,7 +46,7 @@ public class SopReminderLinkService {
                 repository.loadReasons(todos.stream().map(SopReminderRepository.TodoRow::id).toList());//读每条待办的历史原因，key=待办id
 
         // 第3步：按节点分组，把 TodoRow 转成页面需要的 TodoItem（带原因列表）。
-        Map<String, List<TodoItem>> grouped = new LinkedHashMap<>();//key=节点码，value=该节点下的待办列表
+        Map<NodeCode, List<TodoItem>> grouped = new LinkedHashMap<>();//key=节点码，value=该节点下的待办列表
         for (SopReminderRepository.TodoRow todo : todos) {
             List<ReasonItem> items = List.copyOf(reasons.getOrDefault(todo.id(), List.of()));//该待办的历史原因（没有就空列表）
             grouped.computeIfAbsent(todo.nodeCode(), key -> new ArrayList<>())
@@ -54,9 +55,9 @@ public class SopReminderLinkService {
         }
         // SQL按编码排序；页面改用统一节点目录的业务顺序，缺少待办的节点自然跳过。
         List<NodeGroup> nodes = grouped.entrySet().stream()
-                .sorted(java.util.Comparator.comparingInt(entry -> nodeOrder(entry.getKey())))//按节点目录的业务顺序排序
+                .sorted(java.util.Comparator.comparingInt(entry -> entry.getKey().ordinal()))//按节点目录的业务顺序排序
                 .map(entry -> new NodeGroup(entry.getKey(),
-                        nodeName(entry.getKey()), List.copyOf(entry.getValue())))//转成NodeGroup(节点码、节点中文名、待办列表)
+                        entry.getKey().title(), List.copyOf(entry.getValue())))//转成NodeGroup(节点码、节点中文名、待办列表)
                 .toList();
         return new SopReminderLinkView(link.assigneeUserid(), ownerName(link.assigneeUserid()),
                 link.sentAt(), nodes);//返回外链视图：收件人userid、中文名、快照时间、节点分组
@@ -90,15 +91,4 @@ public class SopReminderLinkService {
         repository.addReason(token, todoId, text);//写入原因历史
     }
 
-    /** 取节点在业务目录里的顺序号；节点码不认识就排最后。 */
-    private static int nodeOrder(String nodeCode) {
-        try { return com.scione.scm.bill.domain.sop.enums.NodeCode.valueOf(nodeCode).ordinal(); }//转成枚举取序号
-        catch (IllegalArgumentException exception) { return Integer.MAX_VALUE; }//不认识就返回最大值，排最后
-    }
-
-    /** 取节点的中文名；节点码不认识就原样返回。 */
-    private static String nodeName(String nodeCode) {
-        try { return com.scione.scm.bill.domain.sop.enums.NodeCode.valueOf(nodeCode).title(); }//转成枚举取中文标题
-        catch (IllegalArgumentException exception) { return nodeCode; }//不认识就返回原节点码
-    }
 }
