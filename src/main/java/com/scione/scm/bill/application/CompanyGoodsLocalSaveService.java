@@ -257,7 +257,7 @@ public class CompanyGoodsLocalSaveService {
     }
 
     /**
-     * 校验字段及唯一性，合并非空修改字段，并序列化关联、检验类型及公共桶图片。
+     * 按产品ID及名称组合校验唯一性，合并非空修改字段，并序列化关联、检验类型及公共桶图片。
      *
      * @param request 当前操作的请求参数
      * @param stored 修改前数据库记录；新增时为null
@@ -265,11 +265,20 @@ public class CompanyGoodsLocalSaveService {
      * @return 待保存的货品记录；修改时保留请求中未提供的字段
      */
     private CompanyGoodsPO prepare(CompanyGoodsSaveDTO request, CompanyGoodsPO stored, List<CompanyGoodsRelationDTO> relations) {
-        if (request.getSku() != null) request.setSku(request.getSku().trim());
-        if (request.getGoodsName() != null) request.setGoodsName(request.getGoodsName().trim());
-        List<CompanyGoodsPO> conflicts = goodsMapper.lockImportConflicts(request.getSku(), request.getGoodsName());
+        if (request.getSku() != null) {
+            request.setSku(request.getSku().trim());
+        }
+        if (request.getProductId() != null) {
+            request.setProductId(request.getProductId().trim());
+        }
+        if (request.getGoodsName() != null) {
+            request.setGoodsName(request.getGoodsName().trim());
+        }
+        List<CompanyGoodsPO> conflicts = goodsMapper.lockByProductIdAndGoodsName(request.getProductId(), request.getGoodsName());
         for (CompanyGoodsPO conflict : conflicts) {
-            if (stored == null || !stored.getId().equals(conflict.getId())) throw invalid("SKU编码或名称已存在");
+            if (stored == null || !stored.getId().equals(conflict.getId())) {
+                throw invalid("产品ID和货品名称对应的货品已存在");
+            }
         }
         if (request.getUnit() != null && !List.of("套", "张", "个", "KG", "次").contains(request.getUnit())) throw invalid("单位不在可选范围内");
         boolean categoryExists = false;

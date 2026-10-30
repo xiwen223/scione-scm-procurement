@@ -70,15 +70,20 @@ public class CompanyGoodsImportService {
         */
         Map<Integer, String> failures = new LinkedHashMap<>();
         Map<String, List<ImportRow>> skuRows = new LinkedHashMap<>();
-        Map<String, List<ImportRow>> nameRows = new LinkedHashMap<>();
+        Map<List<String>, List<ImportRow>> productNameRows = new LinkedHashMap<>();
         for (ImportRow row : rows) {
             // 无效行也参与SKU去重，避免同一文件中的重复记录被遗漏。
             String sku = normalize(row.cells().get(1));
             if (!skuRows.containsKey(sku)) skuRows.put(sku, new ArrayList<>());
             skuRows.get(sku).add(row);
+            String productId = normalize(row.cells().get(0));
             String name = normalize(row.cells().get(2));
-            if (!nameRows.containsKey(name)) nameRows.put(name, new ArrayList<>());
-            nameRows.get(name).add(row);
+            // 产品ID与名称共同定位记录，不同产品ID下允许名称相同。
+            List<String> productName = List.of(productId, name);
+            if (!productNameRows.containsKey(productName)) {
+                productNameRows.put(productName, new ArrayList<>());
+            }
+            productNameRows.get(productName).add(row);
             if (row.error() != null) failures.put(row.rowNumber(), row.error());
             /* 暂停外部系统名称存在性校验，保留供后续恢复。
             else if (!supplierNames.contains(row.goods().getSupplierName())) {
@@ -91,8 +96,12 @@ public class CompanyGoodsImportService {
         for (List<ImportRow> duplicates : skuRows.values()) {
             if (duplicates.size() > 1) for (ImportRow row : duplicates) failures.put(row.rowNumber(), "同一文件中的SKU编码重复");
         }
-        for (List<ImportRow> duplicates : nameRows.values()) {
-            if (duplicates.size() > 1) for (ImportRow row : duplicates) failures.put(row.rowNumber(), "同一文件中的SKU名称重复");
+        for (List<ImportRow> duplicates : productNameRows.values()) {
+            if (duplicates.size() > 1) {
+                for (ImportRow row : duplicates) {
+                    failures.put(row.rowNumber(), "同一文件中的企业商品ID与SKU名称组合重复");
+                }
+            }
         }
         // 按文件首次出现的顺序分组，第一行始终是主SKU，不能因校验失败换用后续行。
         Map<String, List<ImportRow>> groups = new LinkedHashMap<>();

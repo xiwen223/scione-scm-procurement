@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import jakarta.validation.constraints.*;
+import jakarta.validation.Valid;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -13,6 +14,10 @@ import java.util.List;
 @Data
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class CompanyGoodsEditDTO {
+    /** 页面选择的外部编号，用于免查询组装当前货品的同步字典快照。 */
+    @NotNull(message = "请重新打开编辑页并选择同步字段")
+    @Valid
+    private CompanyGoodsSyncSelectionDTO syncSelection;
     @NotNull @Positive
     @JsonDeserialize(using = CompanyGoodsLongDeserializer.class)
     private Long id;
@@ -30,7 +35,7 @@ public class CompanyGoodsEditDTO {
     private Integer syncScope;
     @NotBlank @Size(max = 32)
     private String unit;
-    @Size(max = 128)
+    @NotBlank @Size(max = 128)
     private String developer;
     @NotNull @Min(0) @Max(2)
     @JsonDeserialize(using = CompanyGoodsIntegerDeserializer.class)
@@ -43,7 +48,7 @@ public class CompanyGoodsEditDTO {
     private BigDecimal cgProductHeight;
     @NotNull @DecimalMin(value = "0", inclusive = false) @Digits(integer = 16, fraction = 2)
     private BigDecimal netWeight;
-    @NotNull @DecimalMin(value = "0", inclusive = false) @Digits(integer = 16, fraction = 2)
+    @DecimalMin(value = "0", inclusive = false) @Digits(integer = 16, fraction = 2)
     private BigDecimal grossWeight;
     @DecimalMin("0") @Digits(integer = 16, fraction = 2)
     private BigDecimal purchaseCost;
@@ -52,7 +57,7 @@ public class CompanyGoodsEditDTO {
     /** 供应商不含税报价，单位元，最多两位小数。 */
     @DecimalMin("0") @Digits(integer = 16, fraction = 2)
     private BigDecimal supplierQuote;
-    @Size(max = 32)
+    @NotBlank @Size(max = 32)
     private String purchaserName;
     @Size(max = 512)
     private String productOwnerNames;

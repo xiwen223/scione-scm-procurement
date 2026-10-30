@@ -2,6 +2,7 @@ package com.scione.scm.bill.interfaces;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.scione.scm.bill.application.vo.LingxingProductVO;
+import com.scione.scm.bill.application.vo.LingxingSupplierVO;
 import java.util.List;
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.infrastructure.lingxing.LingxingQcTemplateClient;
@@ -45,5 +46,17 @@ public class QcTemplateController {
     public ApiResponse<List<LingxingProductVO>> queryProducts(@RequestParam("searchValue") String searchValue,
                                                              @RequestParam("offset") int offset) {
         return ApiResponse.success(lingxingQcTemplateClient.queryProducts(searchValue, offset));
+    }
+
+    /**
+     * 使用当天领星Cookie按供应商名称模糊查询，固定返回第一页20条。
+     *
+     * @param supplierName 供应商名称，映射为领星请求的search_value
+     * @return 仅包含supplier_id和supplier_name的供应商列表
+     */
+    @PostMapping("/suppliers")
+    @Operation(summary = "根据供应商名称模糊查询供应商信息")
+    public ApiResponse<List<LingxingSupplierVO>> querySuppliers(@RequestParam("supplierName") String supplierName) {
+        return ApiResponse.success(lingxingQcTemplateClient.querySuppliers(supplierName));
     }
 }

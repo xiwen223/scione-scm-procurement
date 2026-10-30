@@ -61,11 +61,12 @@
         g.updated_time AS updatedTime
     </sql>
     <sql id="filters">
-        <!-- 同产品ID下普通货品归属组合主货品；空产品ID不建立关联。 -->
+        <!-- 产品ID相同且主货品关系中包含子货品名称时才建立展示关联。 -->
         WHERE NOT EXISTS (
             SELECT 1 FROM company_goods parent
             WHERE parent.id != g.id AND parent.product_type = 1 AND g.product_type = 0
               AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND parent.product_id = g.product_id
+              AND JSON_CONTAINS(parent.group_list, JSON_OBJECT('goods_name', g.goods_name))
         )
         <if test="query.productType != null">AND g.product_type = #{query.productType}</if>
         <if test="query.sku != null">
@@ -74,6 +75,7 @@
                     SELECT 1 FROM company_goods child
                     WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
                       AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                      AND JSON_CONTAINS(g.group_list, JSON_OBJECT('goods_name', child.goods_name))
                       AND LOWER(child.sku) LIKE LOWER(#{query.sku}) ESCAPE '!'
                 ))
         </if>
@@ -83,6 +85,7 @@
                     SELECT 1 FROM company_goods child
                     WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
                       AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                      AND JSON_CONTAINS(g.group_list, JSON_OBJECT('goods_name', child.goods_name))
                       AND child.goods_name LIKE #{query.goodsName} ESCAPE '!'
                 ))
         </if>
@@ -92,6 +95,7 @@
                     SELECT 1 FROM company_goods child
                     WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
                       AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                      AND JSON_CONTAINS(g.group_list, JSON_OBJECT('goods_name', child.goods_name))
                       AND child.product_attribute = #{query.productAttribute}
                 ))
         </if>
@@ -101,6 +105,7 @@
                     SELECT 1 FROM company_goods child
                     WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
                       AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                      AND JSON_CONTAINS(g.group_list, JSON_OBJECT('goods_name', child.goods_name))
                       AND child.product_category = #{query.productCategory}
                 ))
         </if>
@@ -112,6 +117,7 @@
                     SELECT 1 FROM company_goods child
                     WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
                       AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                      AND JSON_CONTAINS(g.group_list, JSON_OBJECT('goods_name', child.goods_name))
                       AND (child.developer LIKE #{query.personnelName} ESCAPE '!'
                           OR child.purchaser_name LIKE #{query.personnelName} ESCAPE '!'
                           OR child.product_owner_names LIKE #{query.personnelName} ESCAPE '!')
@@ -124,7 +130,8 @@
                         OR EXISTS (
                             SELECT 1 FROM company_goods child
                             WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
-                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                              AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                              AND JSON_CONTAINS(g.group_list, JSON_OBJECT('goods_name', child.goods_name))
                               AND (child.conflict_status = 1 OR child.exception_status = 1)
                         ))
                 </when>
@@ -134,7 +141,8 @@
                     AND NOT EXISTS (
                         SELECT 1 FROM company_goods child
                         WHERE g.product_type = 1 AND child.product_type = 0 AND child.id != g.id
-                      AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                          AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND child.product_id = g.product_id
+                          AND JSON_CONTAINS(g.group_list, JSON_OBJECT('goods_name', child.goods_name))
                           AND (child.conflict_status = 1 OR child.exception_status = 1)
                     )
                 </otherwise>
@@ -157,6 +165,14 @@
         SELECT id FROM company_goods
         WHERE product_id = #{productId} AND product_id IS NOT NULL AND TRIM(product_id) != ''
           AND product_type = 1 AND id != #{id}
+    </select>
+    <select id="findDisplayParentIds" resultType="long">
+        SELECT parent.id FROM company_goods parent
+        JOIN company_goods child ON child.id = #{id}
+        WHERE parent.id != child.id AND parent.product_type = 1 AND child.product_type = 0
+          AND child.product_id IS NOT NULL AND TRIM(child.product_id) != ''
+          AND parent.product_id = child.product_id
+          AND JSON_CONTAINS(parent.group_list, JSON_OBJECT('goods_name', child.goods_name))
     </select>
     <select id="lockProductFamily" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO">
         SELECT <include refid="columns"/> FROM company_goods g WHERE g.product_id = #{productId}
@@ -183,7 +199,9 @@
         <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
         AND NOT EXISTS (
             SELECT 1 FROM company_goods parent
-            WHERE parent.id != g.id AND JSON_CONTAINS(parent.group_list, JSON_OBJECT('sku', g.sku))
+            WHERE parent.id != g.id AND parent.product_type = 1 AND g.product_type = 0
+              AND g.product_id IS NOT NULL AND TRIM(g.product_id) != '' AND parent.product_id = g.product_id
+              AND JSON_CONTAINS(parent.group_list, JSON_OBJECT('goods_name', g.goods_name))
         )
         ORDER BY g.updated_time DESC, g.id DESC
     </select>

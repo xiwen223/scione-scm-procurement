@@ -5,7 +5,7 @@ import com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO;
 import org.apache.ibatis.annotations.Param;
 import java.util.List;
 
-/** 企业货品访问；展示按产品ID加载子货品，导出及改码引用维护保留SKU查询。 */
+/** 企业货品访问；展示按产品ID及关系名称加载子货品，导出及改码引用维护保留SKU查询。 */
 public interface CompanyGoodsMapper {
     /**
      * 统计符合查询条件的主货品数量，子货品命中时归属到主货品。
@@ -38,6 +38,13 @@ public interface CompanyGoodsMapper {
      * @return 关联组合主货品的数据库主键列表
      */
     List<Long> findProductParentIds(@Param("productId") String productId, @Param("id") Long id);
+    /**
+     * 查询产品ID相同且关系数组中包含当前货品名称的展示主货品。
+     *
+     * @param id 当前货品数据库主键
+     * @return 当前货品实际归属的组合主货品主键
+     */
+    List<Long> findDisplayParentIds(@Param("id") Long id);
     /**
      * 按产品ID锁定整组货品，供主货品唯一性校验。
      *

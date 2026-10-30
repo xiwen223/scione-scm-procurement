@@ -5,10 +5,15 @@ import com.scione.scm.bill.domain.goods.enums.GoodsSyncOperationEnum;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.scione.common.model.PageResult;
 import com.scione.scm.bill.application.dto.CompanyGoodsQueryDTO;
 import com.scione.scm.bill.application.dto.CompanyGoodsEditDTO;
 import com.scione.scm.bill.application.dto.CompanyGoodsUpdateDTO;
+import com.scione.scm.bill.application.dto.CompanyGoodsSyncSelectionDTO;
+import com.scione.scm.bill.application.port.LingxingSupplierClient;
+import com.scione.scm.bill.infrastructure.lingxing.LingxingOpenApiClient;
+import com.scione.scm.bill.infrastructure.blacklake.BlacklakeOpenApiClient;
 import com.scione.scm.bill.application.vo.CompanyGoodsDetailVO;
 import com.scione.scm.bill.application.vo.CompanyGoodsListItemVO;
 import com.scione.scm.bill.application.vo.CompanyGoodsPictureVO;
@@ -52,8 +57,6 @@ public class CompanyGoodsService {
     private CompanyGoodsImageService imageService;
     @Resource
     private CompanyGoodsMessageService messageService;
-    @Resource
-    private CompanyGoodsDictionaryService dictionaryService;
 
     /**
      *  只更新表单开放字段；主、子 SKU 任一校验或版本检查失败，整单回滚。
@@ -66,7 +69,7 @@ public class CompanyGoodsService {
         if (parent == null) {
             throw new BusinessException(ResultCode.RESOURCE_NOT_FOUND, "货品不存在");
         }
-        if (CollectionUtil.isNotEmpty(goodsMapper.findProductParentIds(parent.getProductId(), parent.getId()))) {
+        if (CollectionUtil.isNotEmpty(goodsMapper.findDisplayParentIds(parent.getId()))) {
             throw new BusinessException(ResultCode.PARAM_ERROR, "请通过关联主 SKU 编辑子货品");
         }
         List<CompanyGoodsEditDTO> edits = new ArrayList<>();
@@ -82,6 +85,7 @@ public class CompanyGoodsService {
         Set<Long> editedIds = new LinkedHashSet<>();
         Set<String> names = new LinkedHashSet<>();
         boolean imagesChanged = false;
+        Map<Long, GoodsSyncDictionarySnapshot> pageDictionaries = new LinkedHashMap<>();
         for (CompanyGoodsEditDTO edit : edits) {
             CompanyGoodsPO stored = storedGoods.get(edit.getId());
             if (stored == null || !editedIds.add(edit.getId())) {
@@ -96,6 +100,9 @@ public class CompanyGoodsService {
                 throw new BusinessException(ResultCode.PARAM_ERROR, "子 SKU 同步范围仅展示，不支持编辑");
             }
             edit.setGoodsName(edit.getGoodsName().trim());
+            if (!java.util.Objects.equals(stored.getGoodsName(), edit.getGoodsName())) {
+                throw new BusinessException(ResultCode.PARAM_ERROR, "SKU名称不允许修改：" + stored.getGoodsName());
+            }
             for (String name : names) {
                 if (name.equalsIgnoreCase(edit.getGoodsName())) {
                     throw new BusinessException(ResultCode.PARAM_ERROR, "相同名称不允许重复");
@@ -103,6 +110,7 @@ public class CompanyGoodsService {
             }
             names.add(edit.getGoodsName());
             validateEditableFields(edit);
+            pageDictionaries.put(edit.getId(), pageDictionarySnapshot(edit));
             List<CompanyGoodsPictureVO> storedPictures = readArray(stored.getPictureList(), new TypeReference<List<CompanyGoodsPictureVO>>() {});
             String currentImage = primaryImage(storedPictures);
             String nextImage = StringUtils.trimToNull(edit.getImageUrl());
@@ -136,7 +144,6 @@ public class CompanyGoodsService {
         skuService.prepareChanges(goodsToSync, storedGoods);
         Map<Long, CompanyGoodsPO> preparedGoods = new LinkedHashMap<>();
         for (CompanyGoodsPO goods : goodsToSync) preparedGoods.put(goods.getId(), goods);
-        GoodsSyncDictionarySnapshot dictionaries = dictionaryService.loadForSync(goodsToSync);
         for (CompanyGoodsEditDTO edit : saveOrder) {
             CompanyGoodsPO stored = storedGoods.get(edit.getId());
             CompanyGoodsPO updated = new CompanyGoodsPO();
@@ -175,8 +182,66 @@ public class CompanyGoodsService {
             }
             updated.setGoodsStatus(1);
             updated.setVersion(edit.getVersion() + 1);
-            messageService.createSyncMessages(updated, previousStatus, stored.getSyncScope(), dictionaries);
+            messageService.createSyncMessages(updated, previousStatus, stored.getSyncScope(), pageDictionaries.get(edit.getId()));
         }
+    }
+
+    /**
+     * 将页面选择的编号和已校验的名称固定为当前货品的字典快照，不查询第三方。
+     * 编号缺失直接拒绝保存，不回退到导入的远程字典查询，避免保存时重复请求。
+     *
+     * @param edit 当前主货品或子货品的页面参数及外部编号
+     * @return 可由现有消息服务和消费者直接复用的单货品字典快照
+     */
+    private GoodsSyncDictionarySnapshot pageDictionarySnapshot(CompanyGoodsEditDTO edit) {
+        CompanyGoodsSyncSelectionDTO selection = edit.getSyncSelection();
+        if (selection == null) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "请重新打开编辑页并选择同步字段");
+        }
+        GoodsSyncDictionarySnapshot snapshot = new GoodsSyncDictionarySnapshot();
+        List<LingxingOpenApiClient.AccountVO> accounts = new ArrayList<>();
+        snapshot.setAccounts(accounts);
+        if (StringUtils.isBlank(edit.getProductOwnerNames()) || CollectionUtil.isEmpty(selection.getProductOwnerIds())) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "请重新选择产品负责人，缺少人员ID");
+        }
+        String[] owners = edit.getProductOwnerNames().split(",");
+        if (owners.length != selection.getProductOwnerIds().size()) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "产品负责人姓名与人员ID数量不一致，请重新选择");
+        }
+        for (int index = 0; index < owners.length; index++) {
+            Long ownerId = selection.getProductOwnerIds().get(index);
+            if (ownerId == null || ownerId <= 0) {
+                throw new BusinessException(ResultCode.PARAM_ERROR, "产品负责人ID无效，请重新选择");
+            }
+            accounts.add(new LingxingOpenApiClient.AccountVO(ownerId, owners[index].trim()));
+        }
+        if (StringUtils.isBlank(edit.getSupplierName()) || selection.getSupplierId() == null || selection.getSupplierId() <= 0) {
+            throw new BusinessException(ResultCode.PARAM_ERROR, "请重新搜索并选择供应商，缺少供应商ID");
+        }
+        snapshot.getSuppliers().add(new LingxingSupplierClient.SupplierSummary(selection.getSupplierId(), edit.getSupplierName()));
+        ArrayNode templates = objectMapper.createArrayNode();
+        snapshot.setQcTemplates(templates);
+        if (StringUtils.isNotBlank(edit.getQualityTemplate())) {
+            if (StringUtils.isBlank(selection.getQcTemplateId())) {
+                throw new BusinessException(ResultCode.PARAM_ERROR, "请重新选择领星质检模板，缺少模板ID");
+            }
+            templates.addObject().put("name", edit.getQualityTemplate()).put("pqt_id", selection.getQcTemplateId());
+        }
+        if (Integer.valueOf(1).equals(edit.getSyncScope())) {
+            if (StringUtils.isNotBlank(edit.getProcessRoute())) {
+                if (StringUtils.isBlank(selection.getProcessRoutingCode())) {
+                    throw new BusinessException(ResultCode.PARAM_ERROR, "请重新选择工艺路线，缺少工艺路线编号");
+                }
+                snapshot.getProcessRoutings().add(new BlacklakeOpenApiClient.ProcessRoutingVO(selection.getProcessRoutingCode(), edit.getProcessRoute()));
+            }
+            if (StringUtils.isNotBlank(edit.getDefaultWarehouse())) {
+                if (StringUtils.isBlank(selection.getWarehouseCode())) {
+                    throw new BusinessException(ResultCode.PARAM_ERROR, "请重新选择默认仓库，缺少仓库编号");
+                }
+                snapshot.getWarehouseCodes().put(edit.getDefaultWarehouse(), selection.getWarehouseCode());
+            }
+        }
+        return snapshot;
     }
 
     /**
@@ -339,7 +404,7 @@ public class CompanyGoodsService {
     }
 
     /**
-     * 按主键查询完整货品详情，并按产品ID加载一层子货品及关联数量。
+     * 按主键查询完整货品详情，并按产品ID及关系名称加载一层子货品及关联数量。
      *
      * @param id 货品数据库主键
      * @return 货品完整详情；不存在时抛出资源不存在异常
@@ -361,7 +426,7 @@ public class CompanyGoodsService {
     }
 
     /**
-     *  产品ID建立展示关联，批量读取避免每个主货品查询一次。
+     *  产品ID和主货品关系中的名称共同建立展示关联，批量读取避免逐条查询。
      *
      * @param parents 当前需要加载子货品的主货品记录
      * @return 主货品主键到其一层子货品列表的映射
@@ -369,31 +434,60 @@ public class CompanyGoodsService {
     private Map<Long, List<CompanyGoodsPO>> findProductChildren(List<CompanyGoodsPO> parents) {
         Map<Long, List<CompanyGoodsPO>> result = new LinkedHashMap<>();
         Map<String, CompanyGoodsPO> parentByProductId = new LinkedHashMap<>();
+        Map<Long, Set<String>> relationNames = new LinkedHashMap<>();
         Set<String> productIds = new LinkedHashSet<>();
         for (CompanyGoodsPO parent : parents) {
             result.put(parent.getId(), new ArrayList<>());
-            if (!Integer.valueOf(1).equals(parent.getProductType()) || StringUtils.isBlank(parent.getProductId())) continue;
+            if (!Integer.valueOf(1).equals(parent.getProductType()) || StringUtils.isBlank(parent.getProductId())) {
+                continue;
+            }
             String key = parent.getProductId().trim().toLowerCase(java.util.Locale.ROOT);
             if (parentByProductId.put(key, parent) != null) {
                 throw new BusinessException(ResultCode.DATABASE_ERROR, "同一产品ID存在多个组合主货品");
             }
+            Set<String> names = new LinkedHashSet<>();
+            for (GoodsSkuRelation relation : readArray(parent.getGroupList(), new TypeReference<List<GoodsSkuRelation>>() {})) {
+                if (relation != null && StringUtils.isNotBlank(relation.getGoodsName())) {
+                    names.add(relation.getGoodsName());
+                }
+            }
+            relationNames.put(parent.getId(), names);
             productIds.add(parent.getProductId());
         }
-        if (CollectionUtil.isEmpty(productIds)) return result;
+        if (CollectionUtil.isEmpty(productIds)) {
+            return result;
+        }
+        Map<Long, Set<String>> matchedNames = new LinkedHashMap<>();
         for (CompanyGoodsPO candidate : goodsMapper.findByProductIds(new ArrayList<>(productIds))) {
-            if (StringUtils.isBlank(candidate.getProductId())) continue;
+            if (StringUtils.isBlank(candidate.getProductId())) {
+                continue;
+            }
             CompanyGoodsPO parent = parentByProductId.get(candidate.getProductId().trim().toLowerCase(java.util.Locale.ROOT));
-            if (parent == null || parent.getId().equals(candidate.getId())) continue;
+            if (parent == null || parent.getId().equals(candidate.getId())) {
+                continue;
+            }
             if (Integer.valueOf(1).equals(candidate.getProductType())) {
                 throw new BusinessException(ResultCode.DATABASE_ERROR, "同一产品ID存在多个组合主货品");
             }
-            if (Integer.valueOf(0).equals(candidate.getProductType())) result.get(parent.getId()).add(candidate);
+            if (!Integer.valueOf(0).equals(candidate.getProductType())
+                    || !relationNames.get(parent.getId()).contains(candidate.getGoodsName())) {
+                continue;
+            }
+            Set<String> names = matchedNames.get(parent.getId());
+            if (names == null) {
+                names = new LinkedHashSet<>();
+                matchedNames.put(parent.getId(), names);
+            }
+            if (!names.add(candidate.getGoodsName())) {
+                throw new BusinessException(ResultCode.DATABASE_ERROR, "同一产品ID存在同名子货品，无法确定关联：" + candidate.getGoodsName());
+            }
+            result.get(parent.getId()).add(candidate);
         }
         return result;
     }
 
     /**
-     *  数量优先按SKU匹配，历史空编码关联按名称匹配，不修改原关联数据。
+     *  数量按已建立关联的货品名称匹配，不受关系中历史SKU影响，不修改原关联数据。
      *
      * @param parent 维护关联或展示数量的主货品记录
      * @param children 同一产品ID下需要匹配比例数量的子货品记录
@@ -401,22 +495,20 @@ public class CompanyGoodsService {
      */
     private Map<Long, BigDecimal> relationQuantities(CompanyGoodsPO parent, List<CompanyGoodsPO> children) {
         Map<Long, BigDecimal> quantities = new LinkedHashMap<>();
-        if (!Integer.valueOf(1).equals(parent.getProductType())) return quantities;
-        Map<String, GoodsSkuRelation> relationsBySku = new LinkedHashMap<>();
+        if (!Integer.valueOf(1).equals(parent.getProductType())) {
+            return quantities;
+        }
         Map<String, GoodsSkuRelation> relationsByName = new LinkedHashMap<>();
         for (GoodsSkuRelation relation : readArray(parent.getGroupList(), new TypeReference<List<GoodsSkuRelation>>() {})) {
-            if (relation == null) continue;
-            if (StringUtils.isNotBlank(relation.getSku())) relationsBySku.put(relation.getSku(), relation);
-            if (StringUtils.isNotBlank(relation.getGoodsName())) {
-                relationsByName.put(relation.getGoodsName().trim().toLowerCase(java.util.Locale.ROOT), relation);
+            if (relation != null && StringUtils.isNotBlank(relation.getGoodsName())) {
+                relationsByName.put(relation.getGoodsName(), relation);
             }
         }
         for (CompanyGoodsPO child : children) {
-            GoodsSkuRelation relation = relationsBySku.get(child.getSku());
-            if (relation == null && StringUtils.isNotBlank(child.getGoodsName())) {
-                relation = relationsByName.get(child.getGoodsName().trim().toLowerCase(java.util.Locale.ROOT));
+            GoodsSkuRelation relation = relationsByName.get(child.getGoodsName());
+            if (relation != null) {
+                quantities.put(child.getId(), relation.getQuantity());
             }
-            if (relation != null) quantities.put(child.getId(), relation.getQuantity());
         }
         return quantities;
     }
