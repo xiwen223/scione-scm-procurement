@@ -5,6 +5,7 @@ import com.scione.scm.bill.application.PoSyncAppService;
 import com.scione.scm.bill.config.ContractAutoCreateScheduleProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -20,6 +21,9 @@ public class NativeProcurementSchedule {
     private final PoSyncAppService poSyncAppService;
     private final ContractCompletionSyncService contractCompletionSyncService;
     private final ContractAutoCreateScheduleProperties properties;
+
+    @Value("${contract.completion-sync.enabled:true}")
+    private boolean completionSyncEnabled = true;
 
     @Scheduled(cron = "${contract.auto-create.cron:0 0/5 * * * ?}")
     public void execute() {
@@ -46,6 +50,10 @@ public class NativeProcurementSchedule {
      */
     @Scheduled(cron = "${contract.completion-sync.cron:0 0/5 * * * ?}")
     public void syncExecutingContractsCompletion() {
+        if (!completionSyncEnabled) {
+            log.info("合同完成状态同步任务已关闭");
+            return;
+        }
         try {
             log.info("合同完成状态同步任务开始");
             ContractCompletionSyncService.SyncResult result = contractCompletionSyncService.sync();

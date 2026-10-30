@@ -25,10 +25,11 @@ contract:
   auto-create:
     enabled: ${CONTRACT_AUTO_CREATE_ENABLED:true}
     # Spring cron：每 5 分钟同步领星 PO 后自动创建合同。
-    # 与装箱催办(sop 的 PACKING_RELATE, 每5分钟0秒)错峰：这里延后2秒起跑。
+    # 与装箱催办错峰，在每小时第2、7、12等分钟执行。
     cron: ${CONTRACT_AUTO_CREATE_CRON:0 2/5 * * * ?}
   completion-sync:
-    # 再往后挪2秒，避免与 auto-create 同秒抢领星配额。
+    enabled: ${CONTRACT_COMPLETION_SYNC_ENABLED:true}
+    # 在每小时第4、9、14等分钟执行；长请求仍可能与其他任务重叠。
     cron: ${CONTRACT_COMPLETION_SYNC_CRON:0 4/5 * * * ?}
 
 purchase-delivery-analysis:
