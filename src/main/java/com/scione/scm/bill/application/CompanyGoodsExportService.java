@@ -32,43 +32,24 @@ public class CompanyGoodsExportService {
     private ObjectMapper objectMapper;
 
     /**
-     * 校验勾选主货品及group_list关联，按当前模板导出主、子货品Excel。
+     * 按产品ID及关系名称校验勾选货品，按当前模板导出主、子货品Excel。
      *
      * @param request 当前操作的请求参数
      * @return 生成的xlsx文件二进制内容
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public byte[] export(CompanyGoodsExportDTO request) {
-        if (CollectionUtil.isEmpty(request.getIds())) throw invalid("请先选择货品");
+        if (CollectionUtil.isEmpty(request.getIds())) {
+            throw invalid("请先选择货品");
+        }
         Set<Long> ids = new LinkedHashSet<>(request.getIds());
         if (ids.size() > 2000 || ids.contains(null) || ids.size() != request.getIds().size()) throw invalid("货品ID不能重复或为空，单次最多选择2000条");
         for (Long id : ids) if (id <= 0) throw invalid("货品ID必须为正整数");
         List<CompanyGoodsPO> parents = mapper.findExportParents(new ArrayList<>(ids));
-        if (parents.size() != ids.size()) throw invalid("部分货品不存在或已作为子SKU，请刷新列表后重新选择");
-        Map<Long, List<String>> childByParent = new LinkedHashMap<>();
-        Set<String> childSkus = new LinkedHashSet<>();
-        for (CompanyGoodsPO parent : parents) {
-            List<GoodsSkuRelation> relations = readRelations(parent);
-            List<String> parentChildSkus = new ArrayList<>();
-            for (GoodsSkuRelation relation : relations) {
-                String childSku = relation.getSku();
-                if (parent.getSku().equalsIgnoreCase(childSku)) throw invalid("货品" + parent.getSku() + "存在自身关联，请先修复");
-                for (String existing : parentChildSkus) {
-                    if (existing.equalsIgnoreCase(childSku)) throw invalid("货品" + parent.getSku() + "存在重复子SKU，请先修复");
-                }
-                parentChildSkus.add(childSku);
-                childSkus.add(childSku);
-            }
-            childByParent.put(parent.getId(), parentChildSkus);
+        if (parents.size() != ids.size()) {
+            throw invalid("部分货品不存在或已作为子SKU，请刷新列表后重新选择");
         }
-        Map<String, CompanyGoodsPO> children = new LinkedHashMap<>();
-        if (CollectionUtil.isNotEmpty(childSkus)) {
-            for (CompanyGoodsPO child : mapper.findBySkus(new ArrayList<>(childSkus))) {
-                String sku = normalizedSku(child.getSku());
-                if (children.put(sku, child) != null) throw invalid("子SKU" + child.getSku() + "存在重复数据，请先修复");
-                if (CollectionUtil.isNotEmpty(readRelations(child))) throw invalid("子SKU" + child.getSku() + "存在多层关联，暂不支持导出");
-            }
-        }
+        Map<Long, List<CompanyGoodsPO>> childrenByParent = findExportChildren(parents);
         List<CompanyGoodsPO> exported = new ArrayList<>();
         List<String> productIds = new ArrayList<>();
         Set<String> exportedProductIds = new HashSet<>();
@@ -78,9 +59,7 @@ public class CompanyGoodsExportService {
             if (!exportedProductIds.add(productId.trim().toLowerCase(Locale.ROOT))) throw invalid("所选主货品的企业商品ID重复，无法按新版模板区分主子关系");
             exported.add(parent);
             productIds.add(productId);
-            for (String childSku : childByParent.get(parent.getId())) {
-                CompanyGoodsPO child = children.get(normalizedSku(childSku));
-                if (child == null) throw invalid("关联子SKU" + childSku + "不存在，请先修复");
+            for (CompanyGoodsPO child : childrenByParent.get(parent.getId())) {
                 exported.add(child);
                 // 导出同组使用主货品的企业商品ID，保证第一行主SKU、后续行子SKU。
                 productIds.add(productId);
@@ -130,6 +109,79 @@ public class CompanyGoodsExportService {
     }
 
     /**
+     * 批量读取同产品ID的货品，按组合主货品关系中的名称匹配普通子货品，保留关系顺序。
+     *
+     * @param parents 已校验可导出的主货品或独立普通货品
+     * @return 主货品数据库ID到实际关联子货品的映射；普通货品对应空列表
+     */
+    private Map<Long, List<CompanyGoodsPO>> findExportChildren(List<CompanyGoodsPO> parents) {
+        Map<Long, List<CompanyGoodsPO>> result = new LinkedHashMap<>();
+        Set<String> productIds = new LinkedHashSet<>();
+        for (CompanyGoodsPO parent : parents) {
+            result.put(parent.getId(), new ArrayList<>());
+            if (Integer.valueOf(1).equals(parent.getProductType())
+                    && parent.getProductId() != null && !parent.getProductId().isBlank()) {
+                productIds.add(parent.getProductId());
+            }
+        }
+        if (CollectionUtil.isEmpty(productIds)) {
+            return result;
+        }
+        Map<String, List<CompanyGoodsPO>> families = new LinkedHashMap<>();
+        for (CompanyGoodsPO candidate : mapper.findByProductIds(new ArrayList<>(productIds))) {
+            String productId = candidate.getProductId().trim().toLowerCase(Locale.ROOT);
+            List<CompanyGoodsPO> family = families.get(productId);
+            if (family == null) {
+                family = new ArrayList<>();
+                families.put(productId, family);
+            }
+            family.add(candidate);
+        }
+        for (CompanyGoodsPO parent : parents) {
+            if (!Integer.valueOf(1).equals(parent.getProductType())
+                    || parent.getProductId() == null || parent.getProductId().isBlank()) {
+                continue;
+            }
+            Set<String> relationNames = new LinkedHashSet<>();
+            for (GoodsSkuRelation relation : readRelations(parent)) {
+                String name = relation.getGoodsName();
+                if (Objects.equals(parent.getGoodsName(), name)) {
+                    throw invalid("货品" + parent.getGoodsName() + "存在自身关联，请先修复");
+                }
+                if (!relationNames.add(name)) {
+                    throw invalid("货品" + parent.getGoodsName() + "存在重复子货品名称：" + name);
+                }
+            }
+            Map<String, CompanyGoodsPO> childrenByName = new LinkedHashMap<>();
+            List<CompanyGoodsPO> family = families.get(parent.getProductId().trim().toLowerCase(Locale.ROOT));
+            if (CollectionUtil.isNotEmpty(family)) {
+                for (CompanyGoodsPO candidate : family) {
+                    if (Objects.equals(parent.getId(), candidate.getId())) {
+                        continue;
+                    }
+                    if (Integer.valueOf(1).equals(candidate.getProductType())) {
+                        throw invalid("同一产品ID存在多个组合主货品：" + parent.getProductId());
+                    }
+                    if (Integer.valueOf(0).equals(candidate.getProductType())
+                            && relationNames.contains(candidate.getGoodsName())) {
+                        if (childrenByName.put(candidate.getGoodsName(), candidate) != null) {
+                            throw invalid("同一产品ID存在同名子货品，无法确定关联：" + candidate.getGoodsName());
+                        }
+                    }
+                }
+            }
+            for (String name : relationNames) {
+                CompanyGoodsPO child = childrenByName.get(name);
+                if (child == null) {
+                    throw invalid("企业商品ID" + parent.getProductId() + "下关联子货品不存在：" + name);
+                }
+                result.get(parent.getId()).add(child);
+            }
+        }
+        return result;
+    }
+
+    /**
      * 按固定43列表头顺序映射货品字段，并将业务编码转换为导出名称。
      *
      * @param goods 待处理货品记录或同步消息中的货品快照
@@ -152,21 +204,29 @@ public class CompanyGoodsExportService {
     }
 
     /**
-     * 解析导出货品的关联数组，并拒绝空关联项或缺少SKU的关联。
+     * 解析导出货品的关联数组，并拒绝空关联项或缺少名称的关联；关联SKU允许为空。
      *
      * @param goods 待处理货品记录或同步消息中的货品快照
      * @return 子SKU关联列表；数据库字段为null时为空列表
      */
     private List<GoodsSkuRelation> readRelations(CompanyGoodsPO goods) {
-        if (goods.getGroupList() == null) return Collections.emptyList();
+        if (goods.getGroupList() == null) {
+            return Collections.emptyList();
+        }
         try {
             List<GoodsSkuRelation> relations = objectMapper.readValue(goods.getGroupList(), new TypeReference<List<GoodsSkuRelation>>() { });
-            if (relations == null) throw invalid("货品" + goods.getSku() + "的关联数据异常");
+            if (relations == null) {
+                throw invalid("货品" + goods.getSku() + "的关联数据异常");
+            }
             for (GoodsSkuRelation relation : relations) {
-                if (relation == null || relation.getSku() == null || relation.getSku().isBlank()) throw invalid("货品" + goods.getSku() + "的关联数据异常");
+                if (relation == null || relation.getGoodsName() == null || relation.getGoodsName().isBlank()) {
+                    throw invalid("货品" + goods.getSku() + "的关联数据异常，缺少子货品名称");
+                }
             }
             return relations;
-        } catch (JsonProcessingException exception) { throw invalid("货品" + goods.getSku() + "的关联数据异常"); }
+        } catch (JsonProcessingException exception) {
+            throw invalid("货品" + goods.getSku() + "的关联数据异常");
+        }
     }
 
     /**
@@ -201,13 +261,6 @@ public class CompanyGoodsExportService {
         return names.get(index);
     }
 
-    /**
-     * 将SKU转换为不区分大小写比较时使用的键。
-     *
-     * @param sku 货品SKU编码
-     * @return 使用固定语言环境转小写的SKU
-     */
-    private String normalizedSku(String sku) { return sku.toLowerCase(Locale.ROOT); }
     /**
      * 创建货品参数校验失败的业务异常。
      *

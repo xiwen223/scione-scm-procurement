@@ -8,6 +8,7 @@ import com.scione.scm.bill.common.ExternalApiResponseException;
 import com.scione.scm.bill.common.ExternalApiResponseSanitizer;
 import org.springframework.web.client.RestClientResponseException;
 import com.scione.scm.bill.common.ResultCode;
+import com.scione.scm.bill.application.vo.LingxingSupplierVO;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.LingxingCookiesCacheMapper;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -43,6 +44,7 @@ public class LingxingQcTemplateClient {
 
     // 查询质检模板列表接口
     private static final String PRODUCT_LIST_PATH = "/api/product/lists";
+    private static final String SUPPLIER_LIST_PATH = "/api/supplier/lists";
 
     private static final String TEMPLATE_LIST_PATH = "/api/module/product/QcTemplate/getAllQcTemplateList";
 
@@ -185,6 +187,85 @@ public class LingxingQcTemplateClient {
             summary.setSku(product.path("sku").asText(null));
             summary.setProductName(product.path("product_name").asText(null));
             summary.setCgPrice(product.path("cg_price").asText(null));
+            result.add(summary);
+        }
+        return result;
+    }
+
+    /**
+     * 使用当天Cookie按名称模糊查询供应商，固定offset=0、length=20，其余条件沿用网页请求。
+     *
+     * @param supplierName 供应商名称，对应领星search_value参数
+     * @return 当前第一页的供应商ID及名称列表；请求或响应无效时抛出业务异常
+     */
+    public List<LingxingSupplierVO> querySuppliers(String supplierName) {
+        URI uri = UriComponentsBuilder.fromHttpUrl(ENDPOINT).path(SUPPLIER_LIST_PATH).build().toUri();
+        HttpHeaders headers = loadCookieHeaders(uri);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        headers.set("X-AK-Language", "zh");
+        headers.set("X-AK-PLATFORM", "1");
+        headers.set("X-AK-Request-Source", "erp");
+        headers.set("X-AK-Request-Id", UUID.randomUUID().toString());
+        headers.set("AK-Client-Type", "web");
+        headers.set("AK-Origin", ENDPOINT);
+        headers.set(HttpHeaders.REFERER, ENDPOINT + "/erp/productManage");
+
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("offset", 0);
+        request.put("length", 20);
+        request.put("sort_field", "");
+        request.put("sort_type", "");
+        request.put("search_value", supplierName);
+        request.put("search_field", "supplier_name");
+        request.put("settlement_method", 0);
+        request.put("purchaser", List.of());
+        request.put("wid", List.of());
+        request.put("level", 0);
+        request.put("employees", 0);
+        request.put("req_time_sequence", SUPPLIER_LIST_PATH + "$$15");
+
+        JsonNode response;
+        try {
+            response = restTemplate.exchange(uri, HttpMethod.POST,
+                    new HttpEntity<>(request, headers), JsonNode.class).getBody();
+        } catch (RestClientException exception) {
+            log.error("领星后台供应商列表请求失败，path={}", SUPPLIER_LIST_PATH, exception);
+            if (exception instanceof RestClientResponseException responseException) {
+                String body = responseException.getResponseBodyAsString();
+                log.info("领星 API response，path={}，response={}", SUPPLIER_LIST_PATH,
+                        ExternalApiResponseSanitizer.sanitize(SUPPLIER_LIST_PATH, body, objectMapper));
+                if (!body.isBlank()) {
+                    throw new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR,
+                            "领星后台供应商列表接口请求失败", body);
+                }
+            }
+            throw new BusinessException(ResultCode.LINGXING_API_ERROR, "领星后台供应商列表接口请求失败");
+        }
+        log.info("领星 API response，path={}，response={}", SUPPLIER_LIST_PATH,
+                ExternalApiResponseSanitizer.sanitize(SUPPLIER_LIST_PATH, response == null ? null : response.toString(), objectMapper));
+        if (response == null || response.isNull()) {
+            throw new BusinessException(ResultCode.LINGXING_API_ERROR, "领星后台供应商列表接口返回为空");
+        }
+        if (!"1".equals(response.path("code").asText())) {
+            throw new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR,
+                    "领星后台供应商列表查询失败", response.toString());
+        }
+        JsonNode suppliers = response.get("list");
+        if (suppliers == null || !suppliers.isArray()) {
+            throw new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR,
+                    "领星后台供应商列表响应缺少list数组", response.toString());
+        }
+        List<LingxingSupplierVO> result = new ArrayList<>();
+        for (JsonNode supplier : suppliers) {
+            if (!supplier.path("supplier_id").canConvertToLong() || supplier.path("supplier_id").asLong() <= 0
+                    || !supplier.path("supplier_name").isTextual() || supplier.path("supplier_name").asText().isBlank()) {
+                throw new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR,
+                        "领星后台供应商列表缺少有效supplier_id或supplier_name", response.toString());
+            }
+            LingxingSupplierVO summary = new LingxingSupplierVO();
+            summary.setSupplierId(supplier.path("supplier_id").asLong());
+            summary.setSupplierName(supplier.path("supplier_name").asText());
             result.add(summary);
         }
         return result;

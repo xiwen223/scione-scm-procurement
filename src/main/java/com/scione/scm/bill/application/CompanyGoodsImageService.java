@@ -4,6 +4,8 @@ import com.scione.api.data.client.S3Client;
 import com.scione.scm.bill.application.dto.CompanyGoodsImageDTO;
 import feign.Response;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.net.URLEncoder;
@@ -29,9 +31,14 @@ import java.util.Base64;
 /** 货品图片使用公开桶存储，数据库保存对象键及固定URL，页面访问时可按需签发临时地址。 */
 @Service
 @Slf4j
+@RefreshScope
 public class CompanyGoodsImageService {
     @Resource
     private S3Client s3Client;
+
+    /** 公共桶访问地址，由SCM服务的Nacos配置提供。 */
+    @Value("${aws.s3.file-url}")
+    private String publicFileUrl;
 
     /**
      * 校验页面提供的非空Base64图片格式、内容类型及编码文本长度。
@@ -181,7 +188,10 @@ public class CompanyGoodsImageService {
     public String publicUrl(String objectKey) {
         String encodedKey = URLEncoder.encode(objectKey, StandardCharsets.UTF_8)
                 .replace("+", "%20").replace("%2F", "/");
-        return "https://scione-public-bucket-dev.s3.us-east-1.amazonaws.com/" + encodedKey;
+        if (publicFileUrl.endsWith("/")) {
+            return publicFileUrl + encodedKey;
+        }
+        return publicFileUrl + "/" + encodedKey;
     }
 
     /**

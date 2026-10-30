@@ -6,6 +6,7 @@ import com.scione.scm.bill.application.CompanyGoodsService;
 import com.scione.scm.bill.common.BusinessException;
 import lombok.extern.slf4j.Slf4j;
 import com.scione.scm.bill.infrastructure.blacklake.BlacklakeOpenApiClient;
+import com.scione.scm.bill.infrastructure.lingxing.LingxingOpenApiClient;
 import com.scione.scm.bill.application.CompanyGoodsLocalSaveService;
 import com.scione.scm.bill.application.dto.CompanyGoodsCreateDTO;
 import com.scione.scm.bill.application.dto.CompanyGoodsModifyDTO;
@@ -16,6 +17,7 @@ import com.scione.scm.bill.application.vo.CompanyGoodsImportVO;
 import com.scione.scm.bill.application.dto.CompanyGoodsQueryDTO;
 import com.scione.scm.bill.application.dto.CompanyGoodsUpdateDTO;
 import com.scione.scm.bill.application.vo.CompanyGoodsDetailVO;
+import com.scione.scm.bill.application.vo.BlacklakeWarehouseVO;
 import com.scione.scm.bill.application.vo.CompanyGoodsListItemVO;
 import com.scione.scm.bill.domain.goods.enums.BlacklakeProductCategoryEnum;
 import io.swagger.v3.oas.annotations.Operation;
@@ -43,6 +45,7 @@ import java.nio.charset.StandardCharsets;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** 企业货品查询与编辑入口，沿用项目响应与分页结构。 */
 @RestController
@@ -54,6 +57,8 @@ public class CompanyGoodsController {
     private CompanyGoodsService companyGoodsService;
     @Resource
     private BlacklakeOpenApiClient blacklakeOpenApiClient;
+    @Resource
+    private LingxingOpenApiClient lingxingOpenApiClient;
     @Resource
     private CompanyGoodsImportService companyGoodsImportService;
     @Resource
@@ -157,6 +162,17 @@ public class CompanyGoodsController {
     }
 
     /**
+     * 查询领星员工列表，供采购员单选和产品负责人多选使用，无需入参。
+     *
+     * @return 仅包含员工uid和realname的统一响应
+     */
+    @GetMapping("/lingxing/accounts")
+    @Operation(summary = "查询领星员工列表", description = "调用领星人员列表接口，仅返回uid和realname")
+    public ApiResponse<List<LingxingOpenApiClient.AccountVO>> queryLingxingAccounts() {
+        return ApiResponse.success(lingxingOpenApiClient.queryAccounts());
+    }
+
+    /**
      * 查询最近一年黑湖来料检验规范供详情及编辑页下拉选择。
      *
      * @return 包含code-name选项列表的统一响应
@@ -165,6 +181,33 @@ public class CompanyGoodsController {
     @Operation(summary = "查询黑湖来料检验规范选项", description = "查询最近一年创建的检验规范，返回code-name格式的下拉选项")
     public ApiResponse<List<String>> queryBlacklakeInspectionSpecifications() {
         return ApiResponse.success(blacklakeOpenApiClient.queryInspectionSpecifications());
+    }
+
+    /**
+     * 查询黑湖第一页100条工艺路线，无需入参。
+     *
+     * @return 仅包含processRoutingCode和processRoutingName的工艺路线列表
+     */
+    @GetMapping("/blacklake/process-routings")
+    @Operation(summary = "查询黑湖工艺路线列表", description = "查询第一页100条，仅返回工艺路线编号及名称")
+    public ApiResponse<List<BlacklakeOpenApiClient.ProcessRoutingVO>> queryBlacklakeProcessRoutings() {
+        return ApiResponse.success(blacklakeOpenApiClient.queryProcessRoutings());
+    }
+
+    /**
+     * 无名称过滤查询黑湖全部仓库，沿用既有分页及同名取首条的规则，无需入参。
+     *
+     * @return 仅包含code和name的仓库列表
+     */
+    @GetMapping("/blacklake/warehouses")
+    @Operation(summary = "查询黑湖仓库列表", description = "分页查询全部仓库，同名取首条，仅返回仓库编号及名称")
+    public ApiResponse<List<BlacklakeWarehouseVO>> queryBlacklakeWarehouses() {
+        Map<String, String> warehouseCodes = blacklakeOpenApiClient.queryAllWarehouseCodes();
+        List<BlacklakeWarehouseVO> warehouses = new ArrayList<>();
+        for (Map.Entry<String, String> warehouse : warehouseCodes.entrySet()) {
+            warehouses.add(new BlacklakeWarehouseVO(warehouse.getValue(), warehouse.getKey()));
+        }
+        return ApiResponse.success(warehouses);
     }
 
     /**
