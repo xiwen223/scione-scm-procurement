@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scione.scm.bill.application.dto.CompanyGoodsExportDTO;
+import com.scione.scm.bill.application.dto.CompanyGoodsQueryDTO;
 import com.scione.scm.bill.common.BusinessException;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.domain.goods.GoodsSkuRelation;
@@ -12,6 +13,7 @@ import com.scione.scm.bill.infrastructure.excel.CompanyGoodsExcelParser;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.mapper.CompanyGoodsMapper;
 import com.scione.scm.bill.infrastructure.persistence.mybatis.po.CompanyGoodsPO;
 import jakarta.annotation.Resource;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
@@ -39,12 +41,15 @@ public class CompanyGoodsExportService {
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public byte[] export(CompanyGoodsExportDTO request) {
+        List<Long> ids;
         if (CollectionUtil.isEmpty(request.getIds())) {
-            throw invalid("请先选择货品");
+            ids = findExportParentIdsByQuery(request);
+        } else {
+            ids = new ArrayList<>(new LinkedHashSet<>(request.getIds()));
+            if (ids.size() > 2000 || ids.contains(null) || ids.size() != request.getIds().size()) throw invalid("货品ID不能重复或为空，单次最多选择2000条");
+            for (Long id : ids) if (id <= 0) throw invalid("货品ID必须为正整数");
         }
-        Set<Long> ids = new LinkedHashSet<>(request.getIds());
-        if (ids.size() > 2000 || ids.contains(null) || ids.size() != request.getIds().size()) throw invalid("货品ID不能重复或为空，单次最多选择2000条");
-        for (Long id : ids) if (id <= 0) throw invalid("货品ID必须为正整数");
+        if (CollectionUtil.isEmpty(ids)) throw invalid("没有符合条件的货品");
         List<CompanyGoodsPO> parents = mapper.findExportParents(new ArrayList<>(ids));
         if (parents.size() != ids.size()) {
             throw invalid("部分货品不存在或已作为子SKU，请刷新列表后重新选择");
@@ -52,11 +57,9 @@ public class CompanyGoodsExportService {
         Map<Long, List<CompanyGoodsPO>> childrenByParent = findExportChildren(parents);
         List<CompanyGoodsPO> exported = new ArrayList<>();
         List<String> productIds = new ArrayList<>();
-        Set<String> exportedProductIds = new HashSet<>();
         for (CompanyGoodsPO parent : parents) {
             String productId = parent.getProductId();
             if (productId == null || productId.isBlank()) throw invalid("货品" + parent.getSku() + "缺少企业商品ID，请先补充");
-            if (!exportedProductIds.add(productId.trim().toLowerCase(Locale.ROOT))) throw invalid("所选主货品的企业商品ID重复，无法按新版模板区分主子关系");
             exported.add(parent);
             productIds.add(productId);
             for (CompanyGoodsPO child : childrenByParent.get(parent.getId())) {
@@ -106,6 +109,40 @@ public class CompanyGoodsExportService {
             workbook.write(output);
             return output.toByteArray();
         } catch (IOException exception) { throw new IllegalStateException("生成货品导出文件失败", exception); }
+    }
+
+    /**
+     * 按当前查询条件读取全部可导出的主货品主键，不受分页限制。
+     *
+     * @param request 导出请求，取其中的查询条件字段
+     * @return 满足条件且可作为导出主行的货品主键列表
+     */
+    private List<Long> findExportParentIdsByQuery(CompanyGoodsExportDTO request) {
+        CompanyGoodsQueryDTO query = new CompanyGoodsQueryDTO();
+        query.setSku(likePattern(request.getSku()));
+        query.setGoodsName(likePattern(request.getGoodsName()));
+        query.setPersonnelName(likePattern(request.getPersonnelName()));
+        query.setProductCategory(StringUtils.trimToNull(request.getProductCategory()));
+        query.setProductAttribute(request.getProductAttribute());
+        query.setProductType(request.getProductType());
+        query.setGoodsStatus(request.getGoodsStatus());
+        List<Long> ids = mapper.findExportParentIdsByQuery(query);
+        if (ids.size() > 2000) throw invalid("导出数量超过2000条，请缩小查询范围后分批导出");
+        return ids;
+    }
+
+    /**
+     * 转义LIKE通配符并生成包含匹配条件，空白条件不参与查询。
+     *
+     * @param value 待处理字段值
+     * @return 带包含匹配通配符的SQL参数；空白时返回null
+     */
+    private String likePattern(String value) {
+        String keyword = StringUtils.trimToNull(value);
+        if (keyword == null) {
+            return null;
+        }
+        return "%" + keyword.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
     }
 
     /**
