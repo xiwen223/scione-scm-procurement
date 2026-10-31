@@ -14,12 +14,19 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
+import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.ImageOutputStream;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Iterator;
 
 /**
  * 渲染固定版式箱唛 Excel 标签的基础设施适配器。
@@ -44,7 +51,9 @@ public class ShippingMarkLabelService implements ShippingMarkLabelRenderer {
     private static final int PRODUCT_IMAGE_COLUMN = 3;
     /** 图片区内边距，对应前端 {@code p-2.5}。 */
     private static final int IMAGE_PADDING_PIXELS = 10;
-    private static final byte[] PNG_MAGIC = {(byte) 0x89, 'P', 'N', 'G'};
+    /** 商品图以最长边 512 像素嵌入，等比缩放，避免把原始大图塞进每个标签文件。 */
+    private static final int MAX_PRODUCT_IMAGE_EDGE = 512;
+    private static final float JPEG_QUALITY = 0.50f;
 
     private final Code128BarcodeService barcodeService;
     private final ShippingMarkFileStore fileStore;
@@ -57,7 +66,7 @@ public class ShippingMarkLabelService implements ShippingMarkLabelRenderer {
     @Override
     public byte[] render(ShippingMarkDetail detail) throws IOException {
         byte[] barcode = barcodeService.generate(detail.getSkuCode());
-        byte[] productImage = loadProductImage(detail);
+        EncodedImage productImage = loadProductImage(detail);
         ClassPathResource template = new ClassPathResource(TEMPLATE_PATH);
         try (InputStream input = template.getInputStream();
              XSSFWorkbook workbook = new XSSFWorkbook(input);
@@ -68,13 +77,15 @@ public class ShippingMarkLabelService implements ShippingMarkLabelRenderer {
 
             XSSFDrawing drawing = drawingOf(sheet);
             insertPicture(workbook, drawing, sheet,
-                    new CellRangeAddress(BARCODE_ROW, BARCODE_ROW, BARCODE_COLUMN, BARCODE_COLUMN), barcode);
+                    new CellRangeAddress(BARCODE_ROW, BARCODE_ROW, BARCODE_COLUMN, BARCODE_COLUMN),
+                    barcode, Workbook.PICTURE_TYPE_PNG);
             if (productImage != null) {
                 // 有商品图时清掉模板里的“暂无图片”占位文字，再贴图
                 sheet.getRow(PRODUCT_IMAGE_REGION.getFirstRow())
                         .getCell(PRODUCT_IMAGE_COLUMN)
                         .setBlank();
-                insertPicture(workbook, drawing, sheet, PRODUCT_IMAGE_REGION, productImage);
+                insertPicture(workbook, drawing, sheet, PRODUCT_IMAGE_REGION,
+                        productImage.content(), productImage.pictureType());
             }
 
             workbook.write(output);
@@ -85,44 +96,89 @@ public class ShippingMarkLabelService implements ShippingMarkLabelRenderer {
     /**
      * 商品图是可选内容；缺失或格式无法识别时返回 null，不阻断标签生成，模板保留“暂无图片”。
      */
-    private byte[] loadProductImage(ShippingMarkDetail detail) {
+    private EncodedImage loadProductImage(ShippingMarkDetail detail) {
         if (detail.getSkuImage() == null || detail.getSkuImage().isBlank()) {
             return null;
         }
         try {
-            return toPng(fileStore.read(detail.getSkuImage()));
+            return encodeProductImage(fileStore.read(detail.getSkuImage()));
         } catch (IOException ignored) {
             return null;
         }
     }
 
     /**
-     * media 部件以 .png 命名（内容类型 image/png），非 PNG 图片统一转码。
+     * 商品图按原始宽高比缩小。透明图保存为 PNG，普通照片保存为低质量 JPEG。
      */
-    private byte[] toPng(byte[] content) throws IOException {
-        if (isPng(content)) {
-            return content;
-        }
+    private EncodedImage encodeProductImage(byte[] content) throws IOException {
         BufferedImage image = ImageIO.read(new ByteArrayInputStream(content));
         if (image == null) {
             throw new IOException("无法读取图片内容");
         }
+        BufferedImage resized = resizeProductImage(image);
+        if (image.getColorModel().hasAlpha()) {
+            return new EncodedImage(encodePng(resized), Workbook.PICTURE_TYPE_PNG);
+        }
+        return new EncodedImage(encodeJpeg(resized), Workbook.PICTURE_TYPE_JPEG);
+    }
+
+    private BufferedImage resizeProductImage(BufferedImage image) {
+        int longestEdge = Math.max(image.getWidth(), image.getHeight());
+        if (longestEdge <= MAX_PRODUCT_IMAGE_EDGE) {
+            return image;
+        }
+        double scale = (double) MAX_PRODUCT_IMAGE_EDGE / longestEdge;
+        int width = Math.max(1, (int) Math.round(image.getWidth() * scale));
+        int height = Math.max(1, (int) Math.round(image.getHeight() * scale));
+        int imageType = image.getColorModel().hasAlpha()
+                ? BufferedImage.TYPE_INT_ARGB
+                : BufferedImage.TYPE_INT_RGB;
+        BufferedImage resized = new BufferedImage(width, height, imageType);
+        Graphics2D graphics = resized.createGraphics();
+        try {
+            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                    RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            graphics.drawImage(image, 0, 0, width, height, null);
+        } finally {
+            graphics.dispose();
+        }
+        return resized;
+    }
+
+    private byte[] encodePng(BufferedImage image) throws IOException {
         try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            ImageIO.write(image, "png", output);
+            if (!ImageIO.write(image, "png", output)) {
+                throw new IOException("PNG 编码器不可用");
+            }
             return output.toByteArray();
         }
     }
 
-    private boolean isPng(byte[] content) {
-        if (content.length < PNG_MAGIC.length) {
-            return false;
+    private byte[] encodeJpeg(BufferedImage image) throws IOException {
+        Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpeg");
+        if (!writers.hasNext()) {
+            throw new IOException("JPEG 编码器不可用");
         }
-        for (int index = 0; index < PNG_MAGIC.length; index++) {
-            if (content[index] != PNG_MAGIC[index]) {
-                return false;
+        ImageWriter writer = writers.next();
+        try (ByteArrayOutputStream output = new ByteArrayOutputStream();
+             ImageOutputStream imageOutput = ImageIO.createImageOutputStream(output)) {
+            if (imageOutput == null) {
+                throw new IOException("无法创建 JPEG 输出流");
             }
+            writer.setOutput(imageOutput);
+            ImageWriteParam parameters = writer.getDefaultWriteParam();
+            if (parameters.canWriteCompressed()) {
+                parameters.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+                parameters.setCompressionQuality(JPEG_QUALITY);
+            }
+            writer.write(null, new IIOImage(image, null, null), parameters);
+            imageOutput.flush();
+            return output.toByteArray();
+        } finally {
+            writer.dispose();
         }
-        return true;
     }
 
     private XSSFDrawing drawingOf(XSSFSheet sheet) {
@@ -131,14 +187,17 @@ public class ShippingMarkLabelService implements ShippingMarkLabelRenderer {
     }
 
     private void insertPicture(XSSFWorkbook workbook, XSSFDrawing drawing, XSSFSheet sheet,
-                               CellRangeAddress region, byte[] png) throws IOException {
-        BufferedImage image = ImageIO.read(new ByteArrayInputStream(png));
+                               CellRangeAddress region, byte[] imageBytes, int pictureType) throws IOException {
+        BufferedImage image = ImageIO.read(new ByteArrayInputStream(imageBytes));
         if (image == null) {
             throw new IOException("无法读取图片尺寸");
         }
         XSSFClientAnchor anchor = anchorFor(sheet, region, image.getWidth(), image.getHeight());
-        int pictureIndex = workbook.addPicture(png, Workbook.PICTURE_TYPE_PNG);
+        int pictureIndex = workbook.addPicture(imageBytes, pictureType);
         drawing.createPicture(anchor, pictureIndex);
+    }
+
+    private record EncodedImage(byte[] content, int pictureType) {
     }
 
     /**
