@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +34,8 @@ import java.util.zip.ZipOutputStream;
 public class ShippingMarkDownloadAppService {
 
     private static final long MAX_BATCH_BYTES = 50L * 1024 * 1024;
+    /** 2026-10-31 16:00 Asia/Shanghai: new required-field label template goes live. */
+    private static final LocalDateTime REQUIRED_FIELDS_CUTOVER = LocalDateTime.of(2026, 10, 31, 16, 0);
 
     private final ShippingMarkRepository repository;
     private final ShippingMarkLabelRenderer labelRenderer;
@@ -43,7 +46,8 @@ public class ShippingMarkDownloadAppService {
         try {
             return new ShippingMarkPreviewVO(
                     detail.getId(), detail.getPurchaseOrderNo(), detail.getSkuCode(), detail.getSkuName(),
-                    detail.getSkuImage(), labelRenderer.barcodeDataUrl(detail.getSkuCode()));
+                    detail.getSkuImage(), labelRenderer.barcodeDataUrl(detail.getSkuCode()),
+                    !detail.getUpdatedAt().isBefore(REQUIRED_FIELDS_CUTOVER));
         } catch (IOException exception) {
             throw new BusinessException(ResultCode.SYSTEM_ERROR);
         }

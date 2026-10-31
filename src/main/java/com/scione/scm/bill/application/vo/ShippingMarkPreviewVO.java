@@ -9,5 +9,6 @@ public record ShippingMarkPreviewVO(
         String skuCode,
         String skuName,
         String skuImage,
-        String barcodeImage) {
+        String barcodeImage,
+        boolean requiredFields) {
 }
