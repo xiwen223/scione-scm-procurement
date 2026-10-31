@@ -96,6 +96,13 @@ public interface CompanyGoodsMapper {
      */
     List<CompanyGoodsPO> findExportParents(@Param("ids") List<Long> ids);
     /**
+     * 按查询条件读取全部可作为导出主行的货品主键，不受分页限制。
+     *
+     * @param query 货品筛选条件，复用列表查询的 filters 片段
+     * @return 满足条件且可作为导出主行的货品数据库主键列表，按更新时间、主键倒序
+     */
+    List<Long> findExportParentIdsByQuery(@Param("query") CompanyGoodsQueryDTO query);
+    /**
      * 查找group_list中引用指定SKU且不包含自身的父货品。
      *
      * @param sku 货品SKU编码

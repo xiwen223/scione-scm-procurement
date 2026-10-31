@@ -205,6 +205,11 @@
         )
         ORDER BY g.updated_time DESC, g.id DESC
     </select>
+    <select id="findExportParentIdsByQuery" resultType="long">
+        SELECT g.id FROM company_goods g <include refid="filters"/>
+        ORDER BY g.updated_time DESC, g.id DESC
+        LIMIT 2001
+    </select>
     <!-- 编辑使用 REPEATABLE_READ，锁住重名记录及扫描间隙，防止并发保存相同名称。 -->
     <select id="lockNameConflicts" resultType="long">
         SELECT id FROM company_goods WHERE goods_name IN
