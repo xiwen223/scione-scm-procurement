@@ -49,7 +49,8 @@ public class GlobalExceptionHandler {
         return parameterError(null);
     }
 
-    @ExceptionHandler({MethodArgumentTypeMismatchException.class, MissingServletRequestParameterException.class, MissingServletRequestPartException.class})
+    @ExceptionHandler({MethodArgumentTypeMismatchException.class, MissingServletRequestParameterException.class,
+            MissingServletRequestPartException.class})
     public ResponseEntity<ApiResponse<Void>> invalidRequestParameter(Exception exception) {
         log.info("Request parameter rejected: {}", exception.getMessage());
         return parameterError(null);

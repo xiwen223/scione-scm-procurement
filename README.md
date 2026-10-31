@@ -261,7 +261,7 @@ curl -X POST 'http://localhost:<port>/api/v1/shipping-marks/download' \
 
 主单“已处理”表示所有明细已结束处理，其中可能包含失败明细；不能将其等同于“全部标签生成成功”。请以明细状态和 `errorReason` 为准。
 
-标签渲染依赖 [`src/main/resources/templates/shipping-mark-template.xlsx`](src/main/resources/templates/shipping-mark-template.xlsx) 中约定的 WPS 图片标识与媒体路径。替换模板时必须同步验证渲染逻辑和输出结果。
+标签渲染依赖 [`src/main/resources/templates/shipping-mark-template.xlsx`](src/main/resources/templates/shipping-mark-template.xlsx) 的版式：文本写入 C1（采购单号）、C3（SKU）；条码贴入 C7 单元格，商品图贴入 D2:D7 合并区，图片按区域等比缩放居中，与前端 `ShippingMarkLabel` 组件一致。模板不再使用 WPS `DISPIMG` 公式与 `xl/cellimages.xml`，替换模板时只需保持上述单元格位置与合并区不变。
 
 ## 运行注意事项
 
