@@ -94,7 +94,7 @@ public class CompanyGoodsImportService {
             */
         }
         for (List<ImportRow> duplicates : skuRows.values()) {
-            if (duplicates.size() > 1) for (ImportRow row : duplicates) failures.put(row.rowNumber(), "同一文件中的SKU编码重复");
+            if (duplicates.size() > 1) for (ImportRow row : duplicates) failures.put(row.rowNumber(), "同一商品ID数据下的SKU编码重复");
         }
         for (List<ImportRow> duplicates : productNameRows.values()) {
             if (duplicates.size() > 1) {
@@ -197,13 +197,36 @@ public class CompanyGoodsImportService {
             updatedGoods.add(updated);
         }
         skuService.prepareChanges(updatedGoods, originals);
-        CompanyGoodsPO parent = updatedGoods.get(0);
+        // 按数据库 product_type 区分主子：type=1 为组合主货品，其余为子货品，不再依赖文件行顺序。
+        CompanyGoodsPO parent = null;
+        int parentIndex = -1;
+        for (int index = 0; index < updatedGoods.size(); index++) {
+            if (Integer.valueOf(1).equals(updatedGoods.get(index).getProductType())) {
+                if (parent != null) {
+                    throw invalid("同一企业商品ID下存在多个组合主货品，无法确定同步范围继承来源");
+                }
+                parent = updatedGoods.get(index);
+                parentIndex = index;
+            }
+        }
+        // 子货品同步范围继承主货品，存库与同步消息均按主货品范围执行；无组合主货品时不继承。
+        if (parent != null) {
+            for (int index = 0; index < updatedGoods.size(); index++) {
+                if (index != parentIndex) {
+                    updatedGoods.get(index).setSyncScope(parent.getSyncScope());
+                }
+            }
+        }
         // 导入不重建主子关系和产品类型；已有引用中的编码随改码维护。
         // 子货品先写入，主货品最后写入；修改、状态和消息在同一事务中保存。
-        for (int index = 1; index < updatedGoods.size(); index++) {
-            saveRow(updatedGoods.get(index), previousStatuses.get(index), previousScopes.get(index), dictionaries);
+        for (int index = 0; index < updatedGoods.size(); index++) {
+            if (index != parentIndex) {
+                saveRow(updatedGoods.get(index), previousStatuses.get(index), previousScopes.get(index), dictionaries);
+            }
         }
-        saveRow(parent, previousStatuses.get(0), previousScopes.get(0), dictionaries);
+        if (parent != null) {
+            saveRow(parent, previousStatuses.get(parentIndex), previousScopes.get(parentIndex), dictionaries);
+        }
     }
 
     /**
