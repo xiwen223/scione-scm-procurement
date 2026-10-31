@@ -19,6 +19,11 @@
     <description>赛恩供应链</description>
 
     <dependencies>
+        <dependency>
+            <groupId>com.scione</groupId>
+            <artifactId>scione-kafka-starter</artifactId>
+            <version>1.0.0-SNAPSHOT</version>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -41,6 +46,12 @@
         <dependency>
             <groupId>com.scione</groupId>
             <artifactId>scione-common</artifactId>
+        </dependency>
+
+        <!-- 企业统一 Redis 组件 -->
+        <dependency>
+            <groupId>com.scione</groupId>
+            <artifactId>scione-redis-starter</artifactId>
         </dependency>
 
         <!-- 数据采集平台 API / Feign -->

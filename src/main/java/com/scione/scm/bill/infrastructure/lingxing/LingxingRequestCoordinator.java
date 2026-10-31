@@ -30,6 +30,14 @@ public class LingxingRequestCoordinator {
     private final Map<String, RequestQueue> queues = new ConcurrentHashMap<>();
     private final AtomicInteger threadNumber = new AtomicInteger();
 
+    /**
+     * 按应用及接口串行执行请求，控制发送间隔并限制排队容量和等待时间。
+     *
+     * @param <T> 请求任务返回结果类型
+     * @param path 第三方接口路径，不包含域名和鉴权查询参数
+     * @param request 在队列中实际执行远程调用的任务
+     * @return 请求任务的实际执行结果
+     */
     public <T> T execute(String path, Supplier<T> request) {
         String key = properties.getAppId() + "\n" + path;
         RequestQueue queue = queues.computeIfAbsent(key, ignored -> new RequestQueue(new ThreadPoolExecutor(
@@ -149,7 +157,9 @@ public class LingxingRequestCoordinator {
             throw failure("共享接口锁连接异常，停止调用", path);
         }
     }
-
+    /**
+     * 服务关闭时停止各领星接口队列接收新任务并关闭执行器。
+     */
     @PreDestroy
     public void stop() {
         queues.values().forEach(queue -> queue.executor.shutdown());
@@ -161,9 +171,21 @@ public class LingxingRequestCoordinator {
         private long lastStartedNanos;
         private boolean hasStarted;
 
+        /**
+         * 使用独立执行器初始化单个领星接口请求队列。
+         *
+         * @param executor 该接口队列使用的单线程请求执行器
+         */
         private RequestQueue(ThreadPoolExecutor executor) { this.executor = executor; }
     }
 
+    /**
+     * 创建附带接口路径的排队或执行失败异常。
+     *
+     * @param reason 待保存或展示的失败原因
+     * @param path 第三方接口路径，不包含域名和鉴权查询参数
+     * @return 领星请求协调失败业务异常
+     */
     private BusinessException failure(String reason, String path) {
         return new BusinessException(ResultCode.LINGXING_API_ERROR, "领星接口调用失败：" + reason + "；接口=" + path);
     }

@@ -7,10 +7,13 @@ import com.scione.scm.bill.application.port.LingxingProductClient;
 import com.scione.scm.bill.application.port.LingxingPurchaseOrderClient;
 import com.scione.scm.bill.application.port.LingxingSupplierClient;
 import com.scione.scm.bill.common.BusinessException;
+import com.scione.scm.bill.common.ExternalApiResponseException;
+import com.scione.scm.bill.common.ExternalApiResponseSanitizer;
 import com.scione.scm.bill.common.ResultCode;
 import com.scione.scm.bill.config.LingxingOpenApiProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.HttpMethod;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -18,6 +21,8 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 import java.math.BigDecimal;
+import java.io.EOFException;
+import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -52,6 +57,10 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     private static final String PURCHASE_ORDER_LIST_PATH =
             "/erp/sc/routing/data/local_inventory/purchaseOrderList";
     private static final int PURCHASE_ORDER_PAGE_SIZE = 500;
+    private static final String SUPPLIER_LIST_PATH = "/erp/sc/data/local_inventory/supplier";
+    private static final int SUPPLIER_PAGE_SIZE = 1_000;
+    private static final int SUPPLIER_EOF_MAX_ATTEMPTS = 3;
+    private static final long SUPPLIER_EOF_RETRY_INTERVAL_MS = 1_000;
     /**
      * batchGetProductInfo 单次请求最多携带的 SKU 数；合同明细超过这个量时自动分批。
      *
@@ -85,6 +94,15 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
      */
     private static final Duration PACKING_BATCH_RECHECK_TTL = Duration.ofSeconds(60);
 
+    /**
+     * 初始化领星客户端及独立HTTP连接配置，复用现有签名和请求排队组件。
+     *
+     * @param properties 领星接口地址、凭证、超时及请求队列配置
+     * @param signer 领星OpenAPI请求参数签名组件
+     * @param objectMapper 解析领星响应的JSON序列化器
+     * @param restClientBuilder 创建领星HTTP客户端的构建器
+     * @param coordinator 按应用和接口控制发送顺序及间隔的协调器
+     */
     public LingxingOpenApiClient(
             LingxingOpenApiProperties properties,
             LingxingSigner signer,
@@ -99,6 +117,86 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         requestFactory.setConnectTimeout(properties.getConnectTimeout());
         requestFactory.setReadTimeout(properties.getReadTimeout());
         this.restClient = restClientBuilder.clone().requestFactory(requestFactory).build();
+    }
+
+    /**
+     *  ERP人员接口为GET，一次返回全部账号，保留原始顺序供同名取第一条。
+     *
+     * @return 按远端原顺序排列的账号列表
+     */
+    public List<AccountVO> queryAccounts() {
+        JsonNode response;
+        try {
+            response = requestQueued("/erp/sc/data/account/lists", Map.of(), HttpMethod.GET);
+        }
+        catch (RestClientException exception) {
+            log.error("/erp/sc/data/account/lists调用失败：", exception);
+            throw responseFailure("查询人员列表请求失败", exception);
+        }
+        if (response == null || !"0".equals(response.path("code").asText()) || !response.path("data").isArray()) {
+            throw responseError("查询人员列表响应无效", response);
+        }
+        List<AccountVO> accounts = new ArrayList<>();
+        for (JsonNode account : response.path("data")) {
+            if (!account.path("uid").canConvertToLong() || account.path("uid").asLong() <= 0
+                    || !account.path("realname").isTextual() || account.path("realname").asText().isBlank()) {
+                throw responseError("人员列表缺少有效uid或realname", response);
+            }
+            accounts.add(new AccountVO(account.path("uid").asLong(), account.path("realname").asText().trim()));
+        }
+        return accounts;
+    }
+
+    public record AccountVO(long uid, String realname) { }
+
+    /**
+     * 调用领星产品set接口保存产品并返回远端产品ID。
+     *
+     * @param payload 发往第三方接口的请求参数
+     * @return 成功响应中的有效领星产品ID
+     */
+    public long createProduct(Map<String, Object> payload) {
+        return saveProduct(payload);
+    }
+
+    /**
+     * 调用领星产品set接口修改产品，并校验成功码及产品ID。
+     *
+     * @param payload 发往第三方接口的请求参数
+     */
+    public void updateProduct(Map<String, Object> payload) {
+        saveProduct(payload);
+    }
+
+    /**
+     *  新增及修改共用set接口，仅发送一次写请求，结果未知时不自动重试。
+     *
+     * @param payload 发往第三方接口的请求参数
+     * @return 领星返回的正整数产品ID
+     */
+    private long saveProduct(Map<String, Object> payload) {
+        String path = "/erp/sc/routing/storage/product/set";
+        JsonNode response;
+        try {
+            response = requestQueued(path, payload);
+            log.info("领星接口响应，path={}, response={}", path, ExternalApiResponseSanitizer.sanitize(path, response == null ? null : response.toString(), objectMapper));
+        } catch (RestClientException exception) {
+            if (exception instanceof RestClientResponseException responseException) {
+                log.info("领星接口响应，path={}, response={}", path, ExternalApiResponseSanitizer.sanitize(path, responseException.getResponseBodyAsString(), objectMapper));
+            }
+            throw responseFailure("保存产品请求失败或结果未知，请核对远端SKU后处理", exception);
+        }
+        if (response == null || !"0".equals(response.path("code").asText())) {
+            throw responseError("保存产品失败；业务码=" + (response == null ? "空响应" : response.path("code").asText()), response);
+        }
+        String productId = response.path("data").path("product_id").asText();
+        try {
+            long id = Long.parseLong(productId);
+            if (id > 0) return id;
+        } catch (NumberFormatException exception) {
+            throw responseError("保存产品返回缺少有效product_id，请核对远端SKU", response);
+        }
+        throw responseError("保存产品返回缺少有效product_id，请核对远端SKU", response);
     }
 
     @Override
@@ -170,6 +268,97 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
     }
 
     /**
+     * 按偏移量分页查询全部供应商，提取ID和名称供货品同步复用。
+     *
+     * @return 完整供应商ID及名称列表
+     */
+    @Override
+    public List<SupplierSummary> findAllSuppliers() {
+        List<SupplierSummary> suppliers = new ArrayList<>();
+        int offset = 0;
+        long total;
+        do {
+            try {
+                JsonNode response = requestSupplierListPageWithEofRetry(offset);
+                String code = response == null ? "" : response.path("code").asText();
+                if (!"0".equals(code)) {
+                    throw responseError("查询供应商列表失败；业务码=" + code, response);
+                }
+                JsonNode supplierPage = response.path("data");
+                JsonNode totalCount = response.path("total");
+                if (!supplierPage.isArray() || !totalCount.isIntegralNumber()
+                        || !totalCount.canConvertToLong() || totalCount.longValue() < 0) {
+                    throw responseError("供应商列表响应格式错误，缺少有效data数组或total总数", response);
+                }
+                total = totalCount.longValue();
+                if (supplierPage.isEmpty() && offset < total) {
+                    throw responseError("供应商列表分页数据不完整，请重新导入", response);
+                }
+                for (JsonNode supplier : supplierPage) {
+                    Long supplierId = longValue(supplier, "supplier_id");
+                    String supplierName = text(supplier, "supplier_name");
+                    if (supplierId == null || supplierId <= 0 || supplierName == null || supplierName.isBlank()) {
+                        throw responseError("供应商列表存在缺少有效supplier_id或supplier_name的记录", response);
+                    }
+                    suppliers.add(new SupplierSummary(supplierId, supplierName.trim()));
+                }
+                offset += supplierPage.size();
+            } catch (RestClientException exception) {
+                log.error("查询领星供应商列表失败，path={}, offset={}", SUPPLIER_LIST_PATH, offset, exception);
+                throw responseFailure("查询供应商列表请求失败", exception);
+            }
+        } while (offset < total);
+        log.info("供应商数量:{}", suppliers.size());
+        return suppliers;
+    }
+
+    /**
+     *  只读供应商列表断流时仅重试当前页，成功读取后才由调用方累加数据和偏移量。
+     *
+     * @param offset 分页偏移量，从0开始
+     * @return 当前供应商分页的JSON响应
+     */
+    private JsonNode requestSupplierListPageWithEofRetry(int offset) {
+        Map<String, Object> body = Map.of("offset", offset, "length", SUPPLIER_PAGE_SIZE);
+        for (int attempt = 1; attempt <= SUPPLIER_EOF_MAX_ATTEMPTS; attempt++) {
+            try {
+                // 每次重新排队、生成时间戳和签名，等待期间不占用供应商请求队列。
+                return requestQueued(SUPPLIER_LIST_PATH, body);
+            } catch (RestClientException exception) {
+                if (!isSupplierResponseEof(exception) || attempt == SUPPLIER_EOF_MAX_ATTEMPTS) throw exception;
+                long waitMs = SUPPLIER_EOF_RETRY_INTERVAL_MS * attempt;
+                log.warn("领星供应商响应提前结束，准备重试当前页，path={}, offset={}, attempt={}/{}, waitMs={}",
+                        SUPPLIER_LIST_PATH, offset, attempt, SUPPLIER_EOF_MAX_ATTEMPTS, waitMs);
+                try {
+                    Thread.sleep(waitMs);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw lingxingError("供应商列表EOF重试等待被中断，已停止查询");
+                }
+            }
+        }
+        throw new IllegalStateException("供应商列表EOF重试状态异常");
+    }
+
+    /**
+     * 检查请求异常的原因链是否包含供应商响应提前结束的EOF异常。
+     *
+     * @param exception 当前HTTP或请求调用抛出的异常
+     * @return 属于已识别的响应提前结束异常时返回true
+     */
+    private boolean isSupplierResponseEof(RestClientException exception) {
+        if (exception instanceof RestClientResponseException) return false;
+        Throwable cause = exception;
+        while (cause != null) {
+            if (cause instanceof EOFException) return true;
+            if (cause instanceof IOException && cause.getMessage() != null && cause.getMessage().contains("Premature EOF")) return true;
+            if (cause.getCause() == cause) break;
+            cause = cause.getCause();
+        }
+        return false;
+    }
+
+    /**
      * 查询领星供应商列表，并按系统供应商 ID 返回匹配的原始 JSON 对象。
      */
     public Optional<JsonNode> findSupplierById(long supplierId) {
@@ -219,7 +408,7 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             boolean retryable;
             Throwable safeCause = null;
             try {
-                JsonNode response = requestQueued("/erp/sc/data/local_inventory/supplier", body);
+                JsonNode response = requestQueued(SUPPLIER_LIST_PATH, body);
                 String code = response == null ? "" : response.path("code").asText();
                 if ("0".equals(code) || "200".equals(code)) {
                     if (response.path("data").isArray() && response.path("total").asLong(-1) >= 0) return response;
@@ -652,6 +841,11 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         }
     }
 
+    /**
+     * 复用有效领星访问令牌，未命中或接近过期时同步刷新。
+     *
+     * @return 可用于当前领星请求的访问令牌，不得写入日志
+     */
     private String accessToken() {
         CachedToken current = cachedToken;
         Instant now = Instant.now();
@@ -669,6 +863,12 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         }
     }
 
+    /**
+     * 请求领星访问令牌并根据返回有效期构建缓存值。
+     *
+     * @param requestedAt 本次令牌请求开始的时刻
+     * @return 包含令牌及本地过期时间的缓存对象
+     */
     private CachedToken requestAccessToken(Instant requestedAt) {
         Map<String, String> queryParameters = new LinkedHashMap<>();
         queryParameters.put("appId", properties.getAppId());
@@ -864,8 +1064,26 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         }
     }
 
-    /** 同接口排队后才签名；一页/一批就是一次请求，响应读取完成后释放名额。 */
+    /**
+     *  同接口排队后才签名；一页/一批就是一次请求，响应读取完成后释放名额。
+     *
+     * @param path 第三方接口路径，不包含域名和鉴权查询参数
+     * @param body 待签名并发送的领星接口业务参数
+     * @return 解析后的领星JSON响应
+     */
     private JsonNode requestQueued(String path, Map<String, Object> body) {
+        return requestQueued(path, body, HttpMethod.POST);
+    }
+
+    /**
+     * 获取访问令牌后按应用及接口排队，队列内签名、发送并读取完整响应。
+     *
+     * @param path 第三方接口路径，不包含域名和鉴权查询参数
+     * @param body 待签名并发送的领星接口业务参数
+     * @param method 实际发送请求的HTTP方法
+     * @return 解析后的领星JSON响应
+     */
+    private JsonNode requestQueued(String path, Map<String, Object> body, HttpMethod method) {
         ensureConfigured();
         // token 获取本身已有独立队列和提前一分钟刷新；不占用业务接口的开始间隔。
         String token = accessToken();
@@ -888,7 +1106,20 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
             query.put("app_key", properties.getAppId());
             query.put("sign", signature);
             URI uri = requestUri(path, query);
-            return restClient.post().uri(uri).body(body).retrieve().body(JsonNode.class);
+            String responseBody;
+            if (method == HttpMethod.GET) {
+                responseBody = restClient.get().uri(uri).retrieve().body(String.class);
+            }
+            else {
+                responseBody = restClient.post().uri(uri).body(body).retrieve().body(String.class);
+            }
+            if (responseBody == null || responseBody.isBlank()) return null;
+            try {
+                return objectMapper.readTree(responseBody);
+            } catch (JsonProcessingException exception) {
+                throw new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR,
+                        "领星响应JSON解析失败，接口=" + path, responseBody);
+            }
         });
     }
 
@@ -922,6 +1153,13 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         throw new IllegalStateException("Unreachable retry branch");
     }
 
+    /**
+     * 将接口路径与查询参数构建为编码后的领星请求地址。
+     *
+     * @param path 第三方接口路径，不包含域名和鉴权查询参数
+     * @param queryParameters 包含鉴权及签名字段的查询参数
+     * @return 包含鉴权及签名参数的URI，不得完整输出日志
+     */
     private URI requestUri(String path, Map<String, String> queryParameters) {
         String baseUri = UriComponentsBuilder.fromUri(properties.getEndpoint())
                 .path(path)
@@ -934,6 +1172,12 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         return URI.create(baseUri + "?" + query);
     }
 
+    /**
+     * 区分HTTP错误、超时及网络连接失败，提取用于后续脱敏的失败原因。
+     *
+     * @param exception 领星HTTP调用抛出的请求异常
+     * @return 按异常类型生成的失败原因，调用方展示前仍需执行脱敏
+     */
     private String transportFailureReason(RestClientException exception) {
         if (exception instanceof RestClientResponseException responseException) {
             String remoteMessage = responseMessage(responseException.getResponseBodyAsString());
@@ -950,6 +1194,12 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         return "请求失败（" + exception.getClass().getSimpleName() + "）";
     }
 
+    /**
+     * 尝试从原始JSON响应中读取领星错误提示。
+     *
+     * @param responseBody 原始响应正文，可以为空或不是合法JSON
+     * @return 提取的远端提示；无有效响应或无法解析时返回空字符串
+     */
     private String responseMessage(String responseBody) {
         if (responseBody == null || responseBody.isBlank()) {
             return "";
@@ -961,6 +1211,12 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         }
     }
 
+    /**
+     * 按约定字段顺序读取第一个非空白的远端错误提示。
+     *
+     * @param response 领星响应JSON节点，可以为null
+     * @return 首个有效提示；未提供时返回空字符串
+     */
     private static String responseMessage(JsonNode response) {
         if (response == null) {
             return "";
@@ -1021,6 +1277,12 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         return flat.length() <= 200 ? flat : flat.substring(0, 200) + "...";
     }
 
+    /**
+     * 对失败原因脱敏后创建统一的领星接口业务异常。
+     *
+     * @param reason 需要向调用方说明的失败原因
+     * @return 使用领星接口错误码并携带安全提示的业务异常
+     */
     private BusinessException lingxingError(String reason) {
         String safeReason = sanitizeReason(reason);
         String message = ResultCode.LINGXING_API_ERROR.getMessage()
@@ -1028,6 +1290,12 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         return new BusinessException(ResultCode.LINGXING_API_ERROR, message);
     }
 
+    /**
+     * 去除错误原因中的换行，屏蔽凭证及长数字，并限制最终提示长度。
+     *
+     * @param reason 可能包含远端响应信息的原始失败原因
+     * @return 适用于日志及业务异常展示的脱敏文本；未提供时为空字符串
+     */
     private String sanitizeReason(String reason) {
         if (reason == null || reason.isBlank()) {
             return "";
@@ -1047,6 +1315,36 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
                 : sanitized.substring(0, MAX_REASON_LENGTH) + "...";
     }
 
+    /**
+     * 创建携带领星业务失败原始响应的异常。
+     *
+     * @param message 向调用方说明的业务失败原因
+     * @param response 第三方响应对象
+     * @return 保留原始响应的领星业务异常
+     */
+    private BusinessException responseError(String message, JsonNode response) {
+        if (response == null) return lingxingError(message);
+        return new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR, message, response.toString());
+    }
+
+    /**
+     * 转换领星请求异常，有HTTP响应正文时保留原始响应供消息落库。
+     *
+     * @param message 向调用方说明的业务失败原因
+     * @param exception 当前HTTP或请求调用抛出的异常
+     * @return 领星接口调用业务异常
+     */
+    private BusinessException responseFailure(String message, RestClientException exception) {
+        if (exception instanceof RestClientResponseException responseException) {
+            String body = responseException.getResponseBodyAsString();
+            if (!body.isBlank()) return new ExternalApiResponseException(ResultCode.LINGXING_API_ERROR, message, body);
+        }
+        return lingxingError(message);
+    }
+
+    /**
+     * 校验领星接口地址、应用ID及应用密钥已配置。
+     */
     private void ensureConfigured() {
         if (properties.getEndpoint() == null || isBlank(properties.getAppId()) || isBlank(properties.getAppSecret())) {
             log.error("Lingxing OpenAPI credentials are not configured");
@@ -1054,6 +1352,13 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         }
     }
 
+    /**
+     * 沿异常原因链检查是否包含指定类型，用于识别HTTP超时等故障。
+     *
+     * @param throwable 待检查的起始异常，可以为null
+     * @param causeType 需要识别的异常类型
+     * @return 原因链中存在该类型的异常时返回true
+     */
     private static boolean hasCause(Throwable throwable, Class<? extends Throwable> causeType) {
         Throwable current = throwable;
         while (current != null) {
@@ -1065,20 +1370,48 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
         return false;
     }
 
+    /**
+     * 判断字符串是否为null或仅包含空白。
+     *
+     * @param value 待处理字段值
+     * @return 没有有效文本时返回true
+     */
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
     }
 
+    /**
+     * 将指定JSON字段读取为文本，不额外修剪空白。
+     *
+     * @param node 读取字段的JSON节点
+     * @param field JSON或业务字段名称
+     * @return 字段的文本值；字段缺失或JSON空值时返回null
+     */
     private static String text(JsonNode node, String field) {
         JsonNode value = node.get(field);
         return value == null || value.isNull() ? null : value.asText();
     }
 
+    /**
+     * 读取Jackson判定可转换为Long的JSON数值字段。
+     *
+     * @param node 读取字段的JSON节点
+     * @param field JSON或业务字段名称
+     * @return 转换后的Long；字段缺失、为空或不可转换时返回null
+     */
     private static Long longValue(JsonNode node, String field) {
         JsonNode value = node.get(field);
         return value == null || value.isNull() || !value.canConvertToLong() ? null : value.longValue();
     }
 
+    /**
+     * 读取JSON正整数，字段无有效正数时使用指定默认值。
+     *
+     * @param node 读取字段的JSON节点
+     * @param field JSON或业务字段名称
+     * @param fallback 字段不是有效正整数时使用的默认值
+     * @return 有效正整数或默认值
+     */
     private static long positiveLong(JsonNode node, String field, long fallback) {
         Long value = longValue(node, field);
         return value != null && value > 0 ? value : fallback;
@@ -1103,6 +1436,12 @@ public class LingxingOpenApiClient implements LingxingProductClient, LingxingPur
 
     private record CachedToken(String value, Instant expiresAt) {
 
+        /**
+         * 判断指定时刻是否早于缓存记录中已计算的过期时刻。
+         *
+         * @param instant 需要判断缓存令牌有效性的当前时刻
+         * @return 指定时刻早于缓存过期时刻时返回true
+         */
         private boolean isValidAt(Instant instant) {
             return instant.isBefore(expiresAt);
         }

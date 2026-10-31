@@ -21,6 +21,7 @@ public enum ResultCode {
     RESOURCE_NOT_FOUND(1099005, "资源不存在"),
     DATABASE_DUPLICATE_KEY(1099101, "数据已存在"),
     DATABASE_ERROR(1099102, "数据库异常"),
+    COMPANY_GOODS_VERSION_CONFLICT(1016001, "货品已被修改，请重新打开后编辑"),
     PRODUCT_NOT_FOUND(1011001, "商品不存在"),
     LINGXING_API_ERROR(1011002, "领星商品服务调用失败"),
     FADADA_API_ERROR(1011003, "法大大电子签章服务调用失败"),
