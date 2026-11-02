@@ -401,3 +401,34 @@ CREATE TABLE IF NOT EXISTS `po_sync_state` (
 ALTER TABLE `lx_pp_po_sku_ass_h`
   ADD COLUMN `item_id` bigint DEFAULT NULL COMMENT '采购单子项id' AFTER `sku`;
 -- 后续同步从采购单item_list[].id写入；历史数据按plan_sn/order_sn/sku核对后补值。
+
+
+-- 跟单预警看板主事项每日快照，一行一个 group_key，持久化保存。
+-- 页面列表、页签数量、筛选选项都只读这张表；每天 9 点由应用内定时任务刷新。
+-- 导出与详情抽屉的明细仍实时读 lx_ 前缀表，不落地明细快照。
+CREATE TABLE IF NOT EXISTS `delivery_alert_group` (
+                                                      `group_key`       VARCHAR(64)  NOT NULL COMMENT '主事项分组键',
+    `types`           VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '原始商品类型',
+    `purchase_mode`   VARCHAR(16)  NULL COMMENT '采购模式',
+    `product_name`    TEXT         NULL COMMENT '商品名称',
+    `sku`             TEXT         NULL COMMENT 'SKU',
+    `sku_count`       INT          NOT NULL DEFAULT 0 COMMENT 'SKU 数',
+    `orders`          TEXT         NULL COMMENT '采购单号',
+    `plans`           TEXT         NULL COMMENT '采购计划号',
+    `opt_names`       TEXT         NULL COMMENT '采购员',
+    `suppliers`       TEXT         NULL COMMENT '供应商',
+    `warehouses`      TEXT         NULL COMMENT '采购仓库',
+    `status_texts`    TEXT         NULL COMMENT '采购单状态',
+    `followers`       TEXT         NULL COMMENT '跟单员',
+    `qty_plan`        INT          NULL COMMENT '应交数量',
+    `qty_ready`       INT          NULL COMMENT '已交数量',
+    `risk_hours`      INT          NULL COMMENT '风险小时数，-1 表示已完成',
+    `risk_level`      VARCHAR(16)  NOT NULL COMMENT 'done/normal/due-soon/overdue',
+    `created_time`    DATETIME     NULL COMMENT '主事项创建时间',
+    `snapshot_at`     DATETIME     NOT NULL COMMENT '快照生成时间',
+    PRIMARY KEY (`group_key`),
+    KEY `idx_risk_hours` (`risk_hours`),
+    KEY `idx_risk_level` (`risk_level`),
+    KEY `idx_created_time` (`created_time`)
+    ) ENGINE = InnoDB
+    DEFAULT CHARSET = utf8mb4 COMMENT ='跟单预警看板每日快照';
