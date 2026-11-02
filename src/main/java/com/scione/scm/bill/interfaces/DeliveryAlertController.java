@@ -3,6 +3,7 @@ package com.scione.scm.bill.interfaces;
 import com.scione.common.model.PageResult;
 import com.scione.common.response.ApiResponse;
 import com.scione.scm.bill.application.DeliveryAlertAppService;
+import com.scione.scm.bill.application.DeliveryAlertExportService;
 import com.scione.scm.bill.application.DeliveryFollowUpImportService;
 import com.scione.scm.bill.application.ProcurementOperationLogRecorder;
 import com.scione.scm.bill.application.vo.DeliveryFollowUpImportVO;
@@ -13,6 +14,7 @@ import com.scione.scm.bill.application.vo.DeliveryAlertSummaryVO;
 import com.scione.scm.bill.application.vo.DeliveryAlertSyncTimeVO;
 import com.scione.scm.bill.application.vo.FilterOptionsVO;
 import com.scione.scm.bill.domain.deliveryalert.DeliveryAlertQuery;
+import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -34,6 +36,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -48,8 +52,11 @@ import java.util.List;
 @Tag(name = "采购交付预警看板", description = "采购交付预警看板")
 public class DeliveryAlertController {
 
+    private static final DateTimeFormatter EXPORT_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
+
     private final DeliveryAlertAppService deliveryAlertAppService;
     private final DeliveryFollowUpImportService importService;
+    private final DeliveryAlertExportService exportService;
 
     @GetMapping("/import-template")
     public ResponseEntity<byte[]> importTemplate() {
@@ -71,6 +78,33 @@ public class DeliveryAlertController {
     @GetMapping("/imports/{logId}/errors")
     public ResponseEntity<byte[]> importErrors(@PathVariable @Min(1) Long logId) {
         return excelResponse(importService.downloadErrors(logId), "跟单情况导入错误.xlsx");
+    }
+
+    /**
+     * 按列表同一套筛选条件导出全部主事项，不受分页限制。
+     * 用户显式筛选了创建日期时按筛选范围导出，否则导出全部可见数据。
+     */
+    @GetMapping("/export")
+    @Operation(summary = "导出跟单预警看板", description = "按当前页签和筛选条件导出全部主事项，不受分页限制")
+    public ResponseEntity<byte[]> export(
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "types", required = false) List<String> types,
+            @RequestParam(value = "suppliers", required = false) List<String> suppliers,
+            @RequestParam(value = "buyers", required = false) List<String> buyers,
+            @RequestParam(value = "warehouses", required = false) List<String> warehouses,
+            @RequestParam(value = "followers", required = false) List<String> followers,
+            @RequestParam(value = "riskLevels", required = false) List<String> riskLevels,
+            @RequestParam(value = "view", required = false) String view,
+            @RequestParam(value = "createDateFrom", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createDateFrom,
+            @RequestParam(value = "createDateTo", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createDateTo) {
+        DeliveryAlertQuery query = new DeliveryAlertQuery(
+                null, blankToNull(keyword), blankToNull(types), blankToNull(suppliers),
+                blankToNull(buyers), blankToNull(warehouses), blankToNull(followers),
+                blankToNull(riskLevels), blankToNull(view), createDateFrom, createDateTo, 1, 0);
+        String fileName = "跟单预警看板_" + LocalDateTime.now().format(EXPORT_TIME_FORMAT) + ".xlsx";
+        return excelResponse(exportService.export(query), fileName);
     }
 
     private static ResponseEntity<byte[]> excelResponse(byte[] content, String fileName) {
@@ -128,9 +162,7 @@ public class DeliveryAlertController {
 
     @GetMapping("/filter-options")
     public ApiResponse<FilterOptionsVO> filterOptions() {
-        DeliveryAlertQuery query = new DeliveryAlertQuery(
-                null, null, null, null, null, null, null, null, null, null, null, 1, 1);
-        return ApiResponse.success(deliveryAlertAppService.filterOptions(query));
+        return ApiResponse.success(deliveryAlertAppService.filterOptions());
     }
 
     @GetMapping("/last-sync-time")

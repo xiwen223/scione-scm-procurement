@@ -69,6 +69,16 @@ public class MybatisDeliveryAlertRepository implements DeliveryAlertRepository {
     }
 
     @Override
+    public List<DeliveryAlert> findForExport(DeliveryAlertQuery query, int limit) {
+        return deliveryAlertMapper.findForExport(query.startDate(), query.keyword(), query.types(),
+                        query.suppliers(), query.buyers(), query.warehouses(), query.followers(), query.riskLevels(),
+                        query.view(), query.createDateFrom(), query.createDateTo(), limit)
+                .stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
+    @Override
     public DeliveryAlertSummary summary(DeliveryAlertQuery query) {
         DeliveryAlertSummaryPO po = deliveryAlertMapper.summary(query.startDate(), query.keyword(),
                 query.types(), query.suppliers(), query.buyers(), query.warehouses(), query.followers(), query.riskLevels(),

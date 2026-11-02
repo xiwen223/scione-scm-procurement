@@ -20,6 +20,10 @@ shipping-mark:
 delivery-alert:
   start-date: ${DELIVERY_ALERT_START_DATE:2026-08-01}
   import-template-object-key: ${DELIVERY_ALERT_IMPORT_TEMPLATE_OBJECT_KEY:}
+  # 看板主事项每日快照：默认每天 8 点半刷新，首次启动表为空时后台补一次。
+  snapshot-enabled: ${DELIVERY_ALERT_SNAPSHOT_ENABLED:true}
+  snapshot-cron: "${DELIVERY_ALERT_SNAPSHOT_CRON:0 30 8 * * ?}"
+
 
 contract:
   auto-create:

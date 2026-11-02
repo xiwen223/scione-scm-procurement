@@ -11,6 +11,9 @@ public interface DeliveryAlertRepository {
 
     DeliveryAlertPage findPage(DeliveryAlertQuery query);
 
+    /** 按列表同一套条件读取全部主事项，limit 为服务端安全上限。 */
+    List<DeliveryAlert> findForExport(DeliveryAlertQuery query, int limit);
+
     DeliveryAlertSummary summary(DeliveryAlertQuery query);
 
     LocalDateTime findLastOrderSyncTime();

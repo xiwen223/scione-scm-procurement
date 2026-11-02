@@ -309,12 +309,23 @@
         <include refid="outerFilters"/>
     </select>
 
-    <select id="findPage" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertPO">
+    <!-- 列表和导出共用同一套过滤、排序，避免两边口径不一致。 -->
+    <sql id="orderedGroups">
         SELECT * FROM ( <include refid="groupedSelect"/> ) g
         WHERE 1 = 1
         <include refid="outerFilters"/>
         ORDER BY g.risk DESC, g.created_time ASC, g.group_key ASC
+    </sql>
+
+    <select id="findPage" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertPO">
+        <include refid="orderedGroups"/>
         LIMIT #{pageSize} OFFSET #{offset}
+    </select>
+
+    <!-- 导出不分页；limit 只作为服务端安全上限，避免一次拉取过多数据。 -->
+    <select id="findForExport" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertPO">
+        <include refid="orderedGroups"/>
+        LIMIT #{limit}
     </select>
 
     <select id="summary" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertSummaryPO">
@@ -548,4 +559,216 @@
                 AND poi.is_delete=0 AND po.status NOT IN (-1,124) AND po.create_time&gt;=#{startDate})
         ORDER BY f.follower_name
     </select>
+    <!-- ==================== 每日快照：页面列表/页签/筛选选项都只查这张表 ==================== -->
+
+    <sql id="snapshotFilters">
+        <if test="keyword != null and keyword != ''">
+            AND (orders LIKE CONCAT('%', #{keyword}, '%')
+              OR plans LIKE CONCAT('%', #{keyword}, '%')
+              OR suppliers LIKE CONCAT('%', #{keyword}, '%')
+              OR opt_names LIKE CONCAT('%', #{keyword}, '%')
+              OR warehouses LIKE CONCAT('%', #{keyword}, '%')
+              OR sku LIKE CONCAT('%', #{keyword}, '%')
+              OR product_name LIKE CONCAT('%', #{keyword}, '%'))
+        </if>
+        <if test="types != null and types.size() > 0">
+            AND (
+            <foreach collection="types" item="t" separator=" OR ">
+                <choose>
+                    <when test="t == '合并下单'">
+                        FIND_IN_SET('合并下单', types) &gt; 0
+                    </when>
+                    <when test="t == '套装'">
+                        (FIND_IN_SET('套装', types) &gt; 0 AND FIND_IN_SET('合并下单', types) = 0)
+                    </when>
+                    <when test="t == '单品'">
+                        (FIND_IN_SET('合并下单', types) = 0 AND FIND_IN_SET('套装', types) = 0)
+                    </when>
+                </choose>
+            </foreach>
+            )
+        </if>
+        <if test="riskLevels != null and riskLevels.size() > 0">
+            AND risk_level IN
+            <foreach collection="riskLevels" item="r" open="(" separator="," close=")">#{r}</foreach>
+        </if>
+        <if test="suppliers != null and suppliers.size() > 0">
+            AND (
+            <foreach collection="suppliers" item="s" separator=" OR ">FIND_IN_SET(#{s}, suppliers) &gt; 0</foreach>
+            )
+        </if>
+        <if test="buyers != null and buyers.size() > 0">
+            AND (
+            <foreach collection="buyers" item="b" separator=" OR ">FIND_IN_SET(#{b}, opt_names) &gt; 0</foreach>
+            )
+        </if>
+        <if test="warehouses != null and warehouses.size() > 0">
+            AND (
+            <foreach collection="warehouses" item="w" separator=" OR ">FIND_IN_SET(#{w}, warehouses) &gt; 0</foreach>
+            )
+        </if>
+        <if test="followers != null and followers.size() > 0">
+            AND (
+            <foreach collection="followers" item="f" separator=" OR ">FIND_IN_SET(#{f}, followers) &gt; 0</foreach>
+            )
+        </if>
+        <if test="createDateFrom != null">
+            AND created_time &gt;= #{createDateFrom}
+        </if>
+        <if test="createDateTo != null">
+            AND created_time &lt; DATE_ADD(#{createDateTo}, INTERVAL 1 DAY)
+        </if>
+    </sql>
+
+    <sql id="snapshotViewFilter">
+        <if test="view != null and view != ''">
+            <choose>
+                <when test="view == 'dueSoon'">AND risk_level = 'due-soon'</when>
+                <when test="view == 'overdue'">AND risk_level = 'overdue'</when>
+                <when test="view == 'manual'">AND (plans IS NULL OR plans = '')</when>
+                <when test="view == 'kit'">AND FIND_IN_SET('套装', types) &gt; 0</when>
+            </choose>
+        </if>
+    </sql>
+
+    <select id="countSnapshot" resultType="long">
+        SELECT COUNT(1)
+        FROM delivery_alert_group
+        WHERE 1 = 1
+        <include refid="snapshotFilters"/>
+        <include refid="snapshotViewFilter"/>
+    </select>
+
+    <select id="findSnapshotPage" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertSnapshotPO">
+        SELECT *
+        FROM delivery_alert_group
+        WHERE 1 = 1
+        <include refid="snapshotFilters"/>
+        <include refid="snapshotViewFilter"/>
+        ORDER BY risk_hours DESC, created_time ASC, group_key ASC
+        LIMIT #{pageSize} OFFSET #{offset}
+    </select>
+
+    <select id="snapshotSummary" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertSnapshotSummaryPO">
+        SELECT
+            COUNT(1) AS total_count,
+            COALESCE(SUM(CASE WHEN risk_level = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
+            COALESCE(SUM(CASE WHEN risk_level = 'normal' THEN 1 ELSE 0 END), 0) AS normal_count,
+            COALESCE(SUM(CASE WHEN risk_level = 'due-soon' THEN 1 ELSE 0 END), 0) AS due_soon_count,
+            COALESCE(SUM(CASE WHEN risk_level = 'overdue' THEN 1 ELSE 0 END), 0) AS overdue_count,
+            COALESCE(SUM(CASE WHEN plans IS NULL OR plans = '' THEN 1 ELSE 0 END), 0) AS manual_count,
+            COALESCE(SUM(CASE WHEN FIND_IN_SET('套装', types) &gt; 0 THEN 1 ELSE 0 END), 0) AS kit_count
+        FROM delivery_alert_group
+        WHERE 1 = 1
+        <include refid="snapshotFilters"/>
+    </select>
+
+    <select id="findSnapshotOptions" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertSnapshotPO">
+        SELECT suppliers, opt_names, warehouses, followers
+        FROM delivery_alert_group
+    </select>
+
+    <select id="findSnapshotGroupTypes" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertSnapshotPO">
+        SELECT group_key, types
+        FROM delivery_alert_group
+        WHERE 1 = 1
+        <include refid="snapshotFilters"/>
+        <include refid="snapshotViewFilter"/>
+        LIMIT #{limit}
+    </select>
+
+    <select id="findSnapshotAt" resultType="java.time.LocalDateTime">
+        SELECT MAX(snapshot_at) FROM delivery_alert_group
+    </select>
+
+    <delete id="deleteSnapshot">
+        DELETE FROM delivery_alert_group
+    </delete>
+
+    <insert id="insertSnapshotBatch">
+        INSERT INTO delivery_alert_group
+            (group_key, types, purchase_mode, product_name, sku, sku_count, orders, plans, opt_names,
+             suppliers, warehouses, status_texts, followers, qty_plan, qty_ready, risk_hours, risk_level,
+             created_time, snapshot_at)
+        VALUES
+        <foreach collection="rows" item="row" separator=",">
+            (#{row.groupKey}, #{row.types}, #{row.purchaseMode}, #{row.productName}, #{row.sku}, #{row.skuCount},
+             #{row.orders}, #{row.plans}, #{row.optNames}, #{row.suppliers}, #{row.warehouses}, #{row.statusTexts},
+             #{row.followers}, #{row.qtyPlan}, #{row.qtyReady}, #{row.riskHours}, #{row.riskLevel},
+             #{row.createdTime}, #{row.snapshotAt})
+        </foreach>
+    </insert>
+
+    <!-- 明细来源：把采购明细按 (明细 ID, 分组键) 收敛成一行，供导出实时取数。
+         分组键与 baseRowsSelect 同一口径：一条明细挂在多个计划下时会进入多个主事项，因此分组键参与收敛。 -->
+    <sql id="alertItemRows">
+        SELECT
+            t.component_id AS component_id,
+            t.group_key AS group_key,
+            MAX(t.plan_sn) AS plan_sn,
+            MAX(t.order_sn) AS order_sn,
+            MAX(t.sku) AS sku,
+            MAX(t.product_name) AS product_name,
+            MAX(t.supplier_name) AS supplier_name,
+            MAX(t.opt_realname) AS opt_realname,
+            MAX(t.ware_house_name) AS ware_house_name,
+            MAX(t.quantity_entry) AS quantity_entry,
+            MAX(t.quantity_real) AS quantity_real,
+            MAX(t.quantity_plan) AS quantity_plan,
+            MAX(t.created_time) AS created_time
+        FROM (
+            SELECT
+                poi.id AS component_id,
+                <include refid="groupKeyExpression"/> AS group_key,
+                poi.plan_sn AS plan_sn,
+                poi.order_sn AS order_sn,
+                poi.sku AS sku,
+                poi.product_name AS product_name,
+                po.supplier_name AS supplier_name,
+                po.opt_realname AS opt_realname,
+                po.ware_house_name AS ware_house_name,
+                poi.quantity_entry AS quantity_entry,
+                poi.quantity_real AS quantity_real,
+                poi.quantity_plan AS quantity_plan,
+                po.create_time AS created_time
+            FROM lx_purchase_order_item poi
+            INNER JOIN lx_purchase_order po ON po.order_sn = poi.order_sn
+            LEFT JOIN lx_pp_po_sku_ass j ON j.order_sn = poi.order_sn AND j.sku = poi.sku
+            LEFT JOIN lx_purchase_plan pp ON pp.plan_sn = j.plan_sn
+            WHERE poi.is_delete = 0
+              AND po.status NOT IN (-1, 124)
+              AND po.create_time &gt;= #{startDate}
+        ) t
+        GROUP BY t.component_id, t.group_key
+    </sql>
+
+    <!-- 导出扁平行：明细实时读 lx_ 前缀表，按 (明细 ID, 分组键) 收敛后关联本系统跟单信息；
+         主事项范围的过滤仍由快照完成，保证导出与列表同一口径。 -->
+    <select id="findExportRows" resultType="com.scione.scm.bill.infrastructure.persistence.mybatis.po.DeliveryAlertExportRowPO">
+        SELECT
+            i.component_id AS component_id,
+            i.group_key AS group_key,
+            i.plan_sn AS plan_sn,
+            i.order_sn AS order_sn,
+            i.sku AS sku,
+            i.product_name AS product_name,
+            i.supplier_name AS supplier,
+            i.opt_realname AS buyer,
+            i.ware_house_name AS warehouse,
+            COALESCE(i.quantity_entry, 0) AS qty_ready,
+            COALESCE(i.quantity_real, i.quantity_plan, 0) AS qty_plan,
+            i.created_time AS created_time,
+            f.follower_name AS follower_name,
+            f.expected_delivery_date AS expected_delivery_date,
+            f.reason AS reason,
+            f.remark AS remark
+        FROM (
+            <include refid="alertItemRows"/>
+        ) i
+        LEFT JOIN reminder_excel_import f ON BINARY f.order_sn = BINARY i.order_sn
+            AND BINARY f.sku = BINARY i.sku
+        ORDER BY i.created_time, i.order_sn, i.sku
+        LIMIT #{limit}
+    </select>
+
 </mapper>
