@@ -59,6 +59,7 @@
     <!-- 完整有效行：用于主事项命中后恢复整个分组的采购单、数量、供应商和风险上下文。 -->
     <sql id="baseRowsSelect">
         SELECT
+            poi.id AS item_id,
             poi.order_sn,
             CASE
                 WHEN pp.is_combo = 1 THEN pp.sku
@@ -177,7 +178,7 @@
     <!-- 外层：按分组键聚合主记录 -->
     <sql id="groupedSelect">
         SELECT
-            group_key,
+            t.group_key,
             CASE
                 WHEN (<include refid="noPlanSingleSkuCondition"/>) THEN '单品'
                 WHEN GROUP_CONCAT(DISTINCT ptype) = '单品'
@@ -203,10 +204,10 @@
             GROUP_CONCAT(DISTINCT ware_house_name) AS warehouses,
             GROUP_CONCAT(DISTINCT status_text) AS status_text,
             IF((<include refid="directItemQuantityCondition"/>),
-               SUM(quantity_real), MAX(quantity_plan)) AS qty_plan,
+               MAX(agg.sum_real), MAX(quantity_plan)) AS qty_plan,
             IF((<include refid="directItemQuantityCondition"/>),
-               SUM(quantity_entry),
-               IF(SUM(quantity_real) = SUM(quantity_entry), MAX(quantity_plan), 0)) AS qty_ready,
+               MAX(agg.sum_entry),
+               IF(MAX(agg.sum_real) = MAX(agg.sum_entry), MAX(quantity_plan), 0)) AS qty_ready,
             MAX(risk) AS risk,
             MIN(create_time) AS created_time
         FROM ( <include refid="baseRowsSelect"/> ) t
@@ -214,6 +215,19 @@
             SELECT DISTINCT group_key AS matched_group_key
             FROM ( <include refid="innerSelect"/> ) matched_rows
         ) matched_groups ON matched_groups.matched_group_key = t.group_key
+        <!-- 数量单独走一层：一条采购明细经 lx_pp_po_sku_ass 关联到多个采购计划时会被展开成多行，
+             直接 SUM 会按关联计划数重复累加。此处先按（明细 id, 分组键）去重再求和，
+             其余多值字段（plans/orders 等）仍取原始展开层，避免丢失同组内的多个计划号。 -->
+        INNER JOIN (
+            SELECT group_key,
+                   SUM(quantity_real) AS sum_real,
+                   SUM(quantity_entry) AS sum_entry
+            FROM (
+                SELECT DISTINCT group_key, item_id, quantity_real, quantity_entry
+                FROM ( <include refid="baseRowsSelect"/> ) distinct_rows
+            ) distinct_items
+            GROUP BY group_key
+        ) agg ON agg.group_key = t.group_key
         GROUP BY t.group_key
     </sql>
 
